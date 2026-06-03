@@ -1,0 +1,10 @@
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('ffcfa737-7546-4d1f-9f5e-8bfa1e6fc31a', 'Contact Energy', 'contact.co.nz', 'contact', 1);
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('2951d6b6-436e-474b-8ea9-7fb5092cc069', 'Mercury', 'mercury.co.nz', 'mercury', 1);
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('a20f39b2-7f2c-48ef-8b17-12886402e2fd', 'Genesis Energy', 'genesisenergy.co.nz', 'genesis', 1);
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('5efa7fa6-0ec7-4f81-b3cf-229951b3896b', 'Meridian Energy', 'meridianenergy.co.nz', 'meridian', 1);
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('92a506ac-2ca0-4ff3-a46e-3a27d850ce6a', 'Trustpower', 'trustpower.co.nz', 'trustpower', 1);
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('02b3f36d-27b2-475b-bc08-2863e2cc96c9', 'Nova Energy', 'novaenergy.co.nz', 'nova', 1);
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('9b60928a-0d44-4b49-8d76-bb0e6295c63d', 'Electric Kiwi', 'electrickiwi.co.nz', 'electric_kiwi', 1);
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('989a6f4d-bf36-4c0b-b920-43679aecf9a0', 'Powershop', 'powershop.co.nz', 'powershop', 1);
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('41f1cccd-ee33-4f96-b9be-925d5ee399e9', 'Flick Electric', 'flickelectric.co.nz', 'flick', 1);
+INSERT INTO retailers (id, name, domain, parser_id, is_active) VALUES ('a14a71cc-a945-4fc2-a72f-80779a746429', 'Pulse Energy', 'pulseenergy.co.nz', 'pulse', 1);

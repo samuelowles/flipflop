@@ -1,0 +1,7 @@
+{
+  "id": "msg_test_003",
+  "from": "+64215551234",
+  "body": "fake message",
+  "channel": "whatsapp",
+  "timestamp": "2026-05-14T10:30:00+12:00"
+}

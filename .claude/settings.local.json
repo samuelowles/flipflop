@@ -1,0 +1,14 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:chatgpt.com)",
+      "mcp__claude-flow__guidance_capabilities",
+      "mcp__claude-flow__guidance_discover",
+      "mcp__claude-flow__guidance_workflow",
+      "Bash(npx wrangler *)",
+      "Bash(git log *)",
+      "Bash(git status *)",
+      "WebSearch"
+    ]
+  }
+}

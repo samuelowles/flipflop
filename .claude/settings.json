@@ -1,0 +1,181 @@
+{
+  "project": {
+    "name": "Flip",
+    "description": "Interfaceless B2C SaaS — NZ residential power bill monitoring via WhatsApp/SMS",
+    "version": "0.1.0",
+    "phase": 1,
+    "stack": {
+      "runtime": "Cloudflare Workers",
+      "language": "TypeScript strict + Python",
+      "framework": "Hono",
+      "database": "D1",
+      "messaging": "Sent (sent.dm)",
+      "nlu": "DeepSeek v4",
+      "payments": "Stripe"
+    }
+  },
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:chatgpt.com)",
+      "Bash(npm:*)",
+      "Bash(npx:*)",
+      "Bash(wrangler:*)",
+      "Bash(git:*)",
+      "Bash(python:*)",
+      "Bash(pip:*)",
+      "Bash(pytest:*)",
+      "Bash(node:*)",
+      "Bash(tsc:*)",
+      "Bash(mkdir:*)",
+      "Bash(curl:*)",
+      "Bash(ls:*)",
+      "Bash(cat:*)",
+      "Bash(cd:*)",
+      "mcp__claude-flow__guidance_capabilities",
+      "mcp__claude-flow__guidance_discover",
+      "mcp__claude-flow__guidance_workflow",
+      "mcp__claude-flow__guidance_recommend",
+      "mcp__claude-flow__guidance_quickref",
+      "mcp__claude-flow__agent_list",
+      "mcp__claude-flow__agent_spawn",
+      "mcp__claude-flow__agent_status",
+      "mcp__claude-flow__agent_terminate",
+      "mcp__claude-flow__hooks_init",
+      "mcp__claude-flow__hooks_list",
+      "mcp__claude-flow__hooks_route",
+      "mcp__claude-flow__hooks_pre_task",
+      "mcp__claude-flow__hooks_post_task",
+      "mcp__claude-flow__hooks_pre_edit",
+      "mcp__claude-flow__hooks_post_edit",
+      "mcp__claude-flow__hooks_intelligence",
+      "mcp__claude-flow__hooks_intelligence_trajectory_start",
+      "mcp__claude-flow__hooks_intelligence_trajectory_step",
+      "mcp__claude-flow__hooks_intelligence_trajectory_end",
+      "mcp__claude-flow__hooks_intelligence_pattern_search",
+      "mcp__claude-flow__hooks_intelligence_pattern_store",
+      "mcp__claude-flow__hooks_intelligence_learn",
+      "mcp__claude-flow__hooks_model_route",
+      "mcp__claude-flow__hooks_model_outcome",
+      "mcp__claude-flow__hooks_model_stats",
+      "mcp__claude-flow__swarm_init",
+      "mcp__claude-flow__swarm_status",
+      "mcp__claude-flow__swarm_shutdown",
+      "mcp__claude-flow__swarm_health",
+      "mcp__claude-flow__memory_search",
+      "mcp__claude-flow__memory_store",
+      "mcp__claude-flow__memory_retrieve",
+      "mcp__claude-flow__memory_list",
+      "mcp__claude-flow__memory_stats",
+      "mcp__claude-flow__analyze_diff",
+      "mcp__claude-flow__analyze_diff_risk",
+      "mcp__claude-flow__analyze_diff_stats",
+      "mcp__claude-flow__analyze_diff_classify",
+      "mcp__claude-flow__security_audit",
+      "mcp__claude-flow__task_list",
+      "mcp__claude-flow__task_create",
+      "mcp__claude-flow__task_status",
+      "mcp__claude-flow__task_assign",
+      "mcp__claude-flow__task_complete",
+      "mcp__claude-flow__task_update",
+      "Bash(npx @claude-flow*)",
+      "Bash(npx claude-flow*)",
+      "Bash(node .claude/*)",
+      "mcp__claude-flow__:*"
+    ]
+  },
+  "hooks": {
+    "PreTaskUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node -e \"const c=process.env.CLAUDE_COMMAND||''; if(c.match(/rm\\s+-rf|git\\s+push\\s+--force|git\\s+reset\\s+--hard|wrangler\\s+secret\\s+put/)){console.error('BLOCKED: destructive operation');process.exit(1)}\""
+          }
+        ]
+      }
+    ],
+    "PostTaskUse": [
+      {
+        "matcher": "Edit|Write",
+        "hooks": [
+          {
+            "type": "mcp",
+            "server": "claude-flow",
+            "tool": "hooks_post_edit",
+            "params": {
+              "filePath": "$FILE_PATH",
+              "success": true
+            }
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "mcp",
+            "server": "claude-flow",
+            "tool": "hooks_pre_task",
+            "params": {
+              "taskId": "$SESSION_ID",
+              "description": "$PROMPT"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "intelligence": {
+    "enabled": true,
+    "sona": {
+      "enabled": true,
+      "learningRate": 0.01
+    },
+    "trajectory": {
+      "enabled": true,
+      "autoRecord": true
+    },
+    "memory": {
+      "namespace": "flip",
+      "consolidateOnSessionEnd": true
+    }
+  },
+  "swarm": {
+    "defaults": {
+      "topology": "hierarchical",
+      "maxAgents": 4,
+      "strategy": "specialized",
+      "consensus": "raft"
+    }
+  },
+  "modelRouting": {
+    "enabled": true,
+    "preferSonnetForComplex": true,
+    "preferHaikuForSimple": true
+  },
+  "instructions": {
+    "project": ".claude/CLAUDE.md",
+    "codingStandards": ".claude/instructions/coding-standards.md",
+    "architecture": ".claude/instructions/architecture.md",
+    "security": ".claude/instructions/security.md",
+    "testing": ".claude/instructions/testing.md"
+  },
+  "agentDefinitions": {
+    "directory": ".claude/agents",
+    "available": [
+      "coder",
+      "python-dev",
+      "reviewer",
+      "tester",
+      "security-auditor"
+    ]
+  },
+  "env": {
+    "CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS": "1",
+    "CLAUDE_FLOW_V3_ENABLED": "true",
+    "CLAUDE_FLOW_HOOKS_ENABLED": "true"
+  }
+}

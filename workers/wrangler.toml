@@ -1,0 +1,51 @@
+name = "flip-api"
+main = "src/index.ts"
+compatibility_date = "2026-05-14"
+compatibility_flags = ["nodejs_compat"]
+
+[[d1_databases]]
+binding = "DB"
+database_name = "flip-db"
+database_id = "9bdbc913-45d4-4b0b-afb0-1aa177cdc23a"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "6f4e28e8f4db40608399ac840d58e2ff"
+
+[[queues.producers]]
+binding = "PARSE_QUEUE"
+queue = "flip-parse-queue"
+
+[[queues.producers]]
+binding = "COMPARE_QUEUE"
+queue = "flip-compare-queue"
+
+[[queues.producers]]
+binding = "NOTIFY_QUEUE"
+queue = "flip-notify-queue"
+
+[[queues.consumers]]
+queue = "flip-parse-queue"
+max_batch_size = 1
+max_concurrency = 3
+
+[[queues.consumers]]
+queue = "flip-compare-queue"
+max_batch_size = 1
+max_concurrency = 2
+
+[[queues.consumers]]
+queue = "flip-notify-queue"
+max_batch_size = 1
+max_concurrency = 5
+
+[[r2_buckets]]
+binding = "BILLS"
+bucket_name = "flip-bills"
+
+[triggers]
+crons = ["0 3 * * *", "0 6 * * *", "0 14 * * *"]
+
+[vars]
+ENVIRONMENT = "development"
+SERVICE_VERSION = "0.1.0"

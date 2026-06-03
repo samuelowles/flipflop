@@ -1,0 +1,11 @@
+{
+  "id": "msg_test_002",
+  "from": "+64219876543",
+  "body": "here is my bill",
+  "media": {
+    "url": "https://cdn.sent.dm/media/bill_test.pdf",
+    "type": "pdf"
+  },
+  "channel": "whatsapp",
+  "timestamp": "2026-05-14T10:00:00+12:00"
+}
