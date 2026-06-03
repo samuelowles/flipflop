@@ -26,6 +26,10 @@ venv/
 .swarm/
 ruvector.db
 
+# Temp files
+*.tmp.*
+*~
+
 # OS
 .DS_Store
 Thumbs.db
