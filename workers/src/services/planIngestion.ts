@@ -11,7 +11,7 @@ const EIEP14A_FEED_URL =
   'https://www.emi.ea.govt.nz/Wholesale/Datasets/Mappings/RetailerPlanMapping';
 
 const CACHE_KEY = 'plans:all';
-const CACHE_TTL = 60 * 60 * 24; // 24 hours
+const _CACHE_TTL = 60 * 60 * 24; // 24 hours
 
 interface EIEP14ARecord {
   PlanId?: string;

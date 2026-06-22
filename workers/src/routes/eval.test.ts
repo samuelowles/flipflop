@@ -234,7 +234,7 @@ function buildUploadForm(
   mimeType: string,
   phone?: string
 ): FormData {
-  const file = new File([content as BlobPart], fileName, { type: mimeType });
+  const file = new File([content as unknown as BlobPart], fileName, { type: mimeType });
   const fd = new FormData();
   fd.append('file', file);
   if (phone !== undefined) {

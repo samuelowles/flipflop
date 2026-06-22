@@ -102,7 +102,7 @@ export async function updateBillParsedData(
   id: string,
   data: UpdateBillParsedData
 ): Promise<void> {
-  const now = new Date().toISOString();
+  const _now = new Date().toISOString();
 
   const stmt = db.prepare(
     `UPDATE bills SET
