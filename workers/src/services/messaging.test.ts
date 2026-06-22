@@ -5,6 +5,14 @@ import { validateSentSignature } from '../middleware/sentAuth';
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
 
+function bytesToHex(bytes: Uint8Array): string {
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) {
+    hex += (bytes[i] as number).toString(16).padStart(2, '0');
+  }
+  return hex;
+}
+
 describe('sendMessage', () => {
   beforeEach(() => {
     mockFetch.mockReset();
@@ -241,7 +249,7 @@ describe('validateSentSignature', () => {
       ['sign']
     );
     const sigBytes = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
-    const signature = btoa(String.fromCharCode(...new Uint8Array(sigBytes)));
+    const signature = bytesToHex(new Uint8Array(sigBytes));
 
     const valid = await validateSentSignature(body, signature, secret);
     expect(valid).toBe(true);
@@ -277,7 +285,7 @@ describe('validateSentSignature', () => {
       ['sign']
     );
     const sigBytes = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
-    const signature = btoa(String.fromCharCode(...new Uint8Array(sigBytes)));
+    const signature = bytesToHex(new Uint8Array(sigBytes));
 
     const valid = await validateSentSignature(body, signature, 'test-secret');
     expect(valid).toBe(false);
