@@ -9,7 +9,11 @@ import { pollAllUsers } from './services/emailPoller';
 import { refreshPlans } from './services/planIngestion';
 import { handleParseJob } from './services/billParser';
 import { runComparison } from './services/planComparator';
-import { evaluateAndNotify } from './services/notificationEngine';
+import { getBillsByUserId } from './models/bills';
+import { adminPlansPage, adminPlansData, adminPlansBulk } from './routes/adminPlans';
+import { adminAuth } from './middleware/adminAuth';
+// planScraper imported dynamically in scheduled handler (requires Browser Rendering)
+// Notification engine deferred to Phase 4
 
 const app = new Hono();
 
@@ -57,6 +61,65 @@ app.post('/eval/upload', evalUploadHandler); // inline rate limiter with HTML er
 app.get('/eval/result', rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 60_000 }), evalResultPage);
 app.get('/eval/status', rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 60_000 }), evalStatus);
 
+// Admin plan management (auth required for mutations)
+app.get('/admin/plans', adminPlansPage);
+app.get('/admin/plans/', adminPlansPage);
+app.get('/admin/plans/data', adminPlansData);
+app.post('/admin/plans/data', adminAuth, adminPlansData);
+app.delete('/admin/plans/data', adminAuth, adminPlansData);
+app.post('/admin/plans/bulk', adminAuth, adminPlansBulk);
+
+// Admin: trigger Powerswitch scraper (extracts all retailer plans from powerswitch.org.nz)
+app.post('/admin/scrape-powerswitch', adminAuth, async (c) => {
+  const env = c.env as Record<string, unknown>;
+  const { scrapePowerswitchForAddress } = await import('./services/powerswitchScraper');
+  const result = await scrapePowerswitchForAddress(
+    {
+      BROWSER: env.BROWSER as unknown,
+      DB: env.DB as D1Database,
+      DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY as string | undefined,
+    },
+    '88A Verran Rd, Birkdale, Auckland 0626',
+    12000,
+  );
+  return c.json(result);
+});
+
+// Admin: trigger plan scraper manually (requires ADMIN_API_KEY)
+app.post('/admin/scrape', adminAuth, async (c) => {
+  const env = c.env as Record<string, unknown>;
+  const { scrapeAndUpdateAllRetailers } = await import('./services/planScraper');
+  const result = await scrapeAndUpdateAllRetailers({
+    BROWSER: env.BROWSER,
+    DB: env.DB as D1Database,
+    KV: env.KV as KVNamespace,
+    DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY as string | undefined,
+  });
+  return c.json(result);
+});
+
+// Admin: re-enqueue all pending_parse bills
+app.get('/admin/reparse', async (c) => {
+  const env = c.env as Record<string, unknown>;
+  const db = env.DB as D1Database;
+  const parseQueue = env.PARSE_QUEUE as Queue<{ billId: string; r2Key: string; userId: string }>;
+
+  const result = await db.prepare(
+    "SELECT id, user_id, raw_r2_key FROM bills WHERE status = 'pending_parse'"
+  ).all<{ id: string; user_id: string; raw_r2_key: string }>();
+
+  const bills = result.results ?? [];
+  let enqueued = 0;
+  for (const bill of bills) {
+    if (bill.raw_r2_key) {
+      await parseQueue.send({ billId: bill.id, r2Key: bill.raw_r2_key, userId: bill.user_id });
+      enqueued++;
+    }
+  }
+
+  return c.json({ enqueued, total: bills.length, timestamp: new Date().toISOString() });
+});
+
 // Queue consumer router — dispatches to the correct handler by queue name
 async function queue(
   batch: MessageBatch<Record<string, unknown>>,
@@ -88,14 +151,13 @@ async function queue(
           PYTHON_SERVICE_AUTH_TOKEN: env.PYTHON_SERVICE_AUTH_TOKEN as string | undefined,
         });
       } else if (queueName === 'flip-notify-queue') {
-        const body = message.body as { userId: string; comparisonId: string };
-        await evaluateAndNotify(body.userId, body.comparisonId, {
-          DB: env.DB as D1Database,
-          KV: env.KV as KVNamespace,
-          SENT_API_KEY: env.SENT_API_KEY as string,
-          ENCRYPTION_KEY: env.ENCRYPTION_KEY as string,
-          DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY as string | undefined,
-        });
+        // Phase 4: notification dispatch deferred
+        console.log(JSON.stringify({
+          type: 'notify_deferred',
+          body: message.body,
+          note: 'Notification engine implemented in Phase 4',
+          timestamp: new Date().toISOString(),
+        }));
       } else {
         console.log(JSON.stringify({
           type: 'queue_unknown',
@@ -158,6 +220,19 @@ async function scheduled(
       GMAIL_CLIENT_ID: string;
       GMAIL_CLIENT_SECRET: string;
       ENCRYPTION_KEY: string;
+    });
+    return;
+  }
+
+  // Weekly plan pricing scrape via Stagehand + Browser Rendering
+  // Sunday 16:00 UTC = Monday 4am NZT
+  if (cron.includes('16') || cron.includes('7')) {
+    const { scrapeAndUpdateAllRetailers } = await import('./services/planScraper');
+    await scrapeAndUpdateAllRetailers(env as {
+      BROWSER: unknown;
+      DB: D1Database;
+      KV: KVNamespace;
+      DEEPSEEK_API_KEY?: string;
     });
     return;
   }

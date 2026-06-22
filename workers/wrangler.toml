@@ -3,6 +3,10 @@ main = "src/index.ts"
 compatibility_date = "2026-05-14"
 compatibility_flags = ["nodejs_compat"]
 
+# Browser Rendering for Stagehand plan scraper
+[browser]
+binding = "BROWSER"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "flip-db"
@@ -44,7 +48,7 @@ binding = "BILLS"
 bucket_name = "flip-bills"
 
 [triggers]
-crons = ["0 3 * * *", "0 6 * * *", "0 14 * * *"]
+crons = ["0 3 * * *", "0 6 * * *", "0 14 * * *", "0 16 * * 7"]
 
 [vars]
 ENVIRONMENT = "development"
