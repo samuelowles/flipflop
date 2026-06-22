@@ -29,9 +29,12 @@ jobs:
       - name: Lint (eslint)
         run: npm run lint
 
-      - name: Test (vitest + coverage)
-        run: npm test -- --coverage
+      - name: Test (vitest)
+        # TODO(phase-2): re-enable --coverage once @cloudflare/vitest-pool-workers
+        # supports @vitest/coverage-v8 in workerd (tracked in #135).
+        run: npm test
 
+      # Coverage upload is disabled until --coverage is re-enabled above.
       - name: Upload coverage report
         if: always()
         uses: actions/upload-artifact@v4

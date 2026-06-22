@@ -40,8 +40,8 @@ export function rateLimit(config?: Partial<RateLimitConfig>) {
 
   return async function rateLimitMiddleware(c: Context, next: Next): Promise<Response | void> {
     const kv = c.env.KV as KVNamespace;
-    const _now = Date.now();
-    const _windowStart = _now - cfg.windowMs;
+    const now = Date.now();
+    const _windowStart = now - cfg.windowMs;
 
     const userKey = await getUserKey(c);
     const globalKey = 'rate:global';
