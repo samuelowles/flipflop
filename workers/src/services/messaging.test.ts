@@ -239,6 +239,7 @@ describe('validateSentSignature', () => {
   it('validates a correct HMAC-SHA256 signature', async () => {
     const secret = 'test-secret';
     const body = 'test body';
+    const ts = '1700000000';
 
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
@@ -248,18 +249,24 @@ describe('validateSentSignature', () => {
       false,
       ['sign']
     );
-    const sigBytes = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+    const sigBytes = await crypto.subtle.sign(
+      'HMAC',
+      key,
+      encoder.encode(`${ts}.${body}`)
+    );
     const signature = bytesToHex(new Uint8Array(sigBytes));
 
-    const valid = await validateSentSignature(body, signature, secret);
+    const valid = await validateSentSignature(body, signature, secret, ts);
     expect(valid).toBe(true);
   });
 
   it('rejects an incorrect signature', async () => {
     const valid = await validateSentSignature(
       'test body',
-      'wrongsignature==',
-      'test-secret'
+      // 64-char hex but does not match the HMAC for "test body" with this secret.
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'test-secret',
+      '1700000000'
     );
     expect(valid).toBe(false);
   });
@@ -267,14 +274,16 @@ describe('validateSentSignature', () => {
   it('rejects signature for empty body', async () => {
     const valid = await validateSentSignature(
       '',
-      'anysig==',
-      'test-secret'
+      'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+      'test-secret',
+      '1700000000'
     );
     expect(valid).toBe(false);
   });
 
   it('rejects signature with different secret', async () => {
     const body = 'test body';
+    const ts = '1700000000';
 
     const encoder = new TextEncoder();
     const key = await crypto.subtle.importKey(
@@ -284,10 +293,14 @@ describe('validateSentSignature', () => {
       false,
       ['sign']
     );
-    const sigBytes = await crypto.subtle.sign('HMAC', key, encoder.encode(body));
+    const sigBytes = await crypto.subtle.sign(
+      'HMAC',
+      key,
+      encoder.encode(`${ts}.${body}`)
+    );
     const signature = bytesToHex(new Uint8Array(sigBytes));
 
-    const valid = await validateSentSignature(body, signature, 'test-secret');
+    const valid = await validateSentSignature(body, signature, 'test-secret', ts);
     expect(valid).toBe(false);
   });
 });
