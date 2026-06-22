@@ -1,4 +1,4 @@
-import { Hono } from 'hono';
+import { Hono, type Context } from 'hono';
 import { errorHandler } from './middleware/errorHandler';
 import { sentAuth } from './middleware/sentAuth';
 import { rateLimit } from './middleware/rateLimit';
@@ -56,6 +56,28 @@ app.get('/eval/', evalUploadPage);
 app.post('/eval/upload', evalUploadHandler); // inline rate limiter with HTML error page
 app.get('/eval/result', rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 60_000 }), evalResultPage);
 app.get('/eval/status', rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 60_000 }), evalStatus);
+
+// Epic 1 issue #17 — 501 stubs for unimplemented webhook + admin surfaces.
+// Placed after specific routes so Hono's first-match routing resolves
+// /webhook/messaging, /admin/plans/*, /admin/scrape-powerswitch before falling
+// through to the catch-alls.
+const notImplemented = (_c: Context): Response => {
+  return new Response(
+    JSON.stringify({
+      error: 'Not implemented',
+      code: 'not_implemented',
+      status: 501,
+    }),
+    {
+      status: 501,
+      headers: { 'Content-Type': 'application/json' },
+    }
+  );
+};
+
+app.post('/webhook/stripe', notImplemented);
+app.get('/webhook/email/*', notImplemented);
+app.get('/admin/*', notImplemented);
 
 // Queue consumer router — dispatches to the correct handler by queue name
 async function queue(
