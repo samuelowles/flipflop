@@ -209,6 +209,7 @@ export async function gmailEvalStatus(c: Context): Promise<Response> {
       found: false,
       pending: true,
       error: 'Comparison not yet available. Bills may still be processing.',
+      detail: (err as Error).message,
     });
   }
 }
@@ -452,7 +453,7 @@ function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function renderProgressPage(userId: string, setupLog: string[], isError = false): string {
+function renderProgressPage(userId: string, setupLog: string[], _isError = false): string {
   const logsJson = JSON.stringify(setupLog);
   return `<!DOCTYPE html>
 <html lang="en">
@@ -578,7 +579,7 @@ function renderProgressPage(userId: string, setupLog: string[], isError = false)
       if (!data || !data.found || !data.parsedData || !data.comparisons || !data.comparisons.length) {
         document.getElementById('eval-status-line').innerHTML = data && data.pending
           ? '<span class="spinner"></span>Bills are still being processed. Check back soon.'
-          : 'No comparisons available yet. We\'ll text you when your results are ready.';
+          : "No comparisons available yet. We'll text you when your results are ready.";
         return;
       }
 
