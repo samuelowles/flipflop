@@ -1,9 +1,24 @@
 import type { Context, Next } from 'hono';
 
-interface StructuredError {
-  readonly error: string;
-  readonly code: string;
-  readonly status: number;
+// PII patterns stripped from error messages before logging.
+// - phone: NZ/international phone numbers (with spaces, dashes, or parens)
+// - email: standard email pattern
+// - ICP: NZ Installation Control Point identifier (8-15 digit numeric)
+// - address: numeric street address (e.g. "42 Lambton Quay")
+const PII_PATTERNS: RegExp[] = [
+  // phone: optional + then 8-15 digits/separators
+  /\+?\d[\d\s\-()]{7,18}\d/g,
+  /[\w.+-]+@[\w-]+\.[\w.-]+/g, // email
+  /\b\d{8,15}\b/g, // ICP / long numeric ID
+  /\b\d+\s+[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*\s+(Street|St|Road|Rd|Avenue|Ave|Lane|Ln|Drive|Dr|Quay)\b/g, // address
+];
+
+function stripPII(message: string): string {
+  let stripped = message;
+  for (const pattern of PII_PATTERNS) {
+    stripped = stripped.replace(pattern, '[REDACTED]');
+  }
+  return stripped;
 }
 
 // Hono v4 internally catches route-handler errors before they propagate through
@@ -15,24 +30,30 @@ export async function errorHandler(c: Context, next: Next): Promise<Response | v
 
   if (c.error) {
     const err = (c.error as { message?: string })?.message
-      ? c.error as Error
+      ? (c.error as Error)
       : new Error('Internal error');
 
-    console.log(JSON.stringify({
-      level: 'error',
-      message: err.message,
-      code: mapErrorToCode(err),
-      path: c.req.path,
-      method: c.req.method,
-      timestamp: new Date().toISOString(),
-    }));
+    const requestId =
+      (c.get('requestId') as string | undefined) ??
+      (typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+    console.log(
+      JSON.stringify({
+        level: 'error',
+        message: stripPII(err.message),
+        code: mapErrorToCode(err),
+        path: c.req.path,
+        method: c.req.method,
+        timestamp: new Date().toISOString(),
+        request_id: requestId,
+        stack: err.stack,
+      })
+    );
 
     const status = mapErrorToStatus(err);
-    const body: StructuredError = {
-      error: mapErrorToUserMessage(err),
-      code: mapErrorToCode(err),
-      status,
-    };
+    const body = mapErrorToResponseBody(err, status);
 
     c.res = new Response(JSON.stringify(body), {
       status,
@@ -59,9 +80,24 @@ function mapErrorToCode(err: Error): string {
   return 'internal_error';
 }
 
+// Per AC: production 500 responses must be { error: 'internal_error' } with no internals leaked.
+// For non-500 errors we surface a short, safe user-facing message.
+function mapErrorToResponseBody(
+  err: Error,
+  status: number
+): { error: string; code: string; status: number } {
+  if (status === 500) {
+    return { error: 'internal_error', code: 'internal_error', status: 500 };
+  }
+  return {
+    error: mapErrorToUserMessage(err),
+    code: mapErrorToCode(err),
+    status,
+  };
+}
+
 function mapErrorToUserMessage(err: Error): string {
   const status = mapErrorToStatus(err);
-  if (status === 500) return 'Something went wrong. Please try again later.';
   if (status === 401) return 'Unauthorized.';
   return err.message;
 }
