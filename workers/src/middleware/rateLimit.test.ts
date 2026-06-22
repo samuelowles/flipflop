@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import { rateLimit } from './rateLimit';
 
@@ -26,6 +26,16 @@ function makeEnv(kv: KVNamespace) {
 }
 
 describe('rateLimit middleware', () => {
+  let logSpy: ReturnType<typeof vi.spyOn>;
+
+  beforeEach(() => {
+    logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+  });
+
+  afterEach(() => {
+    logSpy.mockRestore();
+  });
+
   it('allows requests under the limit', async () => {
     const kv = createMockKV();
     const app = new Hono();
@@ -62,8 +72,9 @@ describe('rateLimit middleware', () => {
     // Third should be rate limited
     const r3 = await app.request('/test', { headers }, env);
     expect(r3.status).toBe(429);
-    const body = (await r3.json()) as { code: string };
-    expect(body.code).toBe('rate_limited');
+    const body = (await r3.json()) as { error: string; retry_after: number };
+    expect(body.error).toBe('rate_limited');
+    expect(typeof body.retry_after).toBe('number');
   });
 
   it('includes Retry-After header on 429 responses', async () => {
@@ -158,6 +169,8 @@ describe('rateLimit middleware', () => {
       headers: { 'CF-Connecting-IP': '40.0.0.3' },
     }, env);
     expect(r3.status).toBe(429);
+    const body = (await r3.json()) as { error: string };
+    expect(body.error).toBe('rate_limited');
   });
 
   it('falls back to "unknown" when no CF-Connecting-IP header', async () => {
@@ -170,5 +183,79 @@ describe('rateLimit middleware', () => {
     // No IP header should still work (uses 'unknown')
     const res = await app.request('/test', {}, makeEnv(kv));
     expect(res.status).toBe(200);
+  });
+
+  it('uses AC-specified KV key format `ratelimit:{scope}:{id}:{minute}` (per-minute bucket increments on repeat hits)', async () => {
+    const kv = createMockKV();
+    const app = new Hono();
+    const limiter = rateLimit({ userLimit: 2, globalLimit: 100, windowMs: 60_000 });
+    app.get('/test', limiter, (c) => c.json({ ok: true }));
+
+    const env = makeEnv(kv);
+    const headers = { 'CF-Connecting-IP': '50.50.50.50' };
+
+    // Three sequential hits in the same minute on the same id should land on the
+    // same per-minute bucket — first two pass, third returns 429. This is the
+    // observable consequence of the AC-specified key format.
+    const r1 = await app.request('/test', { headers }, env);
+    expect(r1.status).toBe(200);
+    const r2 = await app.request('/test', { headers }, env);
+    expect(r2.status).toBe(200);
+    const r3 = await app.request('/test', { headers }, env);
+    expect(r3.status).toBe(429);
+  });
+
+  it('bypasses rate limiting for /health, /healthz, /ready', async () => {
+    const kv = createMockKV();
+    const app = new Hono();
+    const limiter = rateLimit({ userLimit: 1, globalLimit: 100, windowMs: 60_000 });
+    app.get('/health', limiter, (c) => c.json({ ok: true }));
+    app.get('/healthz', limiter, (c) => c.json({ ok: true }));
+    app.get('/ready', limiter, (c) => c.json({ ok: true }));
+    app.get('/test', limiter, (c) => c.json({ ok: true }));
+
+    const env = makeEnv(kv);
+    const headers = { 'CF-Connecting-IP': '60.60.60.60' };
+
+    // Each bypass path can be hit many times without consuming the user limit
+    for (let i = 0; i < 5; i++) {
+      expect((await app.request('/health', { headers }, env)).status).toBe(200);
+      expect((await app.request('/healthz', { headers }, env)).status).toBe(200);
+      expect((await app.request('/ready', { headers }, env)).status).toBe(200);
+    }
+
+    // A non-bypass path still counts toward the user limit (limit = 1)
+    expect((await app.request('/test', { headers }, env)).status).toBe(200);
+    expect((await app.request('/test', { headers }, env)).status).toBe(429);
+  });
+
+  it('logs the limit hit with scope and id_hash, but never the body', async () => {
+    const kv = createMockKV();
+    const app = new Hono();
+    const limiter = rateLimit({ userLimit: 1, globalLimit: 100, windowMs: 60_000 });
+    app.get('/test', limiter, (c) => c.json({ ok: true }));
+
+    const headers = { 'CF-Connecting-IP': '70.70.70.70' };
+    const env = makeEnv(kv);
+
+    await app.request('/test', { headers }, env); // consume
+    const res = await app.request('/test', { headers }, env);
+    expect(res.status).toBe(429);
+
+    // Inspect structured log output
+    const logCalls = logSpy.mock.calls.flat();
+    const hitLog = logCalls
+      .map((s) => {
+        try { return JSON.parse(String(s)); } catch { return null; }
+      })
+      .find((o): o is Record<string, unknown> => !!o && o.type === 'rate_limit_hit');
+
+    expect(hitLog).toBeDefined();
+    if (!hitLog) return;
+    expect(hitLog.scope).toBe('user');
+    expect(typeof hitLog.id_hash).toBe('string');
+    // AC: must NOT log the raw user id (PII) or the response body
+    expect(JSON.stringify(hitLog)).not.toContain('70.70.70.70');
+    expect(JSON.stringify(hitLog)).not.toContain('rate_limited');
   });
 });

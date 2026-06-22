@@ -12,19 +12,22 @@ const DEFAULT_CONFIG: RateLimitConfig = {
   windowMs: 60_000, // 1 minute
 };
 
+// Paths that bypass rate limiting (AC: /health, /healthz, /ready)
+const BYPASS_PATHS = new Set(['/health', '/healthz', '/ready']);
+
 // Identifies a user: by phone from the Sent webhook body, or context (set by sentAuth)
-async function getUserKey(c: Context): Promise<string> {
+async function getUserId(c: Context): Promise<string> {
   // First check context (set by sentAuth middleware)
   const contextPhone = c.get('phone') as string | undefined;
   if (contextPhone) {
-    return `rate:user:${contextPhone}`;
+    return contextPhone;
   }
 
   // Try to extract phone from the request body directly
   try {
     const body = await c.req.raw.clone().json() as { from?: string };
     if (body.from) {
-      return `rate:user:${body.from}`;
+      return body.from;
     }
   } catch {
     // Body not JSON or not available — fall through
@@ -32,38 +35,47 @@ async function getUserKey(c: Context): Promise<string> {
 
   // Last resort: IP-based key (for non-webhook routes)
   const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
-  return `rate:user:${ip}`;
+  return ip;
+}
+
+// KV key format per AC: `ratelimit:{scope}:{id}:{minute}`
+function makeKey(scope: 'user' | 'global', id: string, minute: number): string {
+  return `ratelimit:${scope}:${id}:${minute}`;
+}
+
+// Returns the current minute bucket (epoch minutes) for the given timestamp
+function currentMinute(now: number): number {
+  return Math.floor(now / 60_000);
 }
 
 export function rateLimit(config?: Partial<RateLimitConfig>) {
   const cfg = { ...DEFAULT_CONFIG, ...config };
 
   return async function rateLimitMiddleware(c: Context, next: Next): Promise<Response | void> {
+    // AC: bypass for /health, /healthz, /ready
+    if (BYPASS_PATHS.has(c.req.path)) {
+      await next();
+      return;
+    }
+
     const kv = c.env.KV as KVNamespace;
     const now = Date.now();
-    const windowStart = now - cfg.windowMs;
+    const minute = currentMinute(now);
 
-    const userKey = await getUserKey(c);
-    const globalKey = 'rate:global';
+    const userId = await getUserId(c);
+    const userKey = makeKey('user', userId, minute);
+    const globalKey = makeKey('global', 'all', minute);
 
     // Check user limit
-    const userHits = await getUserWindowHits(kv, userKey, now, cfg.windowMs);
+    const userHits = await getWindowHits(kv, userKey);
     if (userHits >= cfg.userLimit) {
-      return c.json(
-        { error: 'Too many requests', code: 'rate_limited', status: 429, retryAfter: cfg.windowMs / 1000 },
-        429,
-        { 'Retry-After': String(cfg.windowMs / 1000) }
-      );
+      return respondRateLimited(c, 'user', userId, cfg.windowMs / 1000);
     }
 
     // Check global limit
-    const globalHits = await getUserWindowHits(kv, globalKey, now, cfg.windowMs);
+    const globalHits = await getWindowHits(kv, globalKey);
     if (globalHits >= cfg.globalLimit) {
-      return c.json(
-        { error: 'Service busy, please try again', code: 'rate_limited', status: 429, retryAfter: cfg.windowMs / 1000 },
-        429,
-        { 'Retry-After': String(cfg.windowMs / 1000) }
-      );
+      return respondRateLimited(c, 'global', 'all', cfg.windowMs / 1000);
     }
 
     // Record hits (fire and forget — don't block the response)
@@ -82,33 +94,66 @@ export function rateLimit(config?: Partial<RateLimitConfig>) {
   };
 }
 
-// Sliding window: store timestamps as sorted set, trim expired ones
-async function getUserWindowHits(
-  kv: KVNamespace,
-  key: string,
-  now: number,
-  windowMs: number
-): Promise<number> {
+// AC: 429 body shape `{ error: 'rate_limited', retry_after }` + log the limit hit only (no body, no PII)
+function respondRateLimited(
+  c: Context,
+  scope: 'user' | 'global',
+  id: string,
+  retryAfterSeconds: number
+): Response {
+  // AC: logs only the limit hit, not the body. No PII — log a hash of the id, not the raw value.
+  const idHash = hashId(id);
+  console.log(JSON.stringify({
+    type: 'rate_limit_hit',
+    scope,
+    id_hash: idHash,
+    retry_after: retryAfterSeconds,
+    path: c.req.path,
+    method: c.req.method,
+    request_id: c.req.header('cf-ray') ?? undefined,
+    timestamp: new Date(now()).toISOString(),
+  }));
+
+  return c.json(
+    { error: 'rate_limited', retry_after: retryAfterSeconds },
+    429,
+    { 'Retry-After': String(retryAfterSeconds) }
+  );
+}
+
+// Short non-cryptographic hash for PII-safe id logging
+function hashId(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) {
+    h = (h << 5) - h + id.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h).toString(36);
+}
+
+function now(): number {
+  return Date.now();
+}
+
+// Per-minute bucket counter in KV. Stored as a simple integer count (the bucket key
+// itself encodes the minute, so no sliding-window trimming is required — buckets
+// expire automatically via the per-key TTL).
+async function getWindowHits(kv: KVNamespace, key: string): Promise<number> {
   const raw = await kv.get(key);
   if (!raw) return 0;
-  const timestamps: number[] = JSON.parse(raw);
-  // Filter to current window
-  const cutoff = now - windowMs;
-  const current = timestamps.filter(t => t > cutoff);
-  return current.length;
+  const n = Number.parseInt(raw, 10);
+  return Number.isFinite(n) ? n : 0;
 }
 
 async function recordHit(
   kv: KVNamespace,
   key: string,
-  now: number,
+  _now: number,
   windowMs: number
 ): Promise<void> {
   const raw = await kv.get(key);
-  const timestamps: number[] = raw ? JSON.parse(raw) : [];
-  const cutoff = now - windowMs;
-  const current = timestamps.filter(t => t > cutoff);
-  current.push(now);
-  // Store with TTL slightly longer than window
-  await kv.put(key, JSON.stringify(current), { expirationTtl: Math.ceil(windowMs / 1000) + 10 });
+  const current = raw ? Number.parseInt(raw, 10) : 0;
+  const next = Number.isFinite(current) ? current + 1 : 1;
+  // Store with TTL slightly longer than the minute window so buckets self-expire
+  await kv.put(key, String(next), { expirationTtl: Math.ceil(windowMs / 1000) + 10 });
 }
