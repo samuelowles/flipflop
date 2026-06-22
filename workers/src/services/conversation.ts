@@ -122,7 +122,7 @@ export async function transition(
   kv: KVNamespace,
   userId: string,
   intent: Intent,
-  ctx?: TransitionContext
+  _ctx?: TransitionContext
 ): Promise<StateTransition> {
   const from = await getState(kv, userId);
   const nextState = validateTransition(from, intent);

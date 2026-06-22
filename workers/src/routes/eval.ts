@@ -9,7 +9,7 @@
 import type { Context } from 'hono';
 import { parseBill } from '../services/billParser';
 import { createBill, getBillsByUserId, updateBillParsedData } from '../models/bills';
-import { createUser, findOrCreateByPhone } from '../models/users';
+import { createUser as _createUser, findOrCreateByPhone } from '../models/users';
 import { createComparison } from '../models/comparisons';
 import { getPlansByRegion, getPlansByRetailer } from '../models/plans';
 
@@ -382,7 +382,6 @@ export async function runEvalComparison(
   parsedData: Record<string, unknown> | null;
   comparisons: readonly Record<string, unknown>[];
 }> {
-  const pythonUrl = env.PYTHON_SERVICE_URL ?? 'http://localhost:8000';
   const allBills = await getBillsByUserId(env.DB, userId);
   const parsedBills = allBills.filter(b => b.status === 'parsed');
 
@@ -390,13 +389,81 @@ export async function runEvalComparison(
     return { parsedData: null, comparisons: [] };
   }
 
+  const latestBill = parsedBills[0]!;
+
+  // Try Powerswitch on-demand scrape if Browser Rendering is available
+  const browser = (env as unknown as Record<string, unknown>).BROWSER;
+  const deepseekKey = (env as unknown as Record<string, unknown>).DEEPSEEK_API_KEY as string | undefined;
+
+  if (browser && deepseekKey) {
+    try {
+      // Build address from parsed bill data
+      const address = 'Auckland'; // Fallback — ICP address extraction comes with Phase 3 parsers
+
+      const avgKwh = parsedBills.reduce((s, b) => s + (b.usageKwh ?? 0), 0) /
+        Math.max(1, parsedBills.reduce((s, b) => s + (b.days ?? 30), 0)) * 365;
+
+      const { scrapePowerswitchForAddress } = await import('../services/powerswitchScraper');
+      const psResult = await scrapePowerswitchForAddress(
+        { BROWSER: browser, DB: env.DB, DEEPSEEK_API_KEY: deepseekKey },
+        address,
+        avgKwh,
+      );
+
+      if (psResult.plans.length > 0) {
+        const comparisons = psResult.plans.map(p => ({
+          plan_name: p.plan_name,
+          retailer_name: p.retailer_name,
+          retailer_id: p.retailer_name.toLowerCase().replace(/\s+/g, '-'),
+          projected_cost_cents: p.annual_cost_cents,
+          current_cost_cents: p.annual_cost_cents + p.saving_cents,
+          saving_cents: p.saving_cents,
+          confidence: 0.8,
+          stay_where_you_are: p.stay_where_you_are,
+          source: 'powerswitch',
+        }));
+
+        const parsedData: Record<string, unknown> = {
+          retailer_name: latestBill.retailerId,
+          plan_name: latestBill.planName,
+          usage_kwh: latestBill.usageKwh,
+          total_cents: latestBill.totalCents,
+          confidence: latestBill.confidence,
+          source: 'powerswitch',
+        };
+
+        console.log(JSON.stringify({
+          type: 'compare_powerswitch',
+          planCount: comparisons.length,
+          timestamp: new Date().toISOString(),
+        }));
+
+        return { parsedData, comparisons };
+      }
+
+      console.log(JSON.stringify({
+        type: 'compare_powerswitch_fallback',
+        error: psResult.error,
+        timestamp: new Date().toISOString(),
+      }));
+    } catch (err) {
+      console.log(JSON.stringify({
+        type: 'compare_powerswitch_error',
+        error: (err as Error).message,
+        timestamp: new Date().toISOString(),
+      }));
+    }
+  }
+
+  // Fallback: existing D1 plans + Python /compare pipeline
+  const pythonUrl = env.PYTHON_SERVICE_URL ?? 'http://localhost:8000';
+
   const billSummaries = parsedBills
     .map(billToSummary)
     .filter(Boolean) as BillSummary[];
 
   const avgDailyKwh = computeAvgDailyKwh(billSummaries);
   const seasonalWeights = computeSeasonalWeights(billSummaries);
-  const latestBill = parsedBills[0]!;
 
   const usageProfile: UsageProfile = {
     avgDailyKwh,

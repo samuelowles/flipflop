@@ -39,7 +39,7 @@ vi.mock('../models/oauth', () => ({
   storeOAuthTokens: vi.fn(),
 }));
 
-import { decrypt, encrypt } from '../models/encryption';
+import { decrypt as _decrypt, encrypt as _encrypt } from '../models/encryption';
 import {
   refreshAccessToken,
   searchMessages,
