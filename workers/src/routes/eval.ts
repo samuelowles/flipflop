@@ -9,7 +9,7 @@
 import type { Context } from 'hono';
 import { parseBill } from '../services/billParser';
 import { createBill, getBillsByUserId, updateBillParsedData } from '../models/bills';
-import { createUser, findOrCreateByPhone } from '../models/users';
+import { createUser as _createUser, findOrCreateByPhone } from '../models/users';
 import { createComparison } from '../models/comparisons';
 import { getPlansByRegion, getPlansByRetailer } from '../models/plans';
 

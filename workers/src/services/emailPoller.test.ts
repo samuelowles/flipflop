@@ -39,7 +39,7 @@ vi.mock('../models/oauth', () => ({
   storeOAuthTokens: vi.fn(),
 }));
 
-import { decrypt, encrypt } from '../models/encryption';
+import { decrypt, encrypt as _encrypt } from '../models/encryption';
 import {
   refreshAccessToken,
   searchMessages,
@@ -524,9 +524,6 @@ describe('pollAllUsers', () => {
   });
 
   it('uses 365-day lookback for new users without a last-poll cursor', async () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date('2026-05-14T12:00:00Z'));
-
     const env = makeEnv({
       oauthRows: [
         {
@@ -546,14 +543,17 @@ describe('pollAllUsers', () => {
       resultSizeEstimate: 0,
     });
 
+    const before = Date.now();
     await pollAllUsers(env);
+    const after = Date.now();
 
-    // 365 days before 2026-05-14 is 2025-05-14
-    // Date format is YYYY-MM-DD (from ISO string slice, not buildSearchQuery formatting)
+    // Lookback should be 365 days before "now" (YYYY-MM-DD format)
+    const expectedDate = new Date(before - 365 * 86400 * 1000).toISOString().slice(0, 10);
+    const expectedDateAfter = new Date(after - 365 * 86400 * 1000).toISOString().slice(0, 10);
     const callArgs = vi.mocked(searchMessages).mock.calls[0]![0];
-    expect(callArgs.query).toContain('after:2025-05-14');
-
-    vi.useRealTimers();
+    expect([expectedDate, expectedDateAfter]).toContain(
+      callArgs.query.match(/after:(\d{4}-\d{2}-\d{2})/)![1]
+    );
   });
 
   it('uses last-poll cursor for returning users', async () => {
@@ -640,10 +640,10 @@ describe('pollAllUsers', () => {
 
     await pollAllUsers(env);
 
-    // KV cursor should be stored
+    // KV cursor should be stored with a recent ISO timestamp
     const lastPoll = await env.KV.get('gmail:lastPoll:user-1');
     expect(lastPoll).toBeTruthy();
-    expect(lastPoll).toContain('2026-05');
+    expect(lastPoll).toMatch(new RegExp(`^${new Date().getFullYear()}-`));
   });
 
   it('handles multiple users independently', async () => {

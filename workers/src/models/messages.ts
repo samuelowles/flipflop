@@ -1,7 +1,7 @@
 import type { Message, MessageDirection, MessageChannel } from '../types/message';
 import type { Intent } from '../types/conversation';
 import type { EncryptionEnv } from './encryption';
-import { encrypt, decrypt } from './encryption';
+import { encrypt, decrypt as _decrypt } from './encryption';
 
 function generateId(): string {
   return crypto.randomUUID();

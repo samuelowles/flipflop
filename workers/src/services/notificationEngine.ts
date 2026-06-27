@@ -12,7 +12,7 @@ import { getRetailerById } from '../models/retailers';
 import { getBillsByUserId } from '../models/bills';
 import { getUserById } from '../models/users';
 import { sendMessage } from './messaging';
-import { explainComparison, generateStayPutMessage, generateSavingMessage } from './comparisonIntelligence';
+import { explainComparison as _explainComparison, generateStayPutMessage, generateSavingMessage } from './comparisonIntelligence';
 
 interface NotifyEnv {
   readonly DB: D1Database;
