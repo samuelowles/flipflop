@@ -9,11 +9,11 @@ vi.mock('../models/bills', () => ({
 }));
 
 vi.mock('./messaging', () => ({
-  sendMessage: vi.fn(),
+  sendText: vi.fn(),
 }));
 
 import { getBillById, updateBillStatus, updateBillParsedData } from '../models/bills';
-import { sendMessage } from './messaging';
+import { sendText } from './messaging';
 
 function createMockR2Object(size: number, body: Uint8Array): R2Object {
   return {
@@ -172,7 +172,7 @@ describe('handleParseJob', () => {
       userId: 'user123',
       billId: 'bill123',
     });
-    expect(sendMessage).toHaveBeenCalled();
+    expect(sendText).toHaveBeenCalled();
   });
 
   it('should set needs_review when confidence is below threshold', async () => {

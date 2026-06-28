@@ -31,7 +31,7 @@ vi.mock('../services/emailPoller', () => ({
 }));
 
 vi.mock('../services/messaging', () => ({
-  sendMessage: vi.fn(async () => {}),
+  sendText: vi.fn(async () => {}),
 }));
 
 function makeMockKV(): KVNamespace {
