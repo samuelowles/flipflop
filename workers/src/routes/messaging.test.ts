@@ -1,11 +1,30 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import { messagingWebhook } from './messaging';
+import { sentAuth } from '../middleware/sentAuth';
 
 type StoredUser = Record<string, unknown>;
 
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
+
+const TEST_SECRET = 'test-webhook-secret';
+
+async function signWebhook(body: string, ts: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    'raw',
+    encoder.encode(TEST_SECRET),
+    { name: 'HMAC', hash: 'SHA-256' },
+    false,
+    ['sign']
+  );
+  const sig = await crypto.subtle.sign('HMAC', key, encoder.encode(`${ts}.${body}`));
+  const bytes = new Uint8Array(sig);
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) hex += (bytes[i] as number).toString(16).padStart(2, '0');
+  return hex;
+}
 
 function mockDeepSeekResponse(intent: string, confidence: number) {
   return {
@@ -152,6 +171,14 @@ function createTestEnv(options: {
 function createTestApp() {
   const app = new Hono();
   app.post('/webhook/messaging', messagingWebhook);
+  return app;
+}
+
+// Authenticated variant: mounts sentAuth middleware so signature is validated
+// end-to-end (issue #22 AC: "bad signature = 401 + logged").
+function createAuthTestApp() {
+  const app = new Hono();
+  app.post('/webhook/messaging', sentAuth, messagingWebhook);
   return app;
 }
 
@@ -340,5 +367,101 @@ describe('POST /webhook/messaging', () => {
     }, env);
 
     expect(capturedAuthHeader).toBe(`Bearer ${sentApiKey}`);
+  });
+});
+
+// Issue #22 — integration tests: full pipeline through sentAuth + handler,
+// covering WhatsApp + SMS bodies + bad signature. Mounts sentAuth middleware
+// (production path) so signature validation is exercised end-to-end.
+describe('POST /webhook/messaging — integration (issue #22)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('rejects request with invalid signature (401)', async () => {
+    const app = createAuthTestApp();
+    const env = createTestEnv();
+
+    const body = JSON.stringify({
+      id: 'msg_int_001',
+      from: '+6421999888777',
+      body: 'hello',
+      channel: 'whatsapp',
+      timestamp: '2026-05-14T14:00:00+12:00',
+    });
+    const ts = String(Math.floor(Date.now() / 1000));
+
+    const res = await app.request('/webhook/messaging', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Sent-Signature': 'deadbeef'.repeat(8), // well-formed hex but wrong sig
+        'X-Sent-Timestamp': ts,
+      },
+      body,
+    }, env);
+
+    expect(res.status).toBe(401);
+    const payload = (await res.json()) as { code: string };
+    expect(payload.code).toBe('unauthorized');
+  });
+
+  it('rejects request with missing signature header (401)', async () => {
+    const app = createAuthTestApp();
+    const env = createTestEnv();
+
+    const body = JSON.stringify({
+      id: 'msg_int_002',
+      from: '+6421999888777',
+      body: 'hello',
+      channel: 'whatsapp',
+      timestamp: '2026-05-14T14:00:00+12:00',
+    });
+
+    const res = await app.request('/webhook/messaging', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    }, env);
+
+    expect(res.status).toBe(401);
+  });
+
+  it.each([
+    ['whatsapp' as const, 'resp_int_wa'],
+    ['sms' as const, 'resp_int_sms'],
+  ])('accepts signed %s body and returns 200', async (channel, respId) => {
+    mockFetch.mockImplementation(async (url: string) => {
+      if ((url as string).includes('deepseek')) return mockDeepSeekResponse('help', 0.95);
+      if ((url as string).includes('sent.dm')) return mockSentResponse(respId);
+      return new Response('{}', { status: 200 });
+    });
+
+    const app = createAuthTestApp();
+    const env = createTestEnv();
+
+    const body = JSON.stringify({
+      id: `msg_int_${channel}`,
+      from: '+6421999888777',
+      body: 'help',
+      channel,
+      timestamp: '2026-05-14T14:30:00+12:00',
+    });
+    const ts = String(Math.floor(Date.now() / 1000));
+    const signature = await signWebhook(body, ts);
+
+    const res = await app.request('/webhook/messaging', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'X-Sent-Signature': signature,
+        'X-Sent-Timestamp': ts,
+      },
+      body,
+    }, env);
+
+    expect(res.status).toBe(200);
+    const payload = (await res.json()) as { status: string };
+    expect(payload.status).toBe('ok');
   });
 });
