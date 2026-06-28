@@ -1,5 +1,8 @@
 const SENT_API_BASE = 'https://api.sent.dm/v1';
 
+import type { EncryptionEnv } from '../models/encryption';
+import { createMessage } from '../models/messages';
+
 interface SentMessageResponse {
   readonly id: string;
   readonly channel: 'whatsapp' | 'sms';
@@ -243,6 +246,29 @@ export async function sendWithFallback(
     });
     throw smsErr;
   }
+}
+
+// Outbound message logger (issue #30): wraps sendWithFallback and writes
+// a row to the messages table. Channel + sent_message_id come from the
+// Sent response; channel is the one that actually delivered (whatsapp or
+// sms after fallback).
+export async function sendAndLog(
+  apiKey: string,
+  db: D1Database,
+  env: EncryptionEnv,
+  userId: string,
+  to: string,
+  body: string
+): Promise<SentFallbackResult> {
+  const result = await sendWithFallback(apiKey, to, body);
+  await createMessage(db, env, {
+    userId,
+    direction: 'outbound',
+    channel: result.channel,
+    body,
+    sentMessageId: result.messageId,
+  });
+  return result;
 }
 
 export async function sendTemplateWithFallback(
