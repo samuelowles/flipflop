@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { sendText, sendTemplate, downloadMedia, SentAuthError, SentRateLimitError, SentServerError, SentClientError } from './messaging';
+import { sendText, sendTemplate, downloadMedia, sendWithFallback, sendTemplateWithFallback, SentAuthError, SentRateLimitError, SentServerError, SentClientError } from './messaging';
 import { validateSentSignature } from '../middleware/sentAuth';
 
 const mockFetch = vi.fn();
@@ -330,5 +330,160 @@ describe('downloadMedia', () => {
     await expect(
       downloadMedia('test-api-key', 'https://cdn.sent.dm/media/expired.pdf')
     ).rejects.toBeInstanceOf(SentAuthError);
+  });
+});
+
+// Issue #23 — channel routing: WhatsApp first, SMS fallback.
+// Retry policy: max 1 WhatsApp retry on 429/5xx; 401/4xx fall through to SMS
+// immediately (no retry — bad payload won't recover); final SMS failure throws.
+describe('sendWithFallback (issue #23)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('returns WhatsApp result on first-attempt success (no fallback)', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(200, { id: 'wa_1', channel: 'whatsapp' }));
+
+    const result = await sendWithFallback('key', '+6421999888', 'hello');
+
+    expect(result).toEqual({
+      messageId: 'wa_1',
+      channel: 'whatsapp',
+      fallback: false,
+      whatsappAttempts: 1,
+    });
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const call = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(call[0]).toBe('https://api.sent.dm/v1/messages');
+    const body = JSON.parse(call[1].body as string) as { channel: string };
+    expect(body.channel).toBe('whatsapp');
+  });
+
+  it('retries WhatsApp once on 5xx, then falls back to SMS', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(503, { error: 'unavailable' }))
+      .mockResolvedValueOnce(mockResponse(200, { id: 'wa_2', channel: 'whatsapp' }));
+
+    const result = await sendWithFallback('key', '+6421999888', 'hello');
+
+    expect(result.fallback).toBe(false);
+    expect(result.whatsappAttempts).toBe(2);
+    expect(result.channel).toBe('whatsapp');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to SMS after WhatsApp retry on 429 rate limit', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(429, { error: 'rate_limited' }))
+      .mockResolvedValueOnce(mockResponse(429, { error: 'rate_limited' }))
+      .mockResolvedValueOnce(mockResponse(200, { id: 'sms_1', channel: 'sms' }));
+
+    const result = await sendWithFallback('key', '+6421999888', 'hello');
+
+    expect(result.fallback).toBe(true);
+    expect(result.channel).toBe('sms');
+    expect(result.messageId).toBe('sms_1');
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+    const smsCall = mockFetch.mock.calls[2] as [string, RequestInit];
+    const smsBody = JSON.parse(smsCall[1].body as string) as { channel: string };
+    expect(smsBody.channel).toBe('sms');
+  });
+
+  it('falls back to SMS immediately on 401 (no retry on auth errors)', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(401, { error: 'unauthorized' }))
+      .mockResolvedValueOnce(mockResponse(200, { id: 'sms_2', channel: 'sms' }));
+
+    const result = await sendWithFallback('key', '+6421999888', 'hello');
+
+    expect(result.fallback).toBe(true);
+    expect(result.channel).toBe('sms');
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('falls back to SMS on 400 client error (no retry on bad payload)', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(400, { error: 'invalid_to' }))
+      .mockResolvedValueOnce(mockResponse(200, { id: 'sms_3', channel: 'sms' }));
+
+    const result = await sendWithFallback('key', '+6421999888', 'hello');
+
+    expect(result.fallback).toBe(true);
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('throws when SMS also fails after WhatsApp exhaustion', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(503, { error: 'down' }))
+      .mockResolvedValueOnce(mockResponse(503, { error: 'down' }))
+      .mockResolvedValueOnce(mockResponse(500, { error: 'sms down too' }));
+
+    await expect(sendWithFallback('key', '+6421999888', 'hello'))
+      .rejects.toBeInstanceOf(SentServerError);
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+
+  it('logs sent_fallback event with api_key_fingerprint when fallback fires', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(503, { error: 'x' }))
+      .mockResolvedValueOnce(mockResponse(503, { error: 'x' }))
+      .mockResolvedValueOnce(mockResponse(200, { id: 'sms_log', channel: 'sms' }));
+
+    const spy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    await sendWithFallback('test-api-key', '+6421999888', 'hello');
+
+    const logs = spy.mock.calls
+      .map((c) => {
+        try { return JSON.parse(c[0] as string); } catch { return null; }
+      })
+      .filter((l): l is Record<string, unknown> =>
+        l !== null && (l as Record<string, unknown>).type === 'sent_fallback'
+      );
+
+    expect(logs.length).toBeGreaterThanOrEqual(1);
+    const log = logs[logs.length - 1]!;
+    expect(log).toHaveProperty('final_channel', 'sms');
+    expect(log).toHaveProperty('whatsapp_attempts', 2);
+    expect(log).toHaveProperty('api_key_fingerprint');
+    expect((log.api_key_fingerprint as string).length).toBe(12);
+    // Must NOT log the raw API key or raw phone (PII / secret hygiene)
+    expect(JSON.stringify(log)).not.toContain('test-api-key');
+    expect(JSON.stringify(log)).not.toContain('+6421999888');
+
+    spy.mockRestore();
+  });
+});
+
+describe('sendTemplateWithFallback (issue #23)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('returns WhatsApp template on first-attempt success', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(200, { id: 'tpl_wa', channel: 'whatsapp' }));
+
+    const result = await sendTemplateWithFallback('key', '+6421999888', 'bill_received', { '1': 'Contact' });
+
+    expect(result.fallback).toBe(false);
+    expect(result.channel).toBe('whatsapp');
+    expect(result.messageId).toBe('tpl_wa');
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const call = mockFetch.mock.calls[0] as [string, RequestInit];
+    expect(call[0]).toBe('https://api.sent.dm/v1/messages/template');
+    const body = JSON.parse(call[1].body as string) as { template_name: string };
+    expect(body.template_name).toBe('bill_received');
+  });
+
+  it('falls back to SMS template after WhatsApp retry exhaustion', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(500, { error: 'oops' }))
+      .mockResolvedValueOnce(mockResponse(500, { error: 'oops' }))
+      .mockResolvedValueOnce(mockResponse(200, { id: 'tpl_sms', channel: 'sms' }));
+
+    const result = await sendTemplateWithFallback('key', '+6421999888', 'saving_alert', { '1': '200' });
+
+    expect(result.fallback).toBe(true);
+    expect(result.channel).toBe('sms');
+    expect(mockFetch).toHaveBeenCalledTimes(3);
   });
 });
