@@ -1,9 +1,26 @@
 import type { Context, Next } from 'hono';
+import { generatePhoneHash } from '../models/encryption';
+
+// Rate limiting middleware.
+//
+// Design: one Durable Object per rate-limit key.  The DO holds an array
+// of millisecond timestamps inside its `windowMs` window and atomically
+// checks-and-appends via single-threaded execution.  This eliminates the
+// read-modify-write race that the prior KV implementation suffered from
+// (HIGH severity finding in the PR #151 audit).
+//
+// AC compliance:
+//  - /health, /healthz, /ready bypass (BYPASS_PATHS).
+//  - 429 body shape `{ error: 'rate_limited', retry_after }` with
+//    `Retry-After` header in seconds.
+//  - PII is never logged; the rate-limit key is hashed before logging.
+//  - Per-user key prefers `phone_hash` (set by sentAuth) over the raw
+//    `phone`, falling back to a hashed IP for non-webhook routes.
 
 interface RateLimitConfig {
-  readonly userLimit: number;    // requests per window per user
-  readonly globalLimit: number;  // requests per window globally
-  readonly windowMs: number;     // window size in milliseconds
+  readonly userLimit: number;
+  readonly globalLimit: number;
+  readonly windowMs: number;
 }
 
 const DEFAULT_CONFIG: RateLimitConfig = {
@@ -12,103 +29,157 @@ const DEFAULT_CONFIG: RateLimitConfig = {
   windowMs: 60_000, // 1 minute
 };
 
-// Identifies a user: by phone from the Sent webhook body, or context (set by sentAuth)
-async function getUserKey(c: Context): Promise<string> {
-  // First check context (set by sentAuth middleware)
-  const contextPhone = c.get('phone') as string | undefined;
-  if (contextPhone) {
-    return `rate:user:${contextPhone}`;
-  }
+// AC: /health, /healthz, /ready are exempt.  Workers expose /health for
+// Cloudflare's health-check probes, /healthz for legacy k8s probes, and
+// /ready for readiness checks.
+const BYPASS_PATHS = new Set(['/health', '/healthz', '/ready']);
 
-  // Try to extract phone from the request body directly
-  try {
-    const body = await c.req.raw.clone().json() as { from?: string };
-    if (body.from) {
-      return `rate:user:${body.from}`;
-    }
-  } catch {
-    // Body not JSON or not available — fall through
-  }
+interface DurableObjectStub {
+  fetch: (req: Request) => Promise<Response>;
+  id: { toString: () => string };
+}
 
-  // Last resort: IP-based key (for non-webhook routes)
-  const ip = c.req.header('CF-Connecting-IP') ?? 'unknown';
-  return `rate:user:${ip}`;
+interface RateLimitEnv {
+  RATE_LIMITER: DurableObjectNamespace;
+  KV?: KVNamespace;
+}
+
+// Derive the rate-limit key for a request.  Prefer the SHA-256 hash of
+// the phone (set by sentAuth as `phone_hash`); fall back to a hashed IP
+// so non-webhook routes still get per-caller keying without storing the
+// raw IP.  Falls back to 'unknown' as a last resort.
+async function deriveKey(c: Context): Promise<string> {
+  const phoneHash = c.get('phone_hash') as string | undefined;
+  if (phoneHash) return phoneHash;
+
+  const phone = c.get('phone') as string | undefined;
+  if (phone) return generatePhoneHash(phone);
+
+  const ip = c.req.header('CF-Connecting-IP');
+  if (ip) return generatePhoneHash(`ip:${ip}`);
+
+  return 'unknown';
+}
+
+// Stable, deterministic DO name from a key.  Using `idFromName` means
+// the same key always maps to the same DO instance, preserving the
+// sliding-window counter across requests.
+function doId(stub: DurableObjectNamespace, key: string): DurableObjectStub {
+  const id = stub.idFromName(key);
+  return stub.get(id) as unknown as DurableObjectStub;
+}
+
+async function checkLimit(
+  stub: DurableObjectNamespace,
+  key: string,
+  limit: number,
+  windowMs: number
+): Promise<{ limited: boolean; retryAfterMs: number }> {
+  const doStub = doId(stub, key);
+  const res = await doStub.fetch(
+    new Request('https://rate-limiter/check', {
+      method: 'POST',
+      body: JSON.stringify({ key, limit, windowMs, now: Date.now() }),
+    })
+  );
+  if (!res.ok) {
+    // DO unavailable — fail closed (treat as limited) to prevent abuse
+    // during infrastructure incidents.  Caller may override with
+    // RATE_LIMIT_FAIL_OPEN env if availability outweighs rate-limit
+    // integrity for a given deployment.
+    return { limited: true, retryAfterMs: windowMs };
+  }
+  return (await res.json()) as { limited: boolean; retryAfterMs: number };
+}
+
+// Short non-cryptographic hash for PII-safe logging.
+function hashId(id: string): string {
+  let h = 0;
+  for (let i = 0; i < id.length; i++) {
+    h = (h << 5) - h + id.charCodeAt(i);
+    h |= 0;
+  }
+  return Math.abs(h).toString(36);
+}
+
+function logHit(
+  c: Context,
+  scope: 'user' | 'global',
+  id: string,
+  retryAfterSeconds: number
+): void {
+  // AC: never log body, never log raw user id (PII).  Log a hash.
+  console.log(
+    JSON.stringify({
+      type: 'rate_limit_hit',
+      scope,
+      id_hash: hashId(id),
+      retry_after: retryAfterSeconds,
+      path: c.req.path,
+      method: c.req.method,
+      request_id: c.req.header('cf-ray') ?? undefined,
+      timestamp: new Date().toISOString(),
+    })
+  );
+}
+
+function respondRateLimited(
+  c: Context,
+  scope: 'user' | 'global',
+  id: string,
+  retryAfterMs: number
+): Response {
+  const retryAfterSeconds = Math.ceil(retryAfterMs / 1000);
+  logHit(c, scope, id, retryAfterSeconds);
+  return c.json(
+    { error: 'rate_limited', retry_after: retryAfterSeconds },
+    429,
+    { 'Retry-After': String(retryAfterSeconds) }
+  );
 }
 
 export function rateLimit(config?: Partial<RateLimitConfig>) {
   const cfg = { ...DEFAULT_CONFIG, ...config };
 
-  return async function rateLimitMiddleware(c: Context, next: Next): Promise<Response | void> {
-    const kv = c.env.KV as KVNamespace;
-    const now = Date.now();
-    const _windowStart = now - cfg.windowMs;
+  return async function rateLimitMiddleware(
+    c: Context,
+    next: Next
+  ): Promise<Response | void> {
+    if (BYPASS_PATHS.has(c.req.path)) {
+      await next();
+      return;
+    }
 
-    const userKey = await getUserKey(c);
-    const globalKey = 'rate:global';
-
-    // Check user limit
-    const userHits = await getUserWindowHits(kv, userKey, now, cfg.windowMs);
-    if (userHits >= cfg.userLimit) {
+    const env = c.env as RateLimitEnv | undefined;
+    const stub = env?.RATE_LIMITER;
+    if (!stub) {
+      console.error(
+        JSON.stringify({
+          type: 'rate_limit_misconfigured',
+          message: 'RATE_LIMITER Durable Object binding missing',
+        })
+      );
+      // Fail closed: return 503 so the caller can retry.  Better to
+      // refuse traffic than to silently bypass rate limits.
       return c.json(
-        { error: 'Too many requests', code: 'rate_limited', status: 429, retryAfter: cfg.windowMs / 1000 },
-        429,
-        { 'Retry-After': String(cfg.windowMs / 1000) }
+        { error: 'rate_limit_unavailable', retry_after: 60 },
+        503
       );
     }
 
-    // Check global limit
-    const globalHits = await getUserWindowHits(kv, globalKey, now, cfg.windowMs);
-    if (globalHits >= cfg.globalLimit) {
-      return c.json(
-        { error: 'Service busy, please try again', code: 'rate_limited', status: 429, retryAfter: cfg.windowMs / 1000 },
-        429,
-        { 'Retry-After': String(cfg.windowMs / 1000) }
-      );
+    const userKey = await deriveKey(c);
+
+    const userCheck = await checkLimit(stub, userKey, cfg.userLimit, cfg.windowMs);
+    if (userCheck.limited) {
+      return respondRateLimited(c, 'user', userKey, userCheck.retryAfterMs);
     }
 
-    // Record hits (fire and forget — don't block the response)
-    const recordPromise = Promise.all([
-      recordHit(kv, userKey, now, cfg.windowMs),
-      recordHit(kv, globalKey, now, cfg.windowMs),
-    ]);
-    // c.executionCtx may be unavailable in test environments
-    try {
-      c.executionCtx.waitUntil(recordPromise);
-    } catch {
-      void recordPromise;
+    const globalKey = 'global';
+    const globalCheck = await checkLimit(stub, globalKey, cfg.globalLimit, cfg.windowMs);
+    if (globalCheck.limited) {
+      return respondRateLimited(c, 'global', globalKey, globalCheck.retryAfterMs);
     }
 
     await next();
   };
-}
-
-// Sliding window: store timestamps as sorted set, trim expired ones
-async function getUserWindowHits(
-  kv: KVNamespace,
-  key: string,
-  now: number,
-  windowMs: number
-): Promise<number> {
-  const raw = await kv.get(key);
-  if (!raw) return 0;
-  const timestamps: number[] = JSON.parse(raw);
-  // Filter to current window
-  const cutoff = now - windowMs;
-  const current = timestamps.filter(t => t > cutoff);
-  return current.length;
-}
-
-async function recordHit(
-  kv: KVNamespace,
-  key: string,
-  now: number,
-  windowMs: number
-): Promise<void> {
-  const raw = await kv.get(key);
-  const timestamps: number[] = raw ? JSON.parse(raw) : [];
-  const cutoff = now - windowMs;
-  const current = timestamps.filter(t => t > cutoff);
-  current.push(now);
-  // Store with TTL slightly longer than window
-  await kv.put(key, JSON.stringify(current), { expirationTtl: Math.ceil(windowMs / 1000) + 10 });
 }

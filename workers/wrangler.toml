@@ -49,3 +49,15 @@ crons = ["0 3 * * *", "0 6 * * *", "0 14 * * *"]
 [vars]
 ENVIRONMENT = "development"
 SERVICE_VERSION = "0.1.0"
+
+# Durable Object used by src/middleware/rateLimit.ts for atomic per-key rate
+# limiting.  One DO instance per rate-limit key serialises read-modify-write
+# cycles that would race under KV.
+[[durable_objects.bindings]]
+name = "RATE_LIMITER"
+class_name = "RateLimiter"
+
+# First DO migration — must be applied before wrangler deploy.
+[[migrations]]
+tag = "v1"
+new_classes = ["RateLimiter"]
