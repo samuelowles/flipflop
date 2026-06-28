@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { sendText, sendTemplate, downloadMedia, sendWithFallback, sendTemplateWithFallback, SentAuthError, SentRateLimitError, SentServerError, SentClientError } from './messaging';
+import { sendText, sendTemplate, downloadMedia, sendWithFallback, sendTemplateWithFallback, sendAndLog, SentAuthError, SentRateLimitError, SentServerError, SentClientError } from './messaging';
 import { validateSentSignature } from '../middleware/sentAuth';
 
 const mockFetch = vi.fn();
@@ -485,5 +485,74 @@ describe('sendTemplateWithFallback (issue #23)', () => {
     expect(result.fallback).toBe(true);
     expect(result.channel).toBe('sms');
     expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe('sendAndLog (issue #30)', () => {
+  // Issue #30: every outbound message must be persisted to the messages table.
+  // We mock the D1 binding with a fake `prepare().bind().run()` chain so
+  // the route does not need a real DB for the test. ENCRYPTION_KEY must be a
+  // valid base64-encoded 32-byte string for the encryption helper to consume.
+  const VALID_BASE64_KEY = 'AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=';
+  function fakeDb(): D1Database {
+    function freshStmt(): unknown {
+      return {
+        bind: vi.fn().mockReturnThis(),
+        run: vi.fn().mockResolvedValue({ success: true }),
+        first: vi.fn().mockResolvedValue({ id: 'fake-id', user_id: 'x', direction: 'outbound', channel: 'sms' }),
+      };
+    }
+    return {
+      prepare: vi.fn().mockImplementation(freshStmt),
+    } as unknown as D1Database;
+  }
+
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('writes an outbound messages row on WhatsApp first-attempt success', async () => {
+    mockFetch.mockResolvedValueOnce(mockResponse(200, { id: 'wa_out_1', channel: 'whatsapp' }));
+    const db = fakeDb();
+
+    const result = await sendAndLog(
+      'key', db, { ENCRYPTION_KEY: VALID_BASE64_KEY }, 'user_1', '+6421999888', 'hello'
+    );
+
+    expect(result.messageId).toBe('wa_out_1');
+    expect(result.channel).toBe('whatsapp');
+
+    // createMessage does INSERT then SELECT-by-id to return the new row.
+    // The first prepare() call is the INSERT — assert on its bind args.
+    const insertStmt = (db.prepare as ReturnType<typeof vi.fn>).mock.results[0]!.value;
+    expect(insertStmt.bind).toHaveBeenCalledTimes(1);
+    const bindArgs = insertStmt.bind.mock.calls[0] as unknown[];
+    // positional: id, user_id, direction, channel, body, body_encrypted,
+    // media_url, sent_message_id, intent, created_at
+    expect(bindArgs[1]).toBe('user_1'); // user_id
+    expect(bindArgs[2]).toBe('outbound'); // direction
+    expect(bindArgs[3]).toBe('whatsapp'); // channel
+    expect(bindArgs[4]).toBe('hello'); // body
+    expect(bindArgs[7]).toBe('wa_out_1'); // sent_message_id
+  });
+
+  it('writes an outbound row with sms channel after WhatsApp fallback', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockResponse(500, { error: 'oops' }))
+      .mockResolvedValueOnce(mockResponse(500, { error: 'oops' }))
+      .mockResolvedValueOnce(mockResponse(200, { id: 'sms_out_1', channel: 'sms' }));
+    const db = fakeDb();
+
+    const result = await sendAndLog(
+      'key', db, { ENCRYPTION_KEY: VALID_BASE64_KEY }, 'user_2', '+6421999888', 'fallback test'
+    );
+
+    expect(result.fallback).toBe(true);
+    expect(result.channel).toBe('sms');
+
+    const insertStmt = (db.prepare as ReturnType<typeof vi.fn>).mock.results[0]!.value;
+    const bindArgs = insertStmt.bind.mock.calls[0] as unknown[];
+    expect(bindArgs[3]).toBe('sms');
+    expect(bindArgs[7]).toBe('sms_out_1');
   });
 });
