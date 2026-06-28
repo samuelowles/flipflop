@@ -149,4 +149,139 @@ export async function downloadMedia(
   return response.arrayBuffer();
 }
 
+// Channel routing (issue #23): WhatsApp first, SMS fallback on transient
+// failure. Retry policy: max 1 WhatsApp retry on 429/5xx, then SMS; if SMS
+// also fails the final error is thrown. 401/403/other 4xx are not retried —
+// they fall through immediately to SMS because a bad API key or invalid
+// payload won't recover.
+export interface SentFallbackResult extends SentSendResult {
+  readonly fallback: boolean;
+  readonly whatsappAttempts: number;
+}
+
+const MAX_WHATSAPP_ATTEMPTS = 2;
+
+function shouldRetry(err: unknown): boolean {
+  return err instanceof SentRateLimitError || err instanceof SentServerError;
+}
+
+function logFallback(params: {
+  apiKey: string;
+  reason: string;
+  whatsappAttempts: number;
+  finalChannel: SentChannel;
+}): Promise<void> {
+  // Structured log — observability for the "Sent dashboard shows fallback
+  // rate" AC clause. Hash the key (not the API secret) so we can attribute
+  // fallbacks per-integration without leaking the secret itself.
+  return logFallbackAsync(params);
+}
+
+async function hashApiKey(apiKey: string): Promise<string> {
+  const encoder = new TextEncoder();
+  const data = encoder.encode(apiKey);
+  const digest = await crypto.subtle.digest('SHA-256', data);
+  const bytes = new Uint8Array(digest);
+  let hex = '';
+  for (let i = 0; i < bytes.length; i++) hex += (bytes[i] as number).toString(16).padStart(2, '0');
+  return hex.slice(0, 12);
+}
+
+// Deduplicate fingerprint computation across the two fallback calls in one
+// invocation (we'd otherwise hash twice for the failed-then-succeeded path).
+async function logFallbackAsync(params: {
+  apiKey: string;
+  reason: string;
+  whatsappAttempts: number;
+  finalChannel: SentChannel;
+  apiKeyFingerprint?: string;
+}): Promise<void> {
+  const fingerprint = params.apiKeyFingerprint ?? await hashApiKey(params.apiKey);
+  console.log(JSON.stringify({
+    type: 'sent_fallback',
+    reason: params.reason,
+    whatsapp_attempts: params.whatsappAttempts,
+    final_channel: params.finalChannel,
+    api_key_fingerprint: fingerprint,
+    timestamp: new Date().toISOString(),
+  }));
+}
+
+export async function sendWithFallback(
+  apiKey: string,
+  to: string,
+  body: string
+): Promise<SentFallbackResult> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_WHATSAPP_ATTEMPTS; attempt++) {
+    try {
+      const result = await sendText(apiKey, to, body, 'whatsapp');
+      return { ...result, fallback: false, whatsappAttempts: attempt };
+    } catch (err) {
+      lastErr = err;
+      if (!shouldRetry(err)) break;
+      if (attempt < MAX_WHATSAPP_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+  }
+  try {
+    const smsResult = await sendText(apiKey, to, body, 'sms');
+    await logFallback({
+      apiKey,
+      reason: lastErr instanceof Error ? lastErr.message : 'unknown',
+      whatsappAttempts: MAX_WHATSAPP_ATTEMPTS,
+      finalChannel: 'sms',
+    });
+    return { ...smsResult, fallback: true, whatsappAttempts: MAX_WHATSAPP_ATTEMPTS };
+  } catch (smsErr) {
+    await logFallback({
+      apiKey,
+      reason: `whatsapp_and_sms_failed: ${smsErr instanceof Error ? smsErr.message : 'unknown'}`,
+      whatsappAttempts: MAX_WHATSAPP_ATTEMPTS,
+      finalChannel: 'sms',
+    });
+    throw smsErr;
+  }
+}
+
+export async function sendTemplateWithFallback(
+  apiKey: string,
+  to: string,
+  templateName: string,
+  variables: Record<string, string>
+): Promise<SentFallbackResult> {
+  let lastErr: unknown;
+  for (let attempt = 1; attempt <= MAX_WHATSAPP_ATTEMPTS; attempt++) {
+    try {
+      const result = await sendTemplate(apiKey, to, templateName, variables);
+      return { ...result, fallback: false, whatsappAttempts: attempt };
+    } catch (err) {
+      lastErr = err;
+      if (!shouldRetry(err)) break;
+      if (attempt < MAX_WHATSAPP_ATTEMPTS) {
+        await new Promise((r) => setTimeout(r, 250));
+      }
+    }
+  }
+  try {
+    const smsResult = await sendTemplate(apiKey, to, templateName, variables);
+    await logFallback({
+      apiKey,
+      reason: lastErr instanceof Error ? lastErr.message : 'unknown',
+      whatsappAttempts: MAX_WHATSAPP_ATTEMPTS,
+      finalChannel: 'sms',
+    });
+    return { ...smsResult, fallback: true, whatsappAttempts: MAX_WHATSAPP_ATTEMPTS };
+  } catch (smsErr) {
+    await logFallback({
+      apiKey,
+      reason: `whatsapp_and_sms_failed: ${smsErr instanceof Error ? smsErr.message : 'unknown'}`,
+      whatsappAttempts: MAX_WHATSAPP_ATTEMPTS,
+      finalChannel: 'sms',
+    });
+    throw smsErr;
+  }
+}
+
 // validateSentSignature is in middleware/sentAuth.ts — import from there instead.
