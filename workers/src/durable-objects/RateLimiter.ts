@@ -10,6 +10,7 @@
 // millisecond timestamps for the active window.  Old timestamps are
 // trimmed on every read, which gives an approximate sliding window.
 
+// eslint-disable-next-line @typescript-eslint/no-empty-object-type
 interface RateLimiterEnv {
   // Bound in wrangler.toml via [[durable_objects.bindings]].
 }

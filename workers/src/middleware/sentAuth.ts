@@ -5,7 +5,8 @@ import { generatePhoneHash } from '../models/encryption';
 // We validate it using HMAC-SHA256 (hex-encoded) over the raw body, compared
 // in constant time via the Web Crypto verify operation.
 
-function bytesToHex(bytes: Uint8Array): string {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+function _bytesToHex(bytes: Uint8Array): string {
   let hex = '';
   for (let i = 0; i < bytes.length; i++) {
     const b = bytes[i] as number;
