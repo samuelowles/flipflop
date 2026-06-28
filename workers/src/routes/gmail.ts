@@ -4,7 +4,7 @@ import { storeOAuthTokens, getOAuthTokens } from '../models/oauth';
 import { findOrCreateByPhone } from '../models/users';
 import { pollSingleUser, readScanProgress } from '../services/emailPoller';
 import type { GmailPollingEnv } from '../services/emailPoller';
-import { sendMessage } from '../services/messaging';
+import { sendText } from '../services/messaging';
 import { runEvalComparison } from './eval';
 
 const NONCE_KV_PREFIX = 'oauth:nonce:';
@@ -373,7 +373,7 @@ async function doPostConnectFlow(
 
   // 1. Send confirmation message (non-blocking — scan proceeds regardless)
   try {
-    await sendMessage(
+    await sendText(
       sentApiKey,
       phone,
       "Cheers! Flip's hooked up to your Gmail. Having a quick squiz for any power bills now — back in a tick."
@@ -416,19 +416,19 @@ async function doPostConnectFlow(
   // 3. Send result message (best-effort)
   try {
     if (billsFound > 0) {
-      await sendMessage(
+      await sendText(
         sentApiKey,
         phone,
         `Found ${billsFound} bill(s) in your inbox. We'll keep an eye out daily. If you're on a dud plan, we'll let you know.`
       );
     } else if (scanErrors.length > 0) {
-      await sendMessage(
+      await sendText(
         sentApiKey,
         phone,
         "Had a bit of trouble checking your inbox just now. No worries — we'll try again at 6am. Nothing needed from you."
       );
     } else {
-      await sendMessage(
+      await sendText(
         sentApiKey,
         phone,
         "Didn't spot any power bills in your inbox just yet. No worries — Flip checks daily, so we'll catch the next one. Keen to help if you flick us a message."

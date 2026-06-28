@@ -1,7 +1,7 @@
 import type { Context } from 'hono';
 import { classifyIntent } from '../services/deepseek';
 import { transition, handleNewUser, getWelcomeMessage } from '../services/conversation';
-import { sendMessage, downloadMedia } from '../services/messaging';
+import { sendText, downloadMedia } from '../services/messaging';
 import { createUser, getUserByPhone, updateUserState } from '../models/users';
 import { createBill } from '../models/bills';
 import { createMessage } from '../models/messages';
@@ -49,7 +49,7 @@ export async function messagingWebhook(c: Context): Promise<Response> {
 
       // Send welcome message
       const welcomeMsg = getWelcomeMessage();
-      await sendMessage(apiKey, phone, welcomeMsg, channel);
+      await sendText(apiKey, phone, welcomeMsg, channel);
 
       return c.json({ status: 'ok' }, 200);
     }
@@ -86,7 +86,7 @@ export async function messagingWebhook(c: Context): Promise<Response> {
 
       // Acknowledge
       const confirmMsg = "Got your bill! I'll analyse it and get back to you shortly. This usually takes less than a minute.";
-      await sendMessage(apiKey, phone, confirmMsg, channel);
+      await sendText(apiKey, phone, confirmMsg, channel);
 
       return c.json({ status: 'ok' }, 200);
     }
@@ -94,7 +94,7 @@ export async function messagingWebhook(c: Context): Promise<Response> {
     // 4. Handle text message via intent classification
     if (body) {
       // Quick 2-second acknowledgment
-      const ackPromise = sendMessage(apiKey, phone, 'Got it, let me check...', channel);
+      const ackPromise = sendText(apiKey, phone, 'Got it, let me check...', channel);
 
       // Classify intent
       const classification = await classifyIntent(body, deepseekKey);
@@ -111,13 +111,13 @@ export async function messagingWebhook(c: Context): Promise<Response> {
         : result.message;
 
       await ackPromise;
-      await sendMessage(apiKey, phone, responseMsg, channel);
+      await sendText(apiKey, phone, responseMsg, channel);
 
       return c.json({ status: 'ok' }, 200);
     }
 
     // Empty message — send help
-    await sendMessage(apiKey, phone, "I didn't catch that — type \"help\" to see what I can do.", channel);
+    await sendText(apiKey, phone, "I didn't catch that — type \"help\" to see what I can do.", channel);
     return c.json({ status: 'ok' }, 200);
   } catch (err) {
     console.log(JSON.stringify({

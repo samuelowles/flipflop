@@ -1,6 +1,6 @@
 import { getBillById, updateBillStatus, updateBillParsedData } from '../models/bills';
 import { getUserById } from '../models/users';
-import { sendMessage } from './messaging';
+import { sendText } from './messaging';
 import type { BillStatus, MeterType } from '../types/bill';
 
 interface ParseServiceRequest {
@@ -228,7 +228,7 @@ export async function handleParseJob(
       ? `Got your ${retailerName} bill for ${periodMonth}: ${amount} for ${usageKwh}. I'm comparing it now.`
       : `Got your ${retailerName} bill for ${periodMonth}: ${amount} for ${usageKwh}. I'll review it and get back to you.`;
 
-    await sendMessage(env.SENT_API_KEY, phone, confirmMsg);
+    await sendText(env.SENT_API_KEY, phone, confirmMsg);
   }
 
   // 10. Log completion

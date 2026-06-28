@@ -11,7 +11,7 @@ import { getPlanById } from '../models/plans';
 import { getRetailerById } from '../models/retailers';
 import { getBillsByUserId } from '../models/bills';
 import { getUserById } from '../models/users';
-import { sendMessage } from './messaging';
+import { sendText } from './messaging';
 import { explainComparison as _explainComparison, generateStayPutMessage, generateSavingMessage } from './comparisonIntelligence';
 
 interface NotifyEnv {
@@ -148,7 +148,7 @@ export async function evaluateAndNotify(
   }
 
   try {
-    await sendMessage(env.SENT_API_KEY, phone, message);
+    await sendText(env.SENT_API_KEY, phone, message);
   } catch (error) {
     console.log(JSON.stringify({
       type: 'notify_send_error',

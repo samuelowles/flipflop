@@ -5,12 +5,65 @@ interface SentMessageResponse {
   readonly channel: 'whatsapp' | 'sms';
 }
 
-export async function sendMessage(
+// Typed error classes for Sent API failures so callers (route handlers,
+// notification engine) can react distinctly: retry on 429/5xx, hard-fail on
+// 401, surface 4xx to logs without alerting ops.
+export class SentError extends Error {
+  constructor(message: string, readonly status: number) {
+    super(message);
+    this.name = 'SentError';
+  }
+}
+
+export class SentAuthError extends SentError {
+  constructor(message: string) {
+    super(message, 401);
+    this.name = 'SentAuthError';
+  }
+}
+
+export class SentRateLimitError extends SentError {
+  constructor(message: string) {
+    super(message, 429);
+    this.name = 'SentRateLimitError';
+  }
+}
+
+export class SentClientError extends SentError {
+  constructor(message: string, status: number) {
+    super(message, status);
+    this.name = 'SentClientError';
+  }
+}
+
+export class SentServerError extends SentError {
+  constructor(message: string, status: number) {
+    super(message, status);
+    this.name = 'SentServerError';
+  }
+}
+
+function mapSentError(status: number, errorText: string): SentError {
+  const message = `Sent API error (${status}): ${errorText}`;
+  if (status === 401 || status === 403) return new SentAuthError(message);
+  if (status === 429) return new SentRateLimitError(message);
+  if (status >= 500) return new SentServerError(message, status);
+  return new SentClientError(message, status);
+}
+
+export type SentChannel = 'whatsapp' | 'sms';
+
+export interface SentSendResult {
+  readonly messageId: string;
+  readonly channel: SentChannel;
+}
+
+export async function sendText(
   apiKey: string,
   to: string,
   body: string,
-  channel?: 'whatsapp' | 'sms'
-): Promise<{ messageId: string; channel: string }> {
+  channel?: SentChannel
+): Promise<SentSendResult> {
   const response = await fetch(`${SENT_API_BASE}/messages`, {
     method: 'POST',
     headers: {
@@ -26,10 +79,10 @@ export async function sendMessage(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Sent API error (${response.status}): ${errorText}`);
+    throw mapSentError(response.status, errorText);
   }
 
-  const data = await response.json() as SentMessageResponse;
+  const data = (await response.json()) as SentMessageResponse;
 
   console.log(JSON.stringify({
     type: 'sent_message',
@@ -47,7 +100,7 @@ export async function sendTemplate(
   to: string,
   templateName: string,
   variables: Record<string, string>
-): Promise<{ messageId: string }> {
+): Promise<SentSendResult> {
   const response = await fetch(`${SENT_API_BASE}/messages/template`, {
     method: 'POST',
     headers: {
@@ -63,10 +116,10 @@ export async function sendTemplate(
 
   if (!response.ok) {
     const errorText = await response.text();
-    throw new Error(`Sent template API error (${response.status}): ${errorText}`);
+    throw mapSentError(response.status, errorText);
   }
 
-  const data = await response.json() as SentMessageResponse;
+  const data = (await response.json()) as SentMessageResponse;
 
   console.log(JSON.stringify({
     type: 'sent_template',
@@ -75,7 +128,7 @@ export async function sendTemplate(
     timestamp: new Date().toISOString(),
   }));
 
-  return { messageId: data.id };
+  return { messageId: data.id, channel: data.channel };
 }
 
 export async function downloadMedia(
@@ -89,11 +142,11 @@ export async function downloadMedia(
   });
 
   if (!response.ok) {
-    throw new Error(`Sent media download error (${response.status})`);
+    const errorText = await response.text();
+    throw mapSentError(response.status, errorText);
   }
 
   return response.arrayBuffer();
 }
 
-// validateSentSignature is now in middleware/sentAuth.ts — import from there instead.
-
+// validateSentSignature is in middleware/sentAuth.ts — import from there instead.
