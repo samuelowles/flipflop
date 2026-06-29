@@ -10,10 +10,11 @@ vi.mock('../models/bills', () => ({
 
 vi.mock('./messaging', () => ({
   sendText: vi.fn(),
+  sendAndLog: vi.fn().mockResolvedValue({ messageId: 'msg-1', channel: 'whatsapp', fallback: false, whatsappAttempts: 1 }),
 }));
 
 import { getBillById, updateBillStatus, updateBillParsedData } from '../models/bills';
-import { sendText } from './messaging';
+import { sendAndLog } from './messaging';
 
 function createMockR2Object(size: number, body: Uint8Array): R2Object {
   return {
@@ -172,7 +173,16 @@ describe('handleParseJob', () => {
       userId: 'user123',
       billId: 'bill123',
     });
-    expect(sendText).toHaveBeenCalled();
+    expect(sendAndLog).toHaveBeenCalled();
+    // bill_received template body should be rendered with retailer, usage_kwh, days, total_dollars
+    expect(sendAndLog).toHaveBeenCalledWith(
+      'test-key',
+      mockDb,
+      { ENCRYPTION_KEY: 'test-encryption-key' },
+      'user123',
+      '+64211234567',
+      expect.stringMatching(/contact/)
+    );
   });
 
   it('should set needs_review when confidence is below threshold', async () => {

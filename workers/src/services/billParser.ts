@@ -1,6 +1,8 @@
 import { getBillById, updateBillStatus, updateBillParsedData } from '../models/bills';
 import { getUserById } from '../models/users';
-import { sendText } from './messaging';
+import { sendAndLog } from './messaging';
+import { getRetailerById } from '../models/retailers';
+import { renderTemplate } from './sentTemplates';
 import type { BillStatus, MeterType } from '../types/bill';
 
 interface ParseServiceRequest {
@@ -211,24 +213,36 @@ export async function handleParseJob(
     }));
   }
 
-  // 9. Send confirmation message to user
+  // 9. Send confirmation message to user (Epic #2 #42: bill_received template)
   const user = await getUserById(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId);
   const phone = user?.phone ?? null;
   if (phone) {
-    const usageKwh = parseResult.usage_kwh != null ? `${Math.round(parseResult.usage_kwh)} kWh` : '';
-    const amount = parseResult.total_cents != null
-      ? `$${Math.round(parseResult.total_cents / 100)}`
-      : '';
-    const retailerName = bill.retailerId ?? 'power';
-    const periodMonth = parseResult.period_start
-      ? new Date(parseResult.period_start).toLocaleString('en-NZ', { month: 'long' })
-      : 'your recent';
+    // Resolve retailer display name from the bill's retailerId.
+    const retailer = bill.retailerId
+      ? await getRetailerById(env.DB, bill.retailerId)
+      : null;
+    const retailerName = retailer?.name ?? bill.retailerId ?? 'power';
+    const usageKwh = parseResult.usage_kwh != null ? `${Math.round(parseResult.usage_kwh)}` : '0';
+    const days = parseResult.days != null ? `${parseResult.days}` : '0';
+    const totalDollars = parseResult.total_cents != null
+      ? `${Math.round(parseResult.total_cents / 100)}`
+      : '0';
 
-    const confirmMsg = status === 'parsed'
-      ? `Got your ${retailerName} bill for ${periodMonth}: ${amount} for ${usageKwh}. I'm comparing it now.`
-      : `Got your ${retailerName} bill for ${periodMonth}: ${amount} for ${usageKwh}. I'll review it and get back to you.`;
+    // Render the bill_received template body locally (PRD 7.7) and send via
+    // sendAndLog so it gets channel-routed + persisted to messages table.
+    // We render here (rather than via Sent's template API) so we keep parity
+    // with the free-text path when Sent hasn't approved the template yet.
+    const confirmMsg = renderTemplate('bill_received', {
+      retailer: retailerName,
+      usage_kwh: usageKwh,
+      days,
+      total_dollars: totalDollars,
+    });
 
-    await sendText(env.SENT_API_KEY, phone, confirmMsg);
+    await sendAndLog(
+      env.SENT_API_KEY, env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY },
+      bill.userId, phone, confirmMsg
+    );
   }
 
   // 10. Log completion
