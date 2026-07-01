@@ -1,5 +1,21 @@
 import type { ConversationState, Intent, StateTransition } from '../types/conversation';
 
+// Typed error for invalid state transitions. Carries the full state pair and
+// request_id so callers can audit (WARN log) without losing correlation.
+export class ConversationError extends Error {
+  readonly from: ConversationState;
+  readonly to: ConversationState;
+  readonly request_id: string;
+
+  constructor(from: ConversationState, to: ConversationState, request_id: string) {
+    super(`Invalid transition: ${from} -> ${to} (request_id=${request_id})`);
+    this.name = 'ConversationError';
+    this.from = from;
+    this.to = to;
+    this.request_id = request_id;
+  }
+}
+
 // Map each state to the valid intents (commands) for that state
 const VALID_COMMANDS: Record<ConversationState, Intent[]> = {
   NEW: ['help', 'bill'],
@@ -79,6 +95,14 @@ interface TransitionContext {
 const KV_KEY_PREFIX = 'state:';
 const KV_TTL_SECONDS = 180 * 24 * 60 * 60; // 180 days
 
+// Generate a request_id when the caller does not provide one (mirrors the
+// errorHandler middleware's fallback so every invalid transition is auditable).
+function defaultRequestId(): string {
+  return typeof crypto !== 'undefined' && 'randomUUID' in crypto
+    ? crypto.randomUUID()
+    : `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
 // Pure function: validate a transition, return next state or Error
 export function validateTransition(
   state: ConversationState,
@@ -112,6 +136,19 @@ export function canTransition(from: ConversationState, to: ConversationState): b
   return allowedTargets(from).includes(to);
 }
 
+// Throw a typed ConversationError if `from` cannot reach `to`. Used internally
+// by transition() so the invalid path produces a structured WARN audit log
+// with the full state pair and request_id before being caught.
+export function assertCanTransition(
+  from: ConversationState,
+  to: ConversationState,
+  request_id: string
+): void {
+  if (!canTransition(from, to)) {
+    throw new ConversationError(from, to, request_id);
+  }
+}
+
 // Get current state from KV
 export async function getState(
   kv: KVNamespace,
@@ -133,17 +170,34 @@ export async function setState(
   await kv.put(key, state, { expirationTtl: KV_TTL_SECONDS });
 }
 
-// Perform a full transition: validate, persist, return response
+// Perform a full transition: validate, persist, return response.
+// On an invalid pair, throws a ConversationError internally, logs it at WARN
+// with the full state pair + request_id, then returns a soft no-op response
+// (preserving the existing contract webhook callers depend on).
 export async function transition(
   kv: KVNamespace,
   userId: string,
   intent: Intent,
-  _ctx?: TransitionContext
+  _ctx?: TransitionContext,
+  request_id: string = defaultRequestId()
 ): Promise<StateTransition> {
   const from = await getState(kv, userId);
   const nextState = validateTransition(from, intent);
 
   if (nextState instanceof Error) {
+    // Typed, auditable error: thrown for the WARN log, caught to preserve
+    // the soft-return contract. Never silently mutated. `to` is the current
+    // state because an invalid intent leaves the user where they are.
+    const ce = new ConversationError(from, from, request_id);
+    console.log(JSON.stringify({
+      level: 'warn',
+      event: 'invalid_transition',
+      from: ce.from,
+      to: ce.to,
+      intent,
+      request_id: ce.request_id,
+      timestamp: new Date().toISOString(),
+    }));
     return {
       from,
       to: from, // stay in current state
