@@ -2,6 +2,8 @@ import { describe, it, expect, vi } from 'vitest';
 import {
   validateTransition,
   isValidIntent,
+  canTransition,
+  allowedTargets,
   getWelcomeMessage,
   getState,
   setState,
@@ -140,6 +142,87 @@ describe('Conversation State Machine', () => {
       expect(isValidIntent('SWITCHING', 'bill')).toBe(false);
       expect(isValidIntent('INACTIVE', 'switch')).toBe(false);
       expect(isValidIntent('AWAITING_BILL', 'switch')).toBe(false);
+    });
+  });
+
+  const ALL_STATES: ConversationState[] = [
+    'NEW',
+    'ONBOARDING',
+    'ACTIVE',
+    'AWAITING_BILL',
+    'AWAITING_SWITCH_CONFIRM',
+    'SWITCHING',
+    'INACTIVE',
+    'UNSUBSCRIBED',
+  ];
+
+  describe('canTransition / allowedTargets', () => {
+    const ALL_INTENTS: Intent[] = [
+      'help', 'usage', 'bill', 'compare', 'switch',
+      'confirm_switch', 'decline', 'status', 'stop', 'unknown',
+    ];
+
+    // Allowed target states per source state, derived from TRANSITIONS
+    const expectedAdjacency: Record<ConversationState, ConversationState[]> = {
+      NEW: ['ONBOARDING', 'NEW'],
+      ONBOARDING: ['ACTIVE', 'AWAITING_BILL'],
+      ACTIVE: ['ACTIVE', 'AWAITING_SWITCH_CONFIRM', 'UNSUBSCRIBED'],
+      AWAITING_BILL: ['ACTIVE', 'AWAITING_BILL'],
+      AWAITING_SWITCH_CONFIRM: ['SWITCHING', 'ACTIVE', 'AWAITING_SWITCH_CONFIRM'],
+      SWITCHING: ['SWITCHING', 'UNSUBSCRIBED'],
+      INACTIVE: ['ACTIVE', 'INACTIVE'],
+      UNSUBSCRIBED: ['NEW'],
+    };
+
+    it('allowedTargets returns the correct adjacency list for every state', () => {
+      for (const state of ALL_STATES) {
+        const targets = allowedTargets(state).sort();
+        const expected = [...expectedAdjacency[state]].sort();
+        expect(targets).toEqual(expected);
+      }
+    });
+
+    // Exhaustive 8x8 (64-pair) coverage of canTransition
+    it.each(ALL_STATES.flatMap((from) => ALL_STATES.map((to) => [from, to] as const)))(
+      'canTransition(%s, %s)',
+      (from, to) => {
+        const allowed = expectedAdjacency[from].includes(to);
+        expect(canTransition(from, to)).toBe(allowed);
+      }
+    );
+
+    it('canTransition is reflexive where a state has a self-loop, false otherwise', () => {
+      for (const state of ALL_STATES) {
+        const selfLoop = expectedAdjacency[state].includes(state);
+        expect(canTransition(state, state)).toBe(selfLoop);
+      }
+    });
+
+    // Mirror test: canTransition parity with TRANSITIONS via validateTransition
+    it('mirrors TRANSITIONS — every reachable (from,intent,to) is canTransition-true', () => {
+      for (const from of ALL_STATES) {
+        for (const intent of ALL_INTENTS) {
+          const result = validateTransition(from, intent);
+          if (!(result instanceof Error)) {
+            expect(canTransition(from, result)).toBe(true);
+          }
+        }
+      }
+    });
+
+    // Mirror test: parity with VALID_COMMANDS — allowedTargets is a subset of
+    // states reachable through any command the state accepts
+    it('mirrors VALID_COMMANDS — every command-accepted transition target is allowed', () => {
+      for (const from of ALL_STATES) {
+        for (const intent of ALL_INTENTS) {
+          if (isValidIntent(from, intent)) {
+            const result = validateTransition(from, intent);
+            if (!(result instanceof Error)) {
+              expect(canTransition(from, result)).toBe(true);
+            }
+          }
+        }
+      }
     });
   });
 

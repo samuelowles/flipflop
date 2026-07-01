@@ -96,6 +96,22 @@ export function isValidIntent(state: ConversationState, intent: Intent): boolean
   return VALID_COMMANDS[state]?.includes(intent) ?? false;
 }
 
+// Allowed target states for a given source state (derived from TRANSITIONS)
+export function allowedTargets(state: ConversationState): ConversationState[] {
+  const intents = TRANSITIONS[state];
+  if (!intents) return [];
+  const targets = new Set<ConversationState>();
+  for (const target of Object.values(intents)) {
+    if (target) targets.add(target);
+  }
+  return [...targets];
+}
+
+// Check whether a transition from one state to another is allowed
+export function canTransition(from: ConversationState, to: ConversationState): boolean {
+  return allowedTargets(from).includes(to);
+}
+
 // Get current state from KV
 export async function getState(
   kv: KVNamespace,
