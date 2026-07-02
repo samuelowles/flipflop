@@ -51,6 +51,7 @@ function makeLatestBill(): Bill {
     rawR2Key: 'bills/test.pdf',
     parsedJson: null,
     source: 'whatsapp',
+    sourceMessageId: null,
     createdAt: '2026-05-01T00:00:00+12:00',
   };
 }

@@ -3,7 +3,7 @@ import { classifyIntent } from '../services/deepseek';
 import { transition, handleNewUser, getWelcomeMessage } from '../services/conversation';
 import { sendAndLog, downloadMedia } from '../services/messaging';
 import { createUser, getUserByPhone, updateUserState } from '../models/users';
-import { createBill } from '../models/bills';
+import { createBill, getBillBySourceMessageId } from '../models/bills';
 import { createMessage } from '../models/messages';
 
 interface SentWebhookPayload {
@@ -66,11 +66,21 @@ export async function messagingWebhook(c: Context): Promise<Response> {
 
     // 3. Handle media (bill forwarding)
     if (media?.url) {
-      const ext = media.type === 'pdf' ? 'pdf' : 'jpg';
-      const timestamp = Date.now();
-      const r2Key = `bills/${user.id}/${timestamp}.${ext}`;
+      // Idempotent dispatch (issue #38): a duplicate Sent redelivery for the
+      // same message_id must not produce a second R2 put, bill row, or
+      // PARSE_QUEUE enqueue. Bail out early if already processed.
+      if (sentMessageId) {
+        const existing = await getBillBySourceMessageId(db, sentMessageId);
+        if (existing) {
+          return c.json({ status: 'ok', duplicate: true }, 200);
+        }
+      }
 
-      // Download media from Sent and store in R2
+      const ext = media.type === 'pdf' ? 'pdf' : 'jpg';
+      const r2Key = `bills/${user.id}/${crypto.randomUUID()}.${ext}`;
+
+      // Download media from Sent and store in R2 (R2 SSE-KMS is bucket-level
+      // config per docs/DEPLOY.md, not a per-put option in the R2 JS API).
       const mediaBuffer = await downloadMedia(apiKey, media.url);
       await billsBucket.put(r2Key, mediaBuffer);
 
@@ -79,6 +89,7 @@ export async function messagingWebhook(c: Context): Promise<Response> {
         userId: user.id,
         rawR2Key: r2Key,
         source: channel,
+        sourceMessageId: sentMessageId,
       });
 
       // Enqueue parse job

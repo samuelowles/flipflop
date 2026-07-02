@@ -395,6 +395,7 @@ describe('pollAllUsers', () => {
       rawR2Key: 'bills/user-1/gmail_msg_001_1.pdf',
       parsedJson: null,
       source: 'gmail',
+      sourceMessageId: null,
       createdAt: new Date().toISOString(),
     });
 
@@ -1035,6 +1036,7 @@ describe('pollSingleUser', () => {
       rawR2Key: 'bills/user-1/gmail_msg_001_1.pdf',
       parsedJson: null,
       source: 'gmail',
+      sourceMessageId: null,
       createdAt: new Date().toISOString(),
     });
 
