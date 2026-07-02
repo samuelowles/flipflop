@@ -134,8 +134,12 @@ class GenericParser(BaseParser):
         # --- Break fee ---
         break_fee_cents = self._extract_break_fee(full_text)
 
-        # --- Confidence (60% weighted to account for generic heuristics) ---
-        confidence = min(1.0, (fields_found / total_fields) * 0.8)
+        # --- Confidence ---
+        # Baseline 0.5: a generic fallback always yields at least 0.5 by design
+        # (issue #51), scaling up to a 0.8 ceiling as more fields are matched.
+        # The ceiling stays below per-retailer parsers (which can reach 1.0)
+        # so the router prefers retailer-specific matches when available.
+        confidence = 0.5 + 0.3 * (fields_found / total_fields)
 
         return ParserResult(
             retailer=retailer_name,
