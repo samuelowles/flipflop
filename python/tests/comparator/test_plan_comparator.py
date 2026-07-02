@@ -398,3 +398,82 @@ class TestExitFeeAwareness:
         )
         cheaper_result = [r for r in results if r["plan_id"] == "plan-cheaper"][0]
         assert "break_fee_warning" not in cheaper_result
+
+
+class TestStayPutRecommendation:
+    """AC #72: 'stay_put' is a first-class recommendation with a reason.
+
+    Each result item carries the user-level recommendation/reason. Python owns
+    every reason except recent_switch (applied TS-side via a DB read).
+    """
+
+    @staticmethod
+    def _plan(pid, name, retailer, ckwh, **extra):
+        base = {"id": pid, "name": name, "retailer_id": retailer,
+                "c_per_kwh": ckwh, "c_per_day": 90.0, "low_user_eligible": 0}
+        base.update(extra)
+        return base
+
+    def _usage(self):
+        return {"avg_daily_kwh": 15.0, "meter_type": "standard"}
+
+    def test_switch_when_saving_exceeds_threshold(self, bill_history):
+        # 28.0 vs 22.0 c/kWh on ~5475 kWh/yr ≈ 32850 cents — well over 5000.
+        current = self._plan("plan-current", "Current", "contact", 28.0)
+        cheap = self._plan("plan-vc", "Very Cheap", "mercury", 22.0)
+        results = compare(self._usage(), current, [current, cheap], bill_history)
+        for r in results:
+            assert r["recommendation"] == "switch"
+            assert r["reason"] is None
+
+    def test_no_savings_when_best_alt_costs_more(self, usage_profile, current_plan, bill_history):
+        pricier = self._plan("plan-pricier", "Pricier", "genesis", 35.0, c_per_day=100.0)
+        results = compare(usage_profile, current_plan, [current_plan, pricier], bill_history)
+        for r in results:
+            assert r["recommendation"] == "stay_put"
+            assert r["reason"] == "no_savings"
+
+    def test_low_savings_when_under_threshold(self, bill_history):
+        # 28.0 vs 27.1 c/kWh on ~5475 kWh ≈ 4928 cents — positive, < 5000.
+        current = self._plan("plan-current", "Current", "contact", 28.0)
+        marginal = self._plan("plan-marg", "Marginal", "mercury", 27.1)
+        results = compare(self._usage(), current, [current, marginal], bill_history)
+        best = max((r for r in results if not r["stay_where_you_are"]),
+                   key=lambda r: r["saving_cents"])
+        assert 0 < best["saving_cents"] < 5000
+        for r in results:
+            assert r["recommendation"] == "stay_put"
+            assert r["reason"] == "low_savings"
+
+    def test_lock_in_too_high_when_break_fee_wipes_saving(self, bill_history):
+        current = self._plan("plan-current", "Current", "contact", 28.0, break_fee_cents=50000)
+        cheaper = self._plan("plan-cheaper", "Cheaper", "mercury", 27.0)  # ~5475 c < fee
+        results = compare(self._usage(), current, [current, cheaper], bill_history)
+        for r in results:
+            assert r["recommendation"] == "stay_put"
+            assert r["reason"] == "lock_in_too_high"
+
+    def test_contract_constraints_when_fixed_term_active(
+        self, usage_profile, current_plan, cheaper_plan, bill_history
+    ):
+        future = "2999-01-01T00:00:00+00:00"
+        current_in_term = {**current_plan, "fixed_term_expiry": future}
+        results = compare(
+            usage_profile, current_in_term,
+            [current_in_term, cheaper_plan], bill_history,
+        )
+        for r in results:
+            assert r["recommendation"] == "stay_put"
+            assert r["reason"] == "contract_constraints"
+
+    def test_unsupported_plan_never_recommended_as_switch(
+        self, usage_profile, current_plan, bill_history
+    ):
+        # A TOU plan with a fake-low rate must not produce a switch verdict.
+        tou = self._plan("plan-tou-cheap", "Cheap TOU", "mercury", 1.0, c_per_day=30.0,
+                         conditions_json=json.dumps({"is_tou": True}))
+        results = compare(usage_profile, current_plan, [current_plan, tou], bill_history)
+        for r in results:
+            assert r["recommendation"] == "stay_put"
+            assert r["reason"] == "no_savings"
+

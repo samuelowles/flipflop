@@ -9,6 +9,7 @@ import { getBillsByUserId } from '../models/bills';
 import { getPlansByRetailer } from '../models/plans';
 import { getCanonicalPlans } from './planAggregator';
 import { createComparison } from '../models/comparisons';
+import { getLatestSwitchForUser } from '../models/switches';
 import type {
   ComparisonBillSummary,
   ComparisonCurrentPlan,
@@ -87,6 +88,11 @@ export async function comparePlans(
 }
 
 const SAVING_THRESHOLD_CENTS = 5000; // $50 NZD minimum saving to notify
+
+// AC #72 — recent_switch cooldown: if the user switched within this window,
+// override the recommendation to stay_put / recent_switch. PRD 5.3 does not
+// pin a duration; 90 days aligns with typical NZ fixed-term minimum lengths.
+const RECENT_SWITCH_COOLDOWN_DAYS = 90;
 
 function billToSummary(bill: { id: string; usageKwh: number | null; totalCents: number | null; periodStart: string | null; periodEnd: string | null; days: number | null; breakFeeCents: number | null }): ComparisonBillSummary | null {
   if (bill.usageKwh == null || bill.totalCents == null || !bill.periodStart || !bill.periodEnd || bill.days == null) return null;
@@ -256,6 +262,30 @@ export async function runComparison(
     env
   );
 
+  // AC #72 — recent_switch cooldown. Python stamps recommendation/reason from
+  // money math; the cooldown is a DB-read, so TS owns this override. If the
+  // user's most recent switch is inside the window, force stay_put regardless
+  // of what the numbers say.
+  const latestSwitch = await getLatestSwitchForUser(env.DB, userId);
+  let overriddenResults = results;
+  if (latestSwitch && _isWithinCooldown(latestSwitch.requestedAt, RECENT_SWITCH_COOLDOWN_DAYS)) {
+    overriddenResults = results.map(item => ({
+      ...item,
+      recommendation: 'stay_put' as const,
+      reason: 'recent_switch' as const,
+    }));
+    console.log(JSON.stringify({
+      type: 'compare_recent_switch_override',
+      userId,
+      lastSwitchAt: latestSwitch.requestedAt,
+      cooldownDays: RECENT_SWITCH_COOLDOWN_DAYS,
+      timestamp: new Date().toISOString(),
+    }));
+  }
+
+  // Use the cooldown-aware list for everything downstream.
+  const finalResults = overriddenResults;
+
   // Log warning if savings don't cover exit fees
   if (latestBill.breakFeeCents != null) {
     for (const item of results) {
@@ -273,7 +303,7 @@ export async function runComparison(
 
   // 7. Store results in D1
   const comparisonIds: string[] = [];
-  for (const item of results) {
+  for (const item of finalResults) {
     // Find matching plan ID from availablePlans
     const matchedPlan = availablePlans.find(
       p => p.retailerId === item.retailer_id && p.name === item.plan_name
@@ -292,8 +322,12 @@ export async function runComparison(
     });
     comparisonIds.push(comparison.id);
 
-    // 8. Enqueue notification if saving exceeds threshold
-    if (item.saving_cents > SAVING_THRESHOLD_CENTS) {
+    // 8. Enqueue notification only on a switch recommendation that clears the
+    // saving threshold. stay_put (any reason) must never trigger a switch nudge.
+    if (
+      item.recommendation === 'switch' &&
+      item.saving_cents > SAVING_THRESHOLD_CENTS
+    ) {
       await env.NOTIFY_QUEUE.send({ userId, comparisonId: comparison.id });
       console.log(JSON.stringify({
         type: 'compare_enqueued_notification',
@@ -308,10 +342,21 @@ export async function runComparison(
   console.log(JSON.stringify({
     type: 'compare_complete',
     userId,
-    plansCompared: results.length,
+    plansCompared: finalResults.length,
     storedResults: comparisonIds.length,
     timestamp: new Date().toISOString(),
   }));
 
   return comparisonIds.length > 0 ? comparisonIds[0]! : null;
+}
+
+/**
+ * Return true if *isoDate* is within *days* of now (i.e. the cooldown has not
+ * elapsed). AC #72 recent_switch check.
+ */
+function _isWithinCooldown(isoDate: string, days: number): boolean {
+  const then = Date.parse(isoDate);
+  if (Number.isNaN(then)) return false;
+  const elapsedMs = Date.now() - then;
+  return elapsedMs >= 0 && elapsedMs < days * 24 * 60 * 60 * 1000;
 }

@@ -59,6 +59,17 @@ export interface ComparisonInput {
   readonly billHistory: readonly ComparisonBillSummary[];
 }
 
+export type Recommendation = 'switch' | 'stay_put';
+
+// Reasons the AC (#72) names. recent_switch is applied TS-side after a DB read;
+// the others come from Python's money-derived verdict.
+export type RecommendationReason =
+  | 'no_savings'
+  | 'low_savings'
+  | 'contract_constraints'
+  | 'lock_in_too_high'
+  | 'recent_switch';
+
 export interface ComparisonResultItem {
   readonly plan_id: string;
   readonly plan_name: string;
@@ -72,6 +83,10 @@ export interface ComparisonResultItem {
   readonly break_fee_warning?: boolean;
   readonly net_first_year_saving_cents?: number;
   readonly fixed_term_expiry?: string;
+  readonly unsupported?: boolean;
+  readonly unsupported_reason?: string;
+  readonly recommendation?: Recommendation; // user-level verdict, stamped on every item (AC #72)
+  readonly reason?: RecommendationReason | null; // present when recommendation === 'stay_put'
 }
 
 export type ComparisonResult = readonly ComparisonResultItem[];

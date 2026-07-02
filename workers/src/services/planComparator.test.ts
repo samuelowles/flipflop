@@ -19,11 +19,16 @@ vi.mock('../models/comparisons', () => ({
   createComparison: vi.fn(),
 }));
 
+vi.mock('../models/switches', () => ({
+  getLatestSwitchForUser: vi.fn(),
+}));
+
 import { runComparison } from './planComparator';
 import { getBillsByUserId } from '../models/bills';
 import { getPlansByRetailer } from '../models/plans';
 import { getCanonicalPlans } from './planAggregator';
 import { createComparison } from '../models/comparisons';
+import { getLatestSwitchForUser } from '../models/switches';
 import type { Bill } from '../types/bill';
 import type { Plan } from '../types/plan';
 import type { ComparisonResultItem, PlanComparison } from '../types/comparison';
@@ -127,6 +132,8 @@ const pythonResult: ComparisonResultItem[] = [
     confidence: 0.85,
     stay_where_you_are: false,
     comparison_details: '{}',
+    recommendation: 'switch',
+    reason: null,
   },
   {
     plan_id: 'plan-current-1',
@@ -138,6 +145,8 @@ const pythonResult: ComparisonResultItem[] = [
     confidence: 0.85,
     stay_where_you_are: true,
     comparison_details: '{}',
+    recommendation: 'stay_put',
+    reason: 'no_savings',
   },
 ];
 
@@ -161,8 +170,11 @@ describe('runComparison — happy path (#70)', () => {
     vi.mocked(getPlansByRetailer).mockReset();
     vi.mocked(getCanonicalPlans).mockReset();
     vi.mocked(createComparison).mockReset();
+    vi.mocked(getLatestSwitchForUser).mockReset();
     mockFetch.mockReset();
     notifySend.mockReset();
+    // Default: no prior switch → no cooldown override.
+    vi.mocked(getLatestSwitchForUser).mockResolvedValue(null);
   });
 
   it('fetches the bill, derives region via retailer, calls the aggregator, POSTs to Python, persists, and enqueues notify', async () => {
@@ -228,5 +240,102 @@ describe('runComparison — happy path (#70)', () => {
     expect(result).toBeNull();
     expect(getCanonicalPlans).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+});
+
+describe('runComparison — stay_put recommendation surfacing (#72)', () => {
+  beforeEach(() => {
+    vi.mocked(getBillsByUserId).mockReset();
+    vi.mocked(getPlansByRetailer).mockReset();
+    vi.mocked(getCanonicalPlans).mockReset();
+    vi.mocked(createComparison).mockReset();
+    vi.mocked(getLatestSwitchForUser).mockReset();
+    mockFetch.mockReset();
+    notifySend.mockReset();
+    vi.mocked(getLatestSwitchForUser).mockResolvedValue(null);
+  });
+
+  it('surfaces the recommendation/reason fields from Python and notifies on switch', async () => {
+    vi.mocked(getBillsByUserId).mockResolvedValueOnce([makeParsedBill()]);
+    vi.mocked(getPlansByRetailer).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(getCanonicalPlans).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(createComparison)
+      .mockResolvedValueOnce(mockComparison('cmp-1'))
+      .mockResolvedValueOnce(mockComparison('cmp-2'));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => pythonResult,
+    } as unknown as Response);
+
+    await runComparison('user-1', env);
+
+    // The persisted comparison payload carries the recommendation through.
+    const persisted = vi.mocked(createComparison).mock.calls[0]![1];
+    expect(persisted).toMatchObject({ savingCents: 20000 });
+
+    // Notify fired exactly once for the switch-recommended plan.
+    expect(notifySend).toHaveBeenCalledTimes(1);
+    expect(notifySend).toHaveBeenCalledWith({ userId: 'user-1', comparisonId: 'cmp-1' });
+  });
+
+  it('overrides to stay_put/recent_switch and suppresses notify when a switch is recent', async () => {
+    vi.mocked(getBillsByUserId).mockResolvedValueOnce([makeParsedBill()]);
+    vi.mocked(getPlansByRetailer).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(getCanonicalPlans).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(createComparison)
+      .mockResolvedValueOnce(mockComparison('cmp-1'))
+      .mockResolvedValueOnce(mockComparison('cmp-2'));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => pythonResult,
+    } as unknown as Response);
+    // A switch requested 10 days ago — inside the 90-day cooldown.
+    vi.mocked(getLatestSwitchForUser).mockResolvedValueOnce({
+      id: 'switch-1',
+      userId: 'user-1',
+      fromRetailerId: 'ret-a',
+      toPlanId: 'plan-cheap-1',
+      status: 'completed',
+      requestedAt: new Date(Date.now() - 10 * 24 * 60 * 60 * 1000).toISOString(),
+      confirmedAt: null,
+      completedAt: null,
+    });
+
+    await runComparison('user-1', env);
+
+    // No notification — stay_put must never trigger a switch nudge.
+    expect(notifySend).not.toHaveBeenCalled();
+  });
+
+  it('does NOT override when the latest switch is outside the cooldown window', async () => {
+    vi.mocked(getBillsByUserId).mockResolvedValueOnce([makeParsedBill()]);
+    vi.mocked(getPlansByRetailer).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(getCanonicalPlans).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(createComparison)
+      .mockResolvedValueOnce(mockComparison('cmp-1'))
+      .mockResolvedValueOnce(mockComparison('cmp-2'));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => pythonResult,
+    } as unknown as Response);
+    // 120 days ago — outside the 90-day cooldown.
+    vi.mocked(getLatestSwitchForUser).mockResolvedValueOnce({
+      id: 'switch-old',
+      userId: 'user-1',
+      fromRetailerId: 'ret-a',
+      toPlanId: 'plan-cheap-1',
+      status: 'completed',
+      requestedAt: new Date(Date.now() - 120 * 24 * 60 * 60 * 1000).toISOString(),
+      confirmedAt: null,
+      completedAt: null,
+    });
+
+    await runComparison('user-1', env);
+
+    // Outside cooldown → switch recommendation stands → notify fires.
+    expect(notifySend).toHaveBeenCalledTimes(1);
   });
 });
