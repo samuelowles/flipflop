@@ -13,6 +13,7 @@ import { getBillsByUserId } from '../models/bills';
 import { getUserById } from '../models/users';
 import { sendText } from './messaging';
 import { explainComparison as _explainComparison, generateStayPutMessage, generateSavingMessage } from './comparisonIntelligence';
+import type { Recommendation } from '../types/comparison';
 
 interface NotifyEnv {
   readonly DB: D1Database;
@@ -33,12 +34,29 @@ function savingToDollars(cents: number): number {
 
 /**
  * Evaluate notification rules and send alert if appropriate.
+ *
+ * AC #74 — the NOTIFY_QUEUE payload now also carries billId and recommendation.
+ * They are accepted here for traceability/forward use but are not load-bearing:
+ * this consumer re-fetches the comparison by comparisonId and derives verdict
+ * (switch/stay_put) from the persisted savingCents, so omitting them (e.g. from
+ * an older enqueued message) is safe.
  */
 export async function evaluateAndNotify(
   userId: string,
   comparisonId: string,
-  env: NotifyEnv
+  env: NotifyEnv,
+  billId?: string,
+  recommendation?: Recommendation
 ): Promise<void> {
+  // Trace log links the queue payload to this evaluation (AC #74 traceability).
+  console.log(JSON.stringify({
+    type: 'notify_evaluate',
+    userId,
+    comparisonId,
+    billId: billId ?? null,
+    recommendation: recommendation ?? null,
+    timestamp: new Date().toISOString(),
+  }));
   // 1. Fetch the comparison result
   const comparison = await getLatestComparisonForUser(env.DB, userId);
   if (!comparison || comparison.id !== comparisonId) {
