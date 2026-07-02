@@ -54,6 +54,9 @@ ENVIRONMENT = "development"
 SERVICE_VERSION = "0.1.0"
 # Bills with parser confidence below this are routed to manual review (#41).
 F1_HINT_CONFIDENCE_THRESHOLD = "0.85"
+# Issue #64: EIEP14A ingestion worker. INERT until the EA feed lands in
+# October — flip to "true" to arm the 0 3 * * * cron. Defaults false.
+EIF_EIEP14A_ENABLED = "false"
 
 # Durable Object used by src/middleware/rateLimit.ts for atomic per-key rate
 # limiting.  One DO instance per rate-limit key serialises read-modify-write

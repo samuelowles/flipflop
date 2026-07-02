@@ -1,13 +1,21 @@
 /**
- * Plan ingestion service — fetches EIEP14A data and upserts plans into D1.
+ * EIEP14A ingestion worker (#64) — fetches the Electricity Authority EIEP14A
+ * daily file and upserts plan rows with provenance='eiep14a'.
  *
- * Triggered by Cron (0 3 * * * — daily at 03:00 UTC).
- * Caches plan list in KV for fast comparison lookups.
+ * Triggered by Cron (0 3 * * * — daily at 03:00 UTC). The cron is wired in
+ * wrangler.toml but the worker ships INERT: it short-circuits unless the
+ * EIF_EIEP14A_ENABLED env flag is set to "true". The EA feed is expected to
+ * become available in October — flip the flag then.
+ *
+ * Idempotent: each upsert computes a SHA-256 content_hash over the tracked
+ * fields and skips the write when an existing row with the same eiep14a_id
+ * already carries that hash. One plan_data_provenance audit row is written
+ * per refreshPlans() run.
  */
 
 import { upsertPlan } from '../models/plans';
 
-const EIEP14A_FEED_URL =
+export const EIEP14A_FEED_URL =
   'https://www.emi.ea.govt.nz/Wholesale/Datasets/Mappings/RetailerPlanMapping';
 
 const CACHE_KEY = 'plans:all';
@@ -54,13 +62,24 @@ export interface EnvWithPlans {
   KV: KVNamespace;
   PYTHON_SERVICE_URL?: string;
   EIEP14A_API_KEY?: string;
+  /** Issue #64: gate that keeps EIEP14A ingestion INERT until October. */
+  EIF_EIEP14A_ENABLED?: string;
 }
 
 /**
- * Full plan refresh cycle — called from Cron trigger.
+ * Whether the EIEP14A worker is armed. Ships false; flip to "true" in October
+ * when the EA feed goes live. Exposed for the cron gate in index.ts.
+ */
+export function isEiep14aEnabled(env: EnvWithPlans): boolean {
+  return env.EIF_EIEP14A_ENABLED === 'true';
+}
+
+/**
+ * Full plan refresh cycle — called from Cron trigger. INERT unless
+ * isEiep14aEnabled(env) is true (the cron handler gates on this).
  */
 export async function refreshPlans(env: EnvWithPlans): Promise<number> {
-  const rawRecords = await fetchEIEP14A(env);
+  const { records: rawRecords, rawHash, fileUrl } = await fetchEIEP14A(env);
   if (rawRecords.length === 0) {
     console.log(JSON.stringify({
       type: 'plan_ingestion',
@@ -73,10 +92,12 @@ export async function refreshPlans(env: EnvWithPlans): Promise<number> {
 
   const plans = transformRecords(rawRecords);
   let upserted = 0;
+  const now = new Date().toISOString();
 
   for (const plan of plans) {
     try {
-      await upsertPlan(env.DB, {
+      const contentHash = await computeContentHash(plan);
+      const { changed } = await upsertPlan(env.DB, {
         retailerId: plan.retailer_id,
         name: plan.name,
         region: plan.region,
@@ -91,12 +112,12 @@ export async function refreshPlans(env: EnvWithPlans): Promise<number> {
         effectiveFrom: plan.effective_from,
         effectiveTo: null,
         provenance: 'eiep14a',
-        sourceUrl: null,
-        ingestedAt: null,
-        contentHash: null,
+        sourceUrl: fileUrl,
+        ingestedAt: now,
+        contentHash,
         isCurrent: true,
       });
-      upserted++;
+      if (changed) upserted++;
     } catch (error) {
       console.log(JSON.stringify({
         type: 'plan_upsert_error',
@@ -106,6 +127,16 @@ export async function refreshPlans(env: EnvWithPlans): Promise<number> {
       }));
     }
   }
+
+  // One plan_data_provenance audit row per run (#64).
+  await insertProvenanceAudit(env.DB, {
+    source: 'eiep14a',
+    fetchedAt: now,
+    rawHash,
+    fileUrl,
+    recordCount: rawRecords.length,
+    upsertedCount: upserted,
+  });
 
   // Invalidate KV cache
   try {
@@ -126,10 +157,87 @@ export async function refreshPlans(env: EnvWithPlans): Promise<number> {
 }
 
 /**
- * Fetch EIEP14A data feed.
- * Falls back gracefully — returns empty array on failure.
+ * Compute a SHA-256 hex hash over a plan row's tracked fields. Used for
+ * hash-based idempotency: if an existing row with the same eiep14a_id
+ * already carries this hash, the upsert is skipped.
  */
-async function fetchEIEP14A(env: EnvWithPlans): Promise<readonly EIEP14ARecord[]> {
+export async function computeContentHash(plan: TransformedPlan): Promise<string> {
+  const payload = JSON.stringify({
+    c_per_kwh: plan.c_per_kwh,
+    c_per_day: plan.c_per_day,
+    tier_thresholds_json: plan.tier_thresholds_json,
+    prompt_payment_discount: plan.prompt_payment_discount,
+    conditions_json: plan.conditions_json,
+    low_user_eligible: plan.low_user_eligible,
+    region: plan.region,
+    name: plan.name,
+  });
+  return sha256Hex(payload);
+}
+
+interface ProvenanceAuditInput {
+  source: string;
+  fetchedAt: string;
+  rawHash: string;
+  fileUrl: string;
+  recordCount: number;
+  upsertedCount: number;
+}
+
+/**
+ * Insert one run-level audit row into plan_data_provenance (#63 table, #64 use).
+ * retailer_id/plan_id are NULL at the run-summary level.
+ */
+async function insertProvenanceAudit(
+  db: D1Database,
+  input: ProvenanceAuditInput
+): Promise<void> {
+  try {
+    await db.prepare(
+      `INSERT INTO plan_data_provenance (
+        id, retailer_id, plan_id, source, fetched_at,
+        raw_hash, file_url, record_count, upserted_count
+      ) VALUES (?1, NULL, NULL, ?2, ?3, ?4, ?5, ?6, ?7)`
+    ).bind(
+      crypto.randomUUID(),
+      input.source,
+      input.fetchedAt,
+      input.rawHash,
+      input.fileUrl,
+      input.recordCount,
+      input.upsertedCount
+    ).run();
+  } catch (error) {
+    console.log(JSON.stringify({
+      type: 'plan_provenance_audit_error',
+      error: error instanceof Error ? error.message : 'unknown',
+      timestamp: new Date().toISOString(),
+    }));
+  }
+}
+
+/** SHA-256 over a UTF-8 string, returned as lowercase hex. */
+async function sha256Hex(text: string): Promise<string> {
+  const data = new TextEncoder().encode(text);
+  const buf = await crypto.subtle.digest('SHA-256', data);
+  const bytes = new Uint8Array(buf);
+  let hex = '';
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+  return hex;
+}
+
+interface FetchResult {
+  readonly records: readonly EIEP14ARecord[];
+  readonly rawHash: string;
+  readonly fileUrl: string;
+}
+
+/**
+ * Fetch EIEP14A data feed.
+ * Falls back gracefully — returns empty records on failure.
+ * Returns the raw payload SHA-256 (raw_hash) and the source URL for audit.
+ */
+async function fetchEIEP14A(env: EnvWithPlans): Promise<FetchResult> {
   try {
     const headers: Record<string, string> = { Accept: 'application/json' };
     if (env.EIEP14A_API_KEY) {
@@ -148,30 +256,33 @@ async function fetchEIEP14A(env: EnvWithPlans): Promise<readonly EIEP14ARecord[]
         status: response.status,
         timestamp: new Date().toISOString(),
       }));
-      return [];
+      return { records: [], rawHash: '', fileUrl: EIEP14A_FEED_URL };
     }
 
     const contentType = response.headers.get('content-type') ?? '';
+    let records: EIEP14ARecord[];
+    let rawBody: string;
+
     if (contentType.includes('application/json')) {
-      const data = await response.json() as unknown;
-      return parseJSONResponse(data);
+      rawBody = await response.text();
+      records = parseJSONResponse(JSON.parse(rawBody) as unknown);
+    } else if (contentType.includes('text/csv') || contentType.includes('text/plain')) {
+      rawBody = await response.text();
+      records = parseCSVResponse(rawBody);
+    } else {
+      rawBody = await response.text();
+      records = parseJSONResponse(JSON.parse(rawBody) as unknown);
     }
 
-    if (contentType.includes('text/csv') || contentType.includes('text/plain')) {
-      const text = await response.text();
-      return parseCSVResponse(text);
-    }
-
-    // Try JSON anyway
-    const data = await response.json() as unknown;
-    return parseJSONResponse(data);
+    const rawHash = await sha256Hex(rawBody);
+    return { records, rawHash, fileUrl: EIEP14A_FEED_URL };
   } catch (error) {
     console.log(JSON.stringify({
       type: 'eiep14a_fetch_error',
       error: error instanceof Error ? error.message : 'unknown',
       timestamp: new Date().toISOString(),
     }));
-    return [];
+    return { records: [], rawHash: '', fileUrl: EIEP14A_FEED_URL };
   }
 }
 
