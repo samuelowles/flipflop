@@ -10,7 +10,7 @@ import { getLatestComparisonForUser, getComparisonsByUserId } from '../models/co
 import { getPlanById } from '../models/plans';
 import { getRetailerById } from '../models/retailers';
 import { getBillsByUserId } from '../models/bills';
-import { getUserById } from '../models/users';
+import { getUserById, getNotificationThreshold } from '../models/users';
 import { sendText } from './messaging';
 import { explainComparison as _explainComparison, generateStayPutMessage, generateSavingMessage } from './comparisonIntelligence';
 import type { Recommendation } from '../types/comparison';
@@ -23,7 +23,19 @@ interface NotifyEnv {
   readonly DEEPSEEK_API_KEY?: string;
 }
 
-const MIN_SAVING_CENTS = 5000; // $50 NZD minimum to notify
+/**
+ * Issue #126 — pure threshold predicate. Inclusive at the boundary:
+ * a saving equal to the threshold qualifies (notify). Below does not.
+ *
+ * savingCents follows the Python comparison convention: positive = saving.
+ * Both arguments are in integer cents NZD.
+ */
+export function meetsThreshold(savingCents: number, thresholdCents: number): boolean {
+  return savingCents >= thresholdCents;
+}
+
+// Legacy default retained for reference / cooldown material-change calc.
+// Per-user threshold is read via getNotificationThreshold (issue #126).
 const NOTIFY_COOLDOWN_DAYS = 30;
 const NOTIFY_COOLDOWN_KEY_PREFIX = 'notify_cooldown:';
 const MATERIAL_CHANGE_THRESHOLD_PCT = 20; // notify if saving changes by >20%
@@ -69,13 +81,20 @@ export async function evaluateAndNotify(
     return;
   }
 
-  // 2. Check if saving exceeds threshold (positive = saving, Python convention)
-  if (comparison.savingCents < MIN_SAVING_CENTS) {
+  // 2. Check if saving meets the user's configured threshold (issue #126).
+  //    Default 5000 cents ($50) when the user/column is unset.
+  const thresholdCents = await getNotificationThreshold(
+    env.DB,
+    { ENCRYPTION_KEY: env.ENCRYPTION_KEY },
+    userId
+  );
+  if (!meetsThreshold(comparison.savingCents, thresholdCents)) {
     console.log(JSON.stringify({
       type: 'notify_skip',
       userId,
       reason: 'saving below threshold',
       savingCents: comparison.savingCents,
+      thresholdCents,
       timestamp: new Date().toISOString(),
     }));
     return;
