@@ -120,78 +120,94 @@ export async function createPlan(
   return plan;
 }
 
+/** Issue #68 — the kind of plan change detected by upsertPlan. */
+export type PlanChangeType = 'created' | 'updated' | 'unchanged';
+
+export interface UpsertPlanResult {
+  readonly plan: Plan;
+  readonly changeType: PlanChangeType;
+  /** Field names that differ between old and new (empty unless changeType === 'updated'). */
+  readonly changedFields: readonly string[];
+  /** Retailer id of the affected plan, for grouping KV diffs. */
+  readonly retailerId: string;
+  /** Old plan id that was retired (is_current=0); null unless changeType === 'updated'. */
+  readonly retiredPlanId: string | null;
+}
+
 /**
  * Upsert a plan by eiep14a_id (used for bulk imports from the Electricity Authority).
- * If a plan with the same eiep14a_id exists, update it; otherwise insert.
  * #64: hash-based idempotency — when input.contentHash matches the stored
- * content_hash, the row is returned unchanged and `changed` is false.
- * Returns { plan, changed }.
+ * content_hash, the row is returned unchanged (change_type 'unchanged').
+ * #68: versioned upsert — on a hash mismatch the old row is retired
+ * (is_current=0, effective_to=now) and a fresh is_current=1 row is inserted
+ * rather than mutating the old row in place.
  */
 export async function upsertPlan(
   db: D1Database,
   input: Omit<Plan, 'id'>
-): Promise<{ plan: Plan; changed: boolean }> {
+): Promise<UpsertPlanResult> {
   if (!input.eiep14aId) {
     const plan = await createPlan(db, input);
-    return { plan, changed: true };
+    return { plan, changeType: 'created', changedFields: [], retailerId: plan.retailerId, retiredPlanId: null };
   }
 
-  // Check if a plan with this eiep14a_id already exists
+  // Check if a plan with this eiep14a_id already exists.
   const existing = db.prepare(
     'SELECT id, content_hash FROM plans WHERE eiep14a_id = ?1'
   );
   const existingRow = await existing.bind(input.eiep14aId).first<{ id: string; content_hash: string | null } | null>();
 
   if (existingRow) {
-    // #64: hash-based idempotency — skip the write when the tracked-field
+    // #64 fast path: hash-based idempotency — skip the write when the tracked-field
     // hash already matches the stored content_hash.
     if (input.contentHash && existingRow.content_hash === input.contentHash) {
       const plan = await getPlanById(db, existingRow.id);
       if (!plan) throw new Error('Failed to upsert plan');
-      return { plan, changed: false };
+      return { plan, changeType: 'unchanged', changedFields: [], retailerId: plan.retailerId, retiredPlanId: null };
     }
 
-    // Update existing plan
-    const stmt = db.prepare(
-      `UPDATE plans SET
-        retailer_id = ?1, name = ?2, region = ?3, c_per_kwh = ?4, c_per_day = ?5,
-        tier_thresholds_json = ?6, prompt_payment_discount = ?7, conditions_json = ?8,
-        low_user_eligible = ?9, source = ?10, effective_from = ?11, effective_to = ?12,
-        provenance = ?13, source_url = ?14, ingested_at = ?15, content_hash = ?16,
-        is_current = ?17
-       WHERE id = ?18`
-    );
+    // #68: hash differs → versioned replace. Read the full old row so we can
+    // name which fields changed (for the KV diff payload), then retire it.
+    const oldPlan = await getPlanById(db, existingRow.id);
+    const changedFields = oldPlan ? computeChangedFields(oldPlan, input) : [];
+    await retirePlan(db, existingRow.id, input.ingestedAt ?? null);
 
-    await stmt
-      .bind(
-        input.retailerId,
-        input.name,
-        input.region ?? null,
-        input.cPerKwh ?? null,
-        input.cPerDay ?? null,
-        input.tierThresholdsJson ?? null,
-        input.promptPaymentDiscount ?? null,
-        input.conditionsJson ?? null,
-        input.lowUserEligible ? 1 : 0,
-        input.source,
-        input.effectiveFrom ?? null,
-        input.effectiveTo ?? null,
-        input.provenance ?? null,
-        input.sourceUrl ?? null,
-        input.ingestedAt ?? null,
-        input.contentHash ?? null,
-        input.isCurrent ? 1 : 0,
-        existingRow.id
-      )
-      .run();
-
-    const plan = await getPlanById(db, existingRow.id);
-    if (!plan) throw new Error('Failed to upsert plan');
-    return { plan, changed: true };
+    const newPlan = await createPlan(db, input);
+    return { plan: newPlan, changeType: 'updated', changedFields, retailerId: newPlan.retailerId, retiredPlanId: existingRow.id };
   }
 
   const plan = await createPlan(db, input);
-  return { plan, changed: true };
+  return { plan, changeType: 'created', changedFields: [], retailerId: plan.retailerId, retiredPlanId: null };
+}
+
+/** Mark an existing plan row as no longer current (#68 versioned upsert). */
+async function retirePlan(db: D1Database, id: string, effectiveTo: string | null): Promise<void> {
+  await db
+    .prepare('UPDATE plans SET is_current = 0, effective_to = ?1 WHERE id = ?2')
+    .bind(effectiveTo ?? new Date().toISOString(), id)
+    .run();
+}
+
+/**
+ * #68 — name the tracked fields that differ between an existing plan row and
+ * the incoming input. Field names match the KV diff payload contract. Empty
+ * when nothing changed (should not happen when content_hash differs, but the
+ * helper is defensive).
+ */
+export function computeChangedFields(
+  old: Pick<Plan, 'cPerKwh' | 'cPerDay' | 'tierThresholdsJson' | 'promptPaymentDiscount' | 'conditionsJson' | 'lowUserEligible' | 'region' | 'name'>,
+  next: Pick<Plan, 'cPerKwh' | 'cPerDay' | 'tierThresholdsJson' | 'promptPaymentDiscount' | 'conditionsJson' | 'lowUserEligible' | 'region' | 'name'>
+): string[] {
+  const changed: string[] = [];
+  if ((old.cPerKwh ?? null) !== (next.cPerKwh ?? null)) changed.push('c_per_kwh');
+  if ((old.cPerDay ?? null) !== (next.cPerDay ?? null)) changed.push('c_per_day');
+  if ((old.tierThresholdsJson ?? null) !== (next.tierThresholdsJson ?? null)) changed.push('tier_thresholds_json');
+  if ((old.promptPaymentDiscount ?? null) !== (next.promptPaymentDiscount ?? null)) changed.push('prompt_payment_discount');
+  if ((old.conditionsJson ?? null) !== (next.conditionsJson ?? null)) changed.push('conditions_json');
+  if (Boolean(old.lowUserEligible) !== Boolean(next.lowUserEligible)) changed.push('low_user_eligible');
+  if ((old.region ?? null) !== (next.region ?? null)) changed.push('region');
+  if ((old.name ?? null) !== (next.name ?? null)) changed.push('name');
+  return changed;
 }
 
 /**
