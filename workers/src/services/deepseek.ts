@@ -1,4 +1,10 @@
 import type { Intent, IntentClassification } from '../types/conversation';
+import {
+  PROMPT_VERSION,
+  SYSTEM_PROMPT,
+  INTENT_CLASSIFICATION_PROMPT,
+  ENTITY_EXTRACTION_PROMPT,
+} from './prompts';
 
 const DEEPSEEK_API_BASE = 'https://api.deepseek.com/v1';
 const FLASH_MODEL = 'deepseek-chat';
@@ -7,37 +13,21 @@ const FLASH_TIMEOUT_MS = 500;
 const PRO_TIMEOUT_MS = 3000;
 const LOW_CONFIDENCE_THRESHOLD = 0.85;
 const MAX_RETRIES = 3;
-const PROMPT_VERSION = '1.0.0';
 
 interface DeepSeekMessage {
   readonly role: 'system' | 'user' | 'assistant';
   readonly content: string;
 }
 
-const SYSTEM_PROMPT = `You are Flip, an NZ power bill monitoring assistant. You communicate via WhatsApp and SMS.
+/** Combined system prompt: shared persona + intent classification instructions. */
+const CLASSIFY_SYSTEM_PROMPT = `${SYSTEM_PROMPT}
 
-Your job is to classify user messages into one of these intents:
-- help: User is asking what you can do, or needs assistance
-- usage: User wants to know their power usage or bill details
-- bill: User has a new bill to share, or mentions their bill
-- compare: User wants to compare plans or check if they can save
-- switch: User wants to switch plans
-- confirm_switch: User confirms they want to switch (yes, go ahead, etc.)
-- decline: User declines a suggestion (no, not now, stay, etc.)
-- status: User asks about their switch status or account status
-- stop: User wants to unsubscribe or stop the service
-- unknown: Cannot determine intent
+${INTENT_CLASSIFICATION_PROMPT}`;
 
-Respond with a JSON object:
-{
-  "intent": "<intent>",
-  "confidence": <0.0-1.0>,
-  "entities": {}
-}
+/** Combined system prompt: shared persona + entity extraction/disambiguation. */
+const DISAMBIGUATE_SYSTEM_PROMPT = `${SYSTEM_PROMPT}
 
-You are casual, direct, and helpful — like a financially-savvy friend. NZ English.
-You NEVER calculate costs, extract bill data, or make switching recommendations.
-You NEVER use hyperbolic or pushy language.`;
+${ENTITY_EXTRACTION_PROMPT}`;
 
 export async function classifyIntent(
   message: string,
@@ -46,7 +36,7 @@ export async function classifyIntent(
 ): Promise<IntentClassification> {
   const start = Date.now();
   const messages: DeepSeekMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
+    { role: 'system', content: CLASSIFY_SYSTEM_PROMPT },
     ...(history ?? []),
     { role: 'user', content: message },
   ];
@@ -137,8 +127,8 @@ export async function disambiguate(
   const contextStr = `Current state: ${context.currentState}. Recent messages: ${context.recentMessages.join(' | ')}`;
 
   const messages: DeepSeekMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: `Context: ${contextStr}\n\nUser message: ${message}\n\nDisambiguate the user's intent. If unclear, include a "clarification" field with a follow-up question.` },
+    { role: 'system', content: DISAMBIGUATE_SYSTEM_PROMPT },
+    { role: 'user', content: `Context: ${contextStr}\n\nUser message: ${message}\n\n${ENTITY_EXTRACTION_PROMPT}` },
   ];
 
   try {
