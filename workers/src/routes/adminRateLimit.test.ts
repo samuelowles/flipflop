@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
 import { adminRateLimitStatus } from './adminRateLimit';
+import { adminAuth } from '../middleware/adminAuth';
 
 // Reuses the in-memory DO stub shape from rateLimit.test.ts so the admin
 // endpoint is exercised against the real sliding-window read logic.
@@ -48,6 +49,8 @@ function createMockDurableObjectNamespace() {
 
 function buildApp(stub: ReturnType<typeof createMockDurableObjectNamespace>) {
   const app = new Hono();
+  // Mirrors index.ts: middleware applied to /admin/* before the handler.
+  app.use('/admin/*', adminAuth);
   app.get('/admin/rate-limit/:userKey', adminRateLimitStatus);
   return { app, env: { ADMIN_API_KEY: 'test-admin-key', RATE_LIMITER: stub } };
 }

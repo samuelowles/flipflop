@@ -2,16 +2,13 @@
  * Admin endpoint for per-user rate-limit visibility (issue #37 AC #4).
  *
  * Surfaces the current sliding-window counter for a rate-limit key from the
- * `RATE_LIMITER` Durable Object.  Auth-gated via `ADMIN_API_KEY` (Bearer
- * header) — the same secret is provisioned in production but was previously
- * unreferenced in code.  This is the first admin surface to actually enforce
- * it; the older `/admin/templates` routes remain unauthenticated to avoid a
- * drive-by scope change here.
+ * `RATE_LIMITER` Durable Object.  Auth-gated via the shared `adminAuth`
+ * middleware applied to `/admin/*` in index.ts (requires `ADMIN_API_KEY`
+ * Bearer header).
  */
 import type { Context } from 'hono';
 
 interface RateLimitEnv {
-  readonly ADMIN_API_KEY: string;
   readonly RATE_LIMITER: DurableObjectNamespace;
 }
 
@@ -27,43 +24,8 @@ interface StatusResponse {
 const DEFAULT_USER_LIMIT = 100;
 const DEFAULT_WINDOW_MS = 60_000;
 
-// Constant-time-ish Bearer comparison.  Avoids early-return byte comparison
-// to limit timing oracle on the secret.  Both strings must be equal length
-// for the loop to be meaningful; we equalise by comparing over the longer.
-function timingSafeEqual(a: string, b: string): boolean {
-  if (a.length === 0 || b.length === 0) return false;
-  let result = a.length ^ b.length;
-  const max = Math.max(a.length, b.length);
-  for (let i = 0; i < max; i++) {
-    const ac = a.charCodeAt(i % a.length);
-    const bc = b.charCodeAt(i % b.length);
-    result |= ac ^ bc;
-  }
-  return result === 0;
-}
-
 export async function adminRateLimitStatus(c: Context): Promise<Response> {
   const env = c.env as RateLimitEnv;
-
-  // Auth: require `Authorization: Bearer <ADMIN_API_KEY>`.
-  const authHeader = c.req.header('Authorization') ?? '';
-  const provided = authHeader.startsWith('Bearer ')
-    ? authHeader.slice('Bearer '.length).trim()
-    : '';
-  if (!env.ADMIN_API_KEY || !provided || !timingSafeEqual(provided, env.ADMIN_API_KEY)) {
-    console.log(
-      JSON.stringify({
-        type: 'admin_auth_failed',
-        path: c.req.path,
-        method: c.req.method,
-        timestamp: new Date().toISOString(),
-      })
-    );
-    return c.json(
-      { error: 'Unauthorized', code: 'unauthorized', status: 401 },
-      401
-    );
-  }
 
   // The rate-limit key is a hashed phone/IP (see rateLimit.ts deriveKey).
   // Admins look it up by that hash; raw phone numbers are never accepted
