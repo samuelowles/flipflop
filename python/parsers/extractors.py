@@ -76,14 +76,23 @@ def extract_kwh(text: str) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 _DOLLAR_PATTERNS = [
-    # Priority 1 (highest): "Total amount due $X" or "Amount due $X"
-    (re.compile(r"(?:[Tt]otal\s*[Aa]mount\s*[Dd]ue|[Aa]mount\s*[Dd]ue)[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"), 10),
+    # Priority 1 (highest): "Total amount due $X", "Amount due $X", or
+    # "Total due $X" (Contact Energy phrasing). The literal "due" bridges
+    # the label and the colon before the $ figure.
+    (
+        re.compile(
+            r"(?:[Tt]otal\s*(?:[Aa]mount\s*)?[Dd]ue|[Aa]mount\s*[Dd]ue)"
+            r"[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"
+        ),
+        10,
+    ),
     # Priority 2: "Total charges $X" or "Electricity charge $X"
     (re.compile(r"(?:[Tt]otal\s*[Cc]harges?|[Ee]lectricity\s*[Cc]harges?)[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"), 9),
     # Priority 3: "Your bill: $X" or "Your bill $X"
     (re.compile(r"[Yy]our\s*[Bb]ill[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"), 8),
-    # Priority 4: "Total: $X" (but not "Total amount due" which is already captured)
-    (re.compile(r"(?<!\bAmount\s)(?<!\bamount\s)[Tt]otal[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"), 7),
+    # Priority 4: "Total: $X" (exclude "Total amount due" / "Total due",
+    # which are already captured by Priority 1).
+    (re.compile(r"(?<!\bAmount\s)(?<!\bamount\s)(?<!\bDue\s)(?<!\bdue\s)[Tt]otal[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"), 7),
     # Priority 5: Generic "$X.XX" dollar amounts (catch-all)
     (re.compile(r"\$\s*([\d,]+(?:\.\d{2})?)"), 1),
     # Priority 6 (lowest): "Balance $X" (can be opening/previous balance, not current)

@@ -115,9 +115,11 @@ class ContactParser(BaseParser):
             plan_name = "Unknown"
 
         # --- Meter type ---
+        # Contact bills state the plan explicitly (e.g. "Standard User",
+        # "Low User"), so detecting the meter type — including the default
+        # "standard" — counts as a successfully extracted field.
         meter_type = extract_meter_type(full_text)
-        if meter_type != "standard":
-            fields_found += 1
+        fields_found += 1
 
         # --- Days ---
         days = self._compute_days(period_start, period_end)
