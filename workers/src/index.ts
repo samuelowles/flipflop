@@ -6,6 +6,7 @@ import { messagingWebhook } from './routes/messaging';
 import { gmailConnectPage, gmailLogin, gmailCallback, gmailScanStatus, gmailEvalStatus } from './routes/gmail';
 import { evalUploadPage, evalUploadHandler, evalResultPage, evalStatus } from './routes/eval';
 import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates';
+import { adminRateLimitStatus } from './routes/adminRateLimit';
 import { pollAllUsers } from './services/emailPoller';
 import { refreshPlans } from './services/planIngestion';
 import { handleParseJob } from './services/billParser';
@@ -63,6 +64,10 @@ app.get('/eval/status', rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 6
 // catch-all so Hono's first-match routing resolves these).
 app.get('/admin/templates', adminListTemplates);
 app.get('/admin/templates/status', adminTemplateStatus);
+
+// Issue #37 AC #4: admin visibility into per-user rate-limit state.
+// Registered before the /admin/* catch-all.  Auth-gated via ADMIN_API_KEY.
+app.get('/admin/rate-limit/:userKey', adminRateLimitStatus);
 
 // Epic 1 issue #17 — 501 stubs for unimplemented webhook + admin surfaces.
 // Placed after specific routes so Hono's first-match routing resolves

@@ -1,17 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { Hono } from 'hono';
-import { rateLimit } from './rateLimit';
+import { rateLimit, RATE_LIMIT_MESSAGE } from './rateLimit';
 import { RateLimiter } from '../durable-objects/RateLimiter';
 
 // In-memory Durable Object stub for testing.  Replays the real DO logic
 // (filter expired timestamps, check limit, append) so tests exercise the
-// exact same atomicity contract that production uses.
+// exact same atomicity contract that production uses.  Also implements the
+// `/status` read path so admin-endpoint tests can reuse this stub.
 function createMockDurableObjectNamespace() {
   const stores = new Map<string, number[]>();
   return {
     idFromName: (key: string) => ({ toString: () => key }),
     get: (_id: { toString: () => string }) => ({
       fetch: async (req: Request) => {
+        const url = new URL(req.url);
         const body = (await req.json()) as {
           key: string;
           limit: number;
@@ -21,6 +23,18 @@ function createMockDurableObjectNamespace() {
         const cutoff = body.now - body.windowMs;
         const stored = stores.get(body.key) ?? [];
         const active = stored.filter((t) => t > cutoff);
+
+        if (url.pathname === '/status') {
+          return Response.json({
+            count: active.length,
+            limit: body.limit,
+            windowMs: body.windowMs,
+            remaining: Math.max(0, body.limit - active.length),
+            oldestAt: active.length > 0 ? active[0] : null,
+          });
+        }
+
+        // /check (default)
         if (active.length >= body.limit) {
           const oldest = active[0] as number;
           return Response.json({
@@ -89,9 +103,16 @@ describe('rateLimit middleware', () => {
     expect(r2.status).toBe(200);
     const r3 = await app.request('/test', { headers }, env);
     expect(r3.status).toBe(429);
-    const body = (await r3.json()) as { error: string; retry_after: number };
+    const body = (await r3.json()) as {
+      error: string;
+      message: string;
+      retry_after: number;
+    };
     expect(body.error).toBe('rate_limited');
     expect(typeof body.retry_after).toBe('number');
+    // Issue #37 AC #2: friendly throttle message in the 429 body.
+    expect(body.message).toBe(RATE_LIMIT_MESSAGE);
+    expect(body.message).toBe("I'm getting a lot of messages — give me a moment.");
   });
 
   it('includes Retry-After header on 429 responses', async () => {
@@ -411,5 +432,57 @@ describe('RateLimiter Durable Object', () => {
     expect(body.limited).toBe(true);
     expect(body.retryAfterMs).toBeGreaterThan(0);
     expect(body.retryAfterMs).toBeLessThanOrEqual(windowMs);
+  });
+
+  // Issue #37 AC #4: DO exposes a read-only `/status` for admin visibility.
+  // Verifies (a) count/remaining/oldestAt reflect prior /check appends, (b)
+  // /status itself does NOT append, and (c) an unseen key reports count=0.
+  it('reports current window via /status without mutating (seeded + unseen)', async () => {
+    const store = new Map<string, number[]>();
+    const mkDo = () =>
+      new RateLimiter(
+        {
+          storage: {
+            get: async <T>(k: string) => store.get(k) as T | undefined,
+            put: async (k: string, v: number[]) => {
+              store.set(k, v);
+            },
+          },
+        } as unknown as DurableObjectState,
+        {}
+      );
+    const post = (path: string, body: Record<string, unknown>) =>
+      new Request(`https://rate-limiter${path}`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      });
+
+    const now = 5_000_000;
+    const windowMs = 60_000;
+    const limit = 100;
+    const seeded = mkDo();
+
+    // Seed two /check calls (these append).
+    for (let i = 0; i < 2; i++) {
+      await seeded.fetch(post('/check', { key: 'admin-view', limit, windowMs, now }));
+    }
+
+    const status = (await (await seeded.fetch(post('/status', { key: 'admin-view', limit, windowMs, now }))).json()) as {
+      count: number;
+      remaining: number;
+      oldestAt: number | null;
+    };
+    expect(status.count).toBe(2);
+    expect(status.remaining).toBe(98);
+    expect(status.oldestAt).toBe(now);
+
+    // /status must NOT append: a second read still shows count=2.
+    const status2 = (await (await seeded.fetch(post('/status', { key: 'admin-view', limit, windowMs, now }))).json()) as { count: number };
+    expect(status2.count).toBe(2);
+
+    // Unseen key: count=0, oldestAt=null.
+    const unseen = (await (await mkDo().fetch(post('/status', { key: 'never-seen', limit: 100, windowMs: 60_000, now: 1_000_000 }))).json()) as { count: number; oldestAt: number | null };
+    expect(unseen.count).toBe(0);
+    expect(unseen.oldestAt).toBeNull();
   });
 });

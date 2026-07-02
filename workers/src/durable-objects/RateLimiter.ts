@@ -28,6 +28,24 @@ interface CheckResponse {
   retryAfterMs: number;
 }
 
+interface StatusRequest {
+  key: string;
+  limit: number;
+  windowMs: number;
+  now: number; // injected so tests can use a deterministic clock
+}
+
+interface StatusResponse {
+  count: number;
+  limit: number;
+  windowMs: number;
+  remaining: number;
+  // Epoch-ms timestamp of the oldest request still inside the window, or
+  // null if the window is empty.  Exposed so admins can see when the next
+  // request would rotate out.
+  oldestAt: number | null;
+}
+
 export class RateLimiter {
   private readonly state: DurableObjectState;
 
@@ -46,6 +64,15 @@ export class RateLimiter {
         body.windowMs,
         body.now
       );
+      return Response.json(result);
+    }
+
+    // Read-only current state for a key — used by the admin visibility
+    // endpoint (issue #37 AC #4).  Does NOT append a timestamp; it only
+    // reports what `/check` would see given the current stored window.
+    if (url.pathname === '/status') {
+      const body = (await req.json()) as StatusRequest;
+      const result = await this.status(body.key, body.limit, body.windowMs, body.now);
       return Response.json(result);
     }
 
@@ -77,6 +104,27 @@ export class RateLimiter {
       limited: false,
       remaining: Math.max(0, limit - active.length),
       retryAfterMs: 0,
+    };
+  }
+
+  // Read-only view of the sliding window for admin visibility (#37 AC #4).
+  // Trims expired timestamps exactly like `/check` so the count reflects
+  // what the next `/check` would see, but does NOT append a new timestamp.
+  private async status(
+    key: string,
+    limit: number,
+    windowMs: number,
+    now: number
+  ): Promise<StatusResponse> {
+    const cutoff = now - windowMs;
+    const stored = (await this.state.storage.get<number[]>(key)) ?? [];
+    const active = stored.filter((t) => t > cutoff);
+    return {
+      count: active.length,
+      limit,
+      windowMs,
+      remaining: Math.max(0, limit - active.length),
+      oldestAt: active.length > 0 ? (active[0] as number) : null,
     };
   }
 }

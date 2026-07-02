@@ -11,11 +11,17 @@ import { generatePhoneHash } from '../models/encryption';
 //
 // AC compliance:
 //  - /health, /healthz, /ready bypass (BYPASS_PATHS).
-//  - 429 body shape `{ error: 'rate_limited', retry_after }` with
-//    `Retry-After` header in seconds.
+//  - 429 body shape `{ error: 'rate_limited', message, retry_after }` with
+//    a friendly `message` (issue #37 AC #2) and `Retry-After` header in
+//    seconds.
 //  - PII is never logged; the rate-limit key is hashed before logging.
 //  - Per-user key prefers `phone_hash` (set by sentAuth) over the raw
 //    `phone`, falling back to a hashed IP for non-webhook routes.
+
+// Issue #37 AC #2: friendly throttle message returned in the 429 body.
+// Em-dash and apostrophe are intentional; this is the user-facing copy.
+export const RATE_LIMIT_MESSAGE =
+  "I'm getting a lot of messages — give me a moment.";
 
 interface RateLimitConfig {
   readonly userLimit: number;
@@ -132,7 +138,11 @@ function respondRateLimited(
   const retryAfterSeconds = Math.ceil(retryAfterMs / 1000);
   logHit(c, scope, id, retryAfterSeconds);
   return c.json(
-    { error: 'rate_limited', retry_after: retryAfterSeconds },
+    {
+      error: 'rate_limited',
+      message: RATE_LIMIT_MESSAGE,
+      retry_after: retryAfterSeconds,
+    },
     429,
     { 'Retry-After': String(retryAfterSeconds) }
   );
