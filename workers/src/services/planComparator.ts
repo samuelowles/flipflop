@@ -301,53 +301,85 @@ export async function runComparison(
     }
   }
 
-  // 7. Store results in D1
-  const comparisonIds: string[] = [];
-  for (const item of finalResults) {
-    // Find matching plan ID from availablePlans
-    const matchedPlan = availablePlans.find(
-      p => p.retailerId === item.retailer_id && p.name === item.plan_name
-    );
+  // 7. Store ONE summary row per run (AC #73). The row carries the verdict
+  // (recommendation/reason) plus the recommended plan, not one row per
+  // candidate. The legacy per-plan columns are populated from the recommended
+  // plan so existing readers keep working.
+  const switchable = finalResults.filter(
+    item => item.recommendation === 'switch' && item.saving_cents > 0
+  );
+  const topSwitch = switchable.length > 0 ? switchable[0] : null;
 
-    if (!matchedPlan) continue;
+  // User-level verdict: switch iff a switchable plan exists, else stay_put.
+  const recommendation = topSwitch ? 'switch' as const : 'stay_put' as const;
 
-    const comparison = await createComparison(env.DB, {
+  // Recommended plan = the top switchable plan, else the current plan on stay.
+  const verdictItem = topSwitch ?? finalResults.find(
+    item => item.recommendation === 'stay_put'
+  ) ?? finalResults[0]!;
+
+  const matchedRecommended = availablePlans.find(
+    p => p.retailerId === verdictItem.retailer_id && p.name === verdictItem.plan_name
+  );
+  if (!matchedRecommended) {
+    console.log(JSON.stringify({
+      type: 'compare_skip',
       userId,
-      planId: matchedPlan.id,
-      billIdsJson: JSON.stringify(billSummaries.map(b => b.id)),
-      projectedCostCents: item.projected_cost_cents,
-      currentCostCents: item.current_cost_cents,
-      savingCents: item.saving_cents,
-      confidence: item.confidence,
-    });
-    comparisonIds.push(comparison.id);
+      reason: 'recommended plan not matchable',
+      timestamp: new Date().toISOString(),
+    }));
+    return null;
+  }
 
-    // 8. Enqueue notification only on a switch recommendation that clears the
-    // saving threshold. stay_put (any reason) must never trigger a switch nudge.
-    if (
-      item.recommendation === 'switch' &&
-      item.saving_cents > SAVING_THRESHOLD_CENTS
-    ) {
-      await env.NOTIFY_QUEUE.send({ userId, comparisonId: comparison.id });
-      console.log(JSON.stringify({
-        type: 'compare_enqueued_notification',
-        userId,
-        comparisonId: comparison.id,
-        savingCents: item.saving_cents,
-        timestamp: new Date().toISOString(),
-      }));
-    }
+  // reason is only set by Python on stay_put; carry it through when present.
+  const reason = verdictItem.reason ?? null;
+
+  const comparison = await createComparison(env.DB, {
+    userId,
+    // Legacy per-plan columns populated from the recommended plan.
+    planId: matchedRecommended.id,
+    billIdsJson: JSON.stringify(billSummaries.map(b => b.id)),
+    projectedCostCents: verdictItem.projected_cost_cents,
+    currentCostCents: verdictItem.current_cost_cents,
+    savingCents: verdictItem.saving_cents,
+    confidence: verdictItem.confidence,
+    // AC #73 summary columns.
+    billId: latestBill.id,
+    currentPlanId: currentPlan.id ?? null,
+    recommendedPlanId: matchedRecommended.id,
+    projectedAnnualCost: verdictItem.projected_cost_cents,
+    savings: verdictItem.saving_cents,
+    recommendation,
+    reason,
+  });
+
+  // 8. Enqueue notification only on a switch verdict that clears the saving
+  // threshold. stay_put (any reason) must never trigger a switch nudge.
+  if (
+    recommendation === 'switch' &&
+    topSwitch != null &&
+    topSwitch.saving_cents > SAVING_THRESHOLD_CENTS
+  ) {
+    await env.NOTIFY_QUEUE.send({ userId, comparisonId: comparison.id });
+    console.log(JSON.stringify({
+      type: 'compare_enqueued_notification',
+      userId,
+      comparisonId: comparison.id,
+      savingCents: topSwitch.saving_cents,
+      timestamp: new Date().toISOString(),
+    }));
   }
 
   console.log(JSON.stringify({
     type: 'compare_complete',
     userId,
     plansCompared: finalResults.length,
-    storedResults: comparisonIds.length,
+    recommendation,
+    comparisonId: comparison.id,
     timestamp: new Date().toISOString(),
   }));
 
-  return comparisonIds.length > 0 ? comparisonIds[0]! : null;
+  return comparison.id;
 }
 
 /**

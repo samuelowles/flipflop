@@ -8,6 +8,15 @@ export interface PlanComparison {
   readonly savingCents: number; // negative = saving, positive = more expensive
   readonly confidence: number;
   readonly comparedAt: string; // ISO 8601
+  // --- AC #73 summary fields (nullable: legacy rows + runs with no verdict) ---
+  readonly billId?: string | null; // bill that triggered this run
+  readonly currentPlanId?: string | null; // user's plan at compare time
+  readonly recommendedPlanId?: string | null; // top switchable plan, or current when stay_put
+  readonly projectedAnnualCost?: number | null; // integer cents NZD, recommended plan
+  readonly savings?: number | null; // integer cents NZD, signed (positive = saving)
+  readonly recommendation?: Recommendation | null; // 'switch' | 'stay_put'
+  readonly reason?: RecommendationReason | null; // present on stay_put
+  readonly computedAt?: string | null; // ISO 8601 — verdict timestamp
 }
 
 // ---------------------------------------------------------------------------
