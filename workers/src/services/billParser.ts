@@ -36,9 +36,16 @@ interface ParseEnv {
   readonly ENCRYPTION_KEY: string;
   readonly PYTHON_SERVICE_URL?: string;
   readonly PYTHON_SERVICE_AUTH_TOKEN?: string;
+  /**
+   * Bills whose parser confidence falls below this value are routed to manual
+   * review (status=needs_review) instead of auto-accepted. Tunable via env so
+   * the threshold can be adjusted without redeploying code. Issue #41.
+   */
+  readonly F1_HINT_CONFIDENCE_THRESHOLD?: string;
 }
 
-const CONFIDENCE_THRESHOLD = 0.6;
+/** Default confidence threshold when F1_HINT_CONFIDENCE_THRESHOLD is unset. */
+const DEFAULT_CONFIDENCE_THRESHOLD = 0.85;
 const VALID_METER_TYPES: readonly string[] = ['standard', 'low_user', 'day_night', 'controlled'];
 const PARSE_TIMEOUT_MS = 30_000;
 
@@ -140,12 +147,25 @@ export async function parseBill(
   return result;
 }
 
+/**
+ * Resolve the confidence threshold from env, falling back to the default when
+ * unset or non-numeric. Issue #41: threshold is configurable via
+ * F1_HINT_CONFIDENCE_THRESHOLD so it can be tuned without redeploying code.
+ */
+function resolveConfidenceThreshold(env: ParseEnv): number {
+  const raw = env.F1_HINT_CONFIDENCE_THRESHOLD;
+  if (raw === undefined || raw === '') return DEFAULT_CONFIDENCE_THRESHOLD;
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : DEFAULT_CONFIDENCE_THRESHOLD;
+}
+
 export async function handleParseJob(
   billId: string,
   r2Key: string,
   env: ParseEnv
 ): Promise<void> {
   const pythonUrl = env.PYTHON_SERVICE_URL ?? 'http://localhost:8000';
+  const confidenceThreshold = resolveConfidenceThreshold(env);
 
   // 1. Fetch bill from D1
   const bill = await getBillById(env.DB, billId);
@@ -198,7 +218,7 @@ export async function handleParseJob(
 
   // 5. Determine status from confidence
   const status: Extract<BillStatus, 'parsed' | 'needs_review'> =
-    parseResult.confidence >= CONFIDENCE_THRESHOLD ? 'parsed' : 'needs_review';
+    parseResult.confidence >= confidenceThreshold ? 'parsed' : 'needs_review';
 
   // 6. Update bill with parsed data (sets parsed_at via the model)
   await updateBillParsedData(env.DB, billId, {

@@ -264,6 +264,123 @@ describe('handleParseJob', () => {
     expect(mockCompareQueue.send).not.toHaveBeenCalled();
   });
 
+  it('should read the confidence threshold from env (override default)', async () => {
+    // Default is 0.85; env says 0.5, so confidence 0.6 is >= threshold → parsed.
+    const mockBill = {
+      id: 'bill-env',
+      userId: 'user-env',
+      retailerId: 'contact',
+      status: 'pending_parse',
+    };
+
+    const mockParsedResult = {
+      usage_kwh: 400,
+      total_cents: 10000,
+      confidence: 0.6,
+    };
+
+    const r2Body = new Uint8Array([10, 11]);
+    const r2Objects = new Map<string, R2Object>();
+    r2Objects.set('bills/env.pdf', createMockR2Object(r2Body.length, r2Body));
+
+    const mockCompareQueue = createMockQueue();
+
+    const mockDb = {
+      prepare: vi.fn().mockReturnValue({
+        bind: vi.fn().mockReturnValue({
+          first: vi.fn().mockResolvedValue({ phone: '+64210000000' }),
+        }),
+      }),
+    } as unknown as D1Database;
+
+    vi.mocked(getBillById).mockResolvedValue(mockBill as never);
+    vi.mocked(updateBillStatus).mockResolvedValue(undefined);
+    vi.mocked(updateBillParsedData).mockResolvedValue(undefined);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockParsedResult,
+    });
+
+    const env = {
+      DB: mockDb,
+      BILLS: createMockR2Bucket(r2Objects),
+      COMPARE_QUEUE: mockCompareQueue,
+      SENT_API_KEY: 'test-key',
+      ENCRYPTION_KEY: 'test-encryption-key',
+      PYTHON_SERVICE_URL: 'http://localhost:8000',
+      F1_HINT_CONFIDENCE_THRESHOLD: '0.5',
+    };
+
+    await handleParseJob('bill-env', 'bills/env.pdf', env);
+
+    // 0.6 >= 0.5 (env override) → parsed
+    expect(updateBillParsedData).toHaveBeenCalledWith(
+      mockDb,
+      'bill-env',
+      expect.objectContaining({ status: 'parsed', confidence: 0.6 })
+    );
+    expect(mockCompareQueue.send).toHaveBeenCalledTimes(1);
+  });
+
+  it('should fall back to default 0.85 when threshold env is unset', async () => {
+    // No F1_HINT_CONFIDENCE_THRESHOLD: default 0.85 applies, so 0.7 < 0.85 → needs_review.
+    const mockBill = {
+      id: 'bill-default',
+      userId: 'user-default',
+      retailerId: 'contact',
+      status: 'pending_parse',
+    };
+
+    const mockParsedResult = {
+      usage_kwh: 400,
+      total_cents: 10000,
+      confidence: 0.7,
+    };
+
+    const r2Body = new Uint8Array([12, 13]);
+    const r2Objects = new Map<string, R2Object>();
+    r2Objects.set('bills/default.pdf', createMockR2Object(r2Body.length, r2Body));
+
+    const mockCompareQueue = createMockQueue();
+
+    const mockDb = {
+      prepare: vi.fn().mockReturnValue({
+        bind: vi.fn().mockReturnValue({
+          first: vi.fn().mockResolvedValue({ phone: '+64211111111' }),
+        }),
+      }),
+    } as unknown as D1Database;
+
+    vi.mocked(getBillById).mockResolvedValue(mockBill as never);
+    vi.mocked(updateBillStatus).mockResolvedValue(undefined);
+    vi.mocked(updateBillParsedData).mockResolvedValue(undefined);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockParsedResult,
+    });
+
+    const env = {
+      DB: mockDb,
+      BILLS: createMockR2Bucket(r2Objects),
+      COMPARE_QUEUE: mockCompareQueue,
+      SENT_API_KEY: 'test-key',
+      ENCRYPTION_KEY: 'test-encryption-key',
+      PYTHON_SERVICE_URL: 'http://localhost:8000',
+    };
+
+    await handleParseJob('bill-default', 'bills/default.pdf', env);
+
+    // 0.7 < 0.85 (default) → needs_review
+    expect(updateBillParsedData).toHaveBeenCalledWith(
+      mockDb,
+      'bill-default',
+      expect.objectContaining({ status: 'needs_review', confidence: 0.7 })
+    );
+    expect(mockCompareQueue.send).not.toHaveBeenCalled();
+  });
+
   it('should handle missing bill gracefully', async () => {
     vi.mocked(getBillById).mockResolvedValue(null as never);
 
