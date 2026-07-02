@@ -47,7 +47,7 @@ binding = "BILLS"
 bucket_name = "flip-bills"
 
 [triggers]
-crons = ["0 3 * * *", "0 6 * * *", "0 14 * * *"]
+crons = ["0 3 * * *", "0 6 * * *", "0 8 * * *", "0 14 * * *"]
 
 [vars]
 ENVIRONMENT = "development"
