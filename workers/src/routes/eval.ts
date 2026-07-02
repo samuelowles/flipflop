@@ -642,6 +642,7 @@ export async function evalUploadHandler(c: Context): Promise<Response> {
     // 4. Parse bill via Python
     const parseResult = await parseBill(
       pdfBuffer,
+      userId,
       '', // empty retailer_id triggers GenericParser auto-detection
       pythonUrl,
       env.PYTHON_SERVICE_AUTH_TOKEN

@@ -52,6 +52,8 @@ function makeLatestBill(): Bill {
     parsedJson: null,
     source: 'whatsapp',
     sourceMessageId: null,
+    errorCode: null,
+    parsedAt: null,
     createdAt: '2026-05-01T00:00:00+12:00',
   };
 }

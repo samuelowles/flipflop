@@ -396,6 +396,8 @@ describe('pollAllUsers', () => {
       parsedJson: null,
       source: 'gmail',
       sourceMessageId: null,
+      errorCode: null,
+      parsedAt: null,
       createdAt: new Date().toISOString(),
     });
 
@@ -1037,6 +1039,8 @@ describe('pollSingleUser', () => {
       parsedJson: null,
       source: 'gmail',
       sourceMessageId: null,
+      errorCode: null,
+      parsedAt: null,
       createdAt: new Date().toISOString(),
     });
 

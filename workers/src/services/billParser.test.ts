@@ -76,27 +76,46 @@ describe('parseBill', () => {
       json: async () => mockResponse,
     });
 
-    const result = await parseBill(new Uint8Array([0, 1, 2]).buffer, 'contact', 'http://localhost:8000');
+    const result = await parseBill(new Uint8Array([0, 1, 2]).buffer, 'user-1', 'contact', 'http://localhost:8000');
 
     expect(result.confidence).toBe(0.92);
     expect(result.usage_kwh).toBe(500);
-    expect(fetch).toHaveBeenCalledWith(
-      'http://localhost:8000/parse',
-      expect.objectContaining({
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-      })
-    );
+    // AC: forwards user_id + retailer hint in the payload
+    const callArgs = vi.mocked(globalThis.fetch).mock.calls[0]!;
+    const body = JSON.parse(callArgs[1]!.body as string);
+    expect(body.user_id).toBe('user-1');
+    expect(body.retailer_id).toBe('contact');
   });
 
-  it('should throw on non-OK response', async () => {
+  it('should classify 5xx as transient (retryable) ParseError', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 502 });
+
+    await expect(parseBill(new Uint8Array([0]).buffer, 'user-1', 'contact', 'http://localhost:8000'))
+      .rejects.toMatchObject({ errorCode: 'python_502', transient: true });
+  });
+
+  it('should classify 4xx as terminal (non-retryable) ParseError', async () => {
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 422 });
+
+    await expect(parseBill(new Uint8Array([0]).buffer, 'user-1', 'contact', 'http://localhost:8000'))
+      .rejects.toMatchObject({ errorCode: 'python_422', transient: false });
+  });
+
+  it('should classify network/abort errors as transient', async () => {
+    globalThis.fetch = vi.fn().mockRejectedValue(new DOMException('aborted', 'AbortError'));
+
+    await expect(parseBill(new Uint8Array([0]).buffer, 'user-1', 'contact', 'http://localhost:8000'))
+      .rejects.toMatchObject({ errorCode: 'parse_timeout', transient: true });
+  });
+
+  it('should throw terminal extract_failed when parser returns an error field', async () => {
     globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 500,
+      ok: true,
+      json: async () => ({ confidence: 0, error: 'unable to extract text' }),
     });
 
-    await expect(parseBill(new Uint8Array([0, 1, 2]).buffer, 'contact', 'http://localhost:8000'))
-      .rejects.toThrow('Python parse service returned 500');
+    await expect(parseBill(new Uint8Array([0]).buffer, 'user-1', 'contact', 'http://localhost:8000'))
+      .rejects.toMatchObject({ errorCode: 'extract_failed', transient: false });
   });
 });
 
@@ -161,6 +180,7 @@ describe('handleParseJob', () => {
     await handleParseJob('bill123', 'bills/test.pdf', env);
 
     expect(updateBillStatus).toHaveBeenCalledWith(mockDb, 'bill123', 'parsing');
+    // AC: writes parsed data + status=parsed (parsed_at is set inside the model)
     expect(updateBillParsedData).toHaveBeenCalledWith(
       mockDb,
       'bill123',
@@ -261,7 +281,7 @@ describe('handleParseJob', () => {
     expect(updateBillStatus).not.toHaveBeenCalled();
   });
 
-  it('should handle Python service error', async () => {
+  it('should throw transient ParseError on Python 5xx (retryable by queue)', async () => {
     const mockBill = {
       id: 'bill789',
       userId: 'user789',
@@ -278,10 +298,7 @@ describe('handleParseJob', () => {
     vi.mocked(getBillById).mockResolvedValue(mockBill as never);
     vi.mocked(updateBillStatus).mockResolvedValue(undefined);
 
-    globalThis.fetch = vi.fn().mockResolvedValue({
-      ok: false,
-      status: 502,
-    });
+    globalThis.fetch = vi.fn().mockResolvedValue({ ok: false, status: 502 });
 
     const env = {
       DB: mockDb,
@@ -292,9 +309,37 @@ describe('handleParseJob', () => {
       PYTHON_SERVICE_URL: 'http://localhost:8000',
     };
 
-    // This should throw since the error occurs after status is set to parsing
-    // In the real queue consumer, errors are caught and messages are acked
+    // The queue consumer catches this, inspects .transient, and retries.
     await expect(handleParseJob('bill789', 'bills/test3.pdf', env))
-      .rejects.toThrow();
+      .rejects.toMatchObject({ errorCode: 'python_502', transient: true });
+  });
+
+  it('should throw terminal ParseError (no_media) when R2 object is missing', async () => {
+    const mockBill = {
+      id: 'bill000',
+      userId: 'user000',
+      retailerId: 'contact',
+      status: 'pending_parse',
+    };
+
+    // Empty R2 bucket — object not found
+    const r2Objects = new Map<string, R2Object>();
+    const mockDb = {} as D1Database;
+
+    vi.mocked(getBillById).mockResolvedValue(mockBill as never);
+    vi.mocked(updateBillStatus).mockResolvedValue(undefined);
+
+    const env = {
+      DB: mockDb,
+      BILLS: createMockR2Bucket(r2Objects),
+      COMPARE_QUEUE: createMockQueue(),
+      SENT_API_KEY: 'test-key',
+      ENCRYPTION_KEY: 'test-encryption-key',
+      PYTHON_SERVICE_URL: 'http://localhost:8000',
+    };
+
+    // Terminal: the queue consumer will mark the bill failed + ack immediately.
+    await expect(handleParseJob('bill000', 'bills/missing.pdf', env))
+      .rejects.toMatchObject({ errorCode: 'no_media', transient: false });
   });
 });

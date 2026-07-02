@@ -1,4 +1,4 @@
-export type BillStatus = 'pending_parse' | 'parsing' | 'parsed' | 'needs_review';
+export type BillStatus = 'pending_parse' | 'parsing' | 'parsed' | 'needs_review' | 'failed';
 export type BillSource = 'whatsapp' | 'sms' | 'gmail' | 'outlook' | 'web';
 export type MeterType = 'standard' | 'low_user' | 'day_night' | 'controlled';
 
@@ -23,6 +23,8 @@ export interface Bill {
   readonly parsedJson: string | null;
   readonly source: BillSource | null;
   readonly sourceMessageId: string | null;
+  readonly errorCode: string | null; // short no-PII code (Issue #39)
+  readonly parsedAt: string | null; // ISO 8601 — set when parse completes
   readonly createdAt: string; // ISO 8601
 }
 

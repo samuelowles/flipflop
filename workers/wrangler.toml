@@ -28,6 +28,9 @@ queue = "flip-notify-queue"
 queue = "flip-parse-queue"
 max_batch_size = 1
 max_concurrency = 3
+max_retries = 3
+retry_delay = 30
+dead_letter_queue = "flip-parse-dlq"
 
 [[queues.consumers]]
 queue = "flip-compare-queue"

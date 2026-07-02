@@ -7,6 +7,7 @@ import type { BillStatus, MeterType } from '../types/bill';
 
 interface ParseServiceRequest {
   readonly file_bytes: string;
+  readonly user_id: string;
   readonly retailer_id: string;
 }
 
@@ -39,6 +40,7 @@ interface ParseEnv {
 
 const CONFIDENCE_THRESHOLD = 0.6;
 const VALID_METER_TYPES: readonly string[] = ['standard', 'low_user', 'day_night', 'controlled'];
+const PARSE_TIMEOUT_MS = 30_000;
 
 function validateMeterType(raw: string | undefined): MeterType | undefined {
   if (!raw) return undefined;
@@ -46,8 +48,33 @@ function validateMeterType(raw: string | undefined): MeterType | undefined {
   return VALID_METER_TYPES.includes(normalized) ? (normalized as MeterType) : undefined;
 }
 
+/**
+ * Error thrown by parseBill. Carries a short no-PII error_code for the bills
+ * table and a `transient` flag: transient errors (5xx, network, timeout) are
+ * retryable by the queue consumer; terminal errors (4xx, extract_failed,
+ * no_media) are not. Issue #39.
+ */
+export class ParseError extends Error {
+  readonly errorCode: string;
+  readonly transient: boolean;
+
+  constructor(errorCode: string, message: string, transient: boolean) {
+    super(message);
+    this.name = 'ParseError';
+    this.errorCode = errorCode;
+    this.transient = transient;
+  }
+}
+
+/**
+ * Single-shot POST to the Python /parse endpoint. Retries are handled at the
+ * queue-consumer level (Cloudflare Queues max_retries + DLQ), so this function
+ * does NOT retry internally — it classifies the failure and throws ParseError.
+ * Forwards user_id (for the parser's per-user context) and retailer_id hint.
+ */
 export async function parseBill(
   fileBytes: ArrayBuffer,
+  userId: string,
   retailerId: string,
   pythonServiceUrl: string,
   authToken?: string
@@ -59,70 +86,58 @@ export async function parseBill(
   }
   const base64String = btoa(binary);
 
-  const body: ParseServiceRequest = { file_bytes: base64String, retailer_id: retailerId };
+  const body: ParseServiceRequest = {
+    file_bytes: base64String,
+    user_id: userId,
+    retailer_id: retailerId,
+  };
 
   const headers: Record<string, string> = { 'Content-Type': 'application/json' };
   if (authToken) {
     headers['Authorization'] = `Bearer ${authToken}`;
   }
 
-  const maxAttempts = 2;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), PARSE_TIMEOUT_MS);
 
-  for (let attempt = 0; attempt < maxAttempts; attempt++) {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
+  let response: Response;
+  try {
+    response = await fetch(`${pythonServiceUrl}/parse`, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (err) {
+    clearTimeout(timeoutId);
+    // Network failure, DNS, or abort (timeout) — transient, retryable.
+    const isAbort = err instanceof DOMException && err.name === 'AbortError';
+    throw new ParseError(
+      isAbort ? 'parse_timeout' : 'python_network',
+      isAbort ? 'Python /parse timed out' : `Python /parse network error: ${err instanceof Error ? err.message : String(err)}`,
+      true
+    );
+  }
+  clearTimeout(timeoutId);
 
-    try {
-      const response = await fetch(`${pythonServiceUrl}/parse`, {
-        method: 'POST',
-        headers,
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        // 4xx — do NOT retry, throw immediately
-        if (response.status >= 400 && response.status < 500) {
-          throw new Error(`Python parse service returned ${response.status}`);
-        }
-        // 5xx — retry once with 1s backoff
-        if (attempt === 0) {
-          console.log(JSON.stringify({
-            type: 'parse_retry',
-            status: response.status,
-            attempt,
-            timestamp: new Date().toISOString(),
-          }));
-          await new Promise(resolve => setTimeout(resolve, 1000));
-          continue;
-        }
-        throw new Error(`Python parse service returned ${response.status}`);
-      }
-
-      return response.json() as Promise<ParseServiceResponse>;
-    } catch (err) {
-      clearTimeout(timeoutId);
-
-      // Network error, timeout, or other transient failure on first attempt — retry once
-      if (attempt === 0) {
-        console.log(JSON.stringify({
-          type: 'parse_retry',
-          error: err instanceof Error ? err.message : String(err),
-          attempt,
-          timestamp: new Date().toISOString(),
-        }));
-        await new Promise(resolve => setTimeout(resolve, 1000));
-        continue;
-      }
-
-      throw err;
-    }
+  if (!response.ok) {
+    const transient = response.status >= 500;
+    const code = transient ? `python_${response.status}` : `python_${response.status}`;
+    throw new ParseError(
+      code,
+      `Python parse service returned ${response.status}`,
+      transient
+    );
   }
 
-  // Unreachable — either returned from try or threw from catch
-  throw new Error('parseBill: exhausted retries');
+  const result = await response.json() as ParseServiceResponse;
+
+  // Parser returned a response but flagged an extraction failure — terminal.
+  if (result.error) {
+    throw new ParseError('extract_failed', `Parse error: ${result.error}`, false);
+  }
+
+  return result;
 }
 
 export async function handleParseJob(
@@ -158,7 +173,8 @@ export async function handleParseJob(
   // 3. Download raw PDF from R2
   const r2Object = await env.BILLS.get(r2Key);
   if (!r2Object) {
-    throw new Error(`R2 object not found: ${r2Key}`);
+    // No media to parse — terminal failure, not retryable.
+    throw new ParseError('no_media', `R2 object not found: ${r2Key}`, false);
   }
 
   console.log(JSON.stringify({
@@ -169,20 +185,22 @@ export async function handleParseJob(
     timestamp: new Date().toISOString(),
   }));
 
-  // 4. Get file bytes and POST to Python /parse endpoint
+  // 4. Get file bytes and POST to Python /parse endpoint (single-shot).
+  //    Forwards user_id and retailer hint. Throws ParseError on failure.
   const fileBytes = await r2Object.arrayBuffer();
-  const parseResult = await parseBill(fileBytes, bill.retailerId ?? '', pythonUrl, env.PYTHON_SERVICE_AUTH_TOKEN);
+  const parseResult = await parseBill(
+    fileBytes,
+    bill.userId,
+    bill.retailerId ?? '',
+    pythonUrl,
+    env.PYTHON_SERVICE_AUTH_TOKEN
+  );
 
-  // 5. Handle parser-level errors
-  if (parseResult.error) {
-    throw new Error(`Parse error: ${parseResult.error}`);
-  }
-
-  // 6. Determine status from confidence
+  // 5. Determine status from confidence
   const status: Extract<BillStatus, 'parsed' | 'needs_review'> =
     parseResult.confidence >= CONFIDENCE_THRESHOLD ? 'parsed' : 'needs_review';
 
-  // 7. Update bill with parsed data
+  // 6. Update bill with parsed data (sets parsed_at via the model)
   await updateBillParsedData(env.DB, billId, {
     retailerId: parseResult.retailer_id ?? bill.retailerId ?? undefined,
     planName: parseResult.plan_name,
@@ -201,7 +219,7 @@ export async function handleParseJob(
     status,
   });
 
-  // 8. Enqueue comparison if confidence is good
+  // 7. Enqueue comparison if confidence is good
   if (status === 'parsed') {
     await env.COMPARE_QUEUE.send({ userId: bill.userId, billId });
 
@@ -213,7 +231,7 @@ export async function handleParseJob(
     }));
   }
 
-  // 9. Send confirmation message to user (Epic #2 #42: bill_received template)
+  // 8. Send confirmation message to user (Epic #2 #42: bill_received template)
   const user = await getUserById(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId);
   const phone = user?.phone ?? null;
   if (phone) {
@@ -245,7 +263,7 @@ export async function handleParseJob(
     );
   }
 
-  // 10. Log completion
+  // 9. Log completion
   console.log(JSON.stringify({
     type: 'parse_complete',
     billId,

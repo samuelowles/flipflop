@@ -26,6 +26,8 @@ function rowToBill(row: Record<string, unknown>): Bill {
     parsedJson: row.parsed_json as string | null,
     source: row.source as Bill['source'],
     sourceMessageId: row.source_message_id as string | null,
+    errorCode: row.error_code as string | null,
+    parsedAt: row.parsed_at as string | null,
     createdAt: row.created_at as string,
   };
 }
@@ -119,7 +121,7 @@ export async function updateBillParsedData(
   id: string,
   data: UpdateBillParsedData
 ): Promise<void> {
-  const _now = new Date().toISOString();
+  const now = new Date().toISOString();
 
   const stmt = db.prepare(
     `UPDATE bills SET
@@ -137,8 +139,9 @@ export async function updateBillParsedData(
       break_fee_cents = ?12,
       confidence = ?13,
       parsed_json = ?14,
-      status = ?15
-     WHERE id = ?16`
+      status = ?15,
+      parsed_at = ?16
+     WHERE id = ?17`
   );
 
   await stmt
@@ -158,7 +161,24 @@ export async function updateBillParsedData(
       data.confidence ?? null,
       data.parsedJson ?? null,
       data.status,
+      now,
       id
     )
     .run();
+}
+
+/**
+ * Mark a bill as terminally failed with a short no-PII error code.
+ * Used by the parse queue consumer when retries are exhausted or a terminal
+ * parse error occurs (4xx, extract_failed, no_media). Issue #39.
+ */
+export async function updateBillFailed(
+  db: D1Database,
+  id: string,
+  errorCode: string
+): Promise<void> {
+  const stmt = db.prepare(
+    `UPDATE bills SET status = 'failed', error_code = ?1 WHERE id = ?2`
+  );
+  await stmt.bind(errorCode, id).run();
 }
