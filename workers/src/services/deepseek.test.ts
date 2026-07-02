@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { classifyIntent, disambiguate } from './deepseek';
+import { classifyIntent, disambiguate, classifyWithEscalation } from './deepseek';
 
 // Mock global fetch
 const mockFetch = vi.fn();
@@ -340,6 +340,155 @@ describe('disambiguate (DeepSeek Pro)', () => {
 
     expect(llmLog).toBeDefined();
     expect(llmLog!.model).toBe('pro');
+    spy.mockRestore();
+  });
+});
+
+describe('classifyWithEscalation (Flash→Pro orchestrator)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  it('does NOT escalate for high-confidence simple intents (no Pro call)', async () => {
+    // Flash returns confidence >= 0.85, multiTurn not set → return Flash result,
+    // Pro fetch must never happen.
+    mockFetch.mockResolvedValue(mockDeepSeekResponse('help', 0.98));
+
+    const result = await classifyWithEscalation('what can you do', 'test-api-key');
+
+    expect(result.intent).toBe('help');
+    expect(result.confidence).toBe(0.98);
+    // Exactly one fetch: the Flash call. No Pro escalation.
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    // And the single call used the Flash model.
+    const call = mockFetch.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(call[1].body as string) as { model: string };
+    expect(body.model).toBe('deepseek-chat');
+  });
+
+  it('escalates to Pro when Flash confidence < 0.85 (exactly one Pro call)', async () => {
+    // First call: Flash, low confidence. Second call: Pro, higher confidence.
+    mockFetch
+      .mockResolvedValueOnce(mockDeepSeekResponse('compare', 0.72))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  intent: 'compare',
+                  confidence: 0.9,
+                  clarification: 'compare plans?',
+                  entities: {},
+                }),
+              },
+            },
+          ],
+        }),
+      } as unknown as Response);
+
+    const result = await classifyWithEscalation('is genesis any good', 'test-api-key');
+
+    // Two calls: Flash then Pro.
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const proCall = mockFetch.mock.calls[1] as [string, RequestInit];
+    const proBody = JSON.parse(proCall[1].body as string) as { model: string };
+    expect(proBody.model).toBe('deepseek-reasoner');
+    // Result reflects Pro's output (intent + higher confidence), clarification stripped.
+    expect(result.intent).toBe('compare');
+    expect(result.confidence).toBe(0.9);
+    expect(result.needsDisambiguation).toBe(false);
+  });
+
+  it('escalates when multiTurn=true even if Flash confidence is high', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockDeepSeekResponse('compare', 0.95))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({ intent: 'compare', confidence: 0.93, entities: {} }),
+              },
+            },
+          ],
+        }),
+      } as unknown as Response);
+
+    const result = await classifyWithEscalation('compare', 'test-api-key', { multiTurn: true });
+
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    const proBody = JSON.parse(
+      (mockFetch.mock.calls[1] as [string, RequestInit])[1].body as string
+    ) as { model: string };
+    expect(proBody.model).toBe('deepseek-reasoner');
+    expect(result.confidence).toBe(0.93);
+  });
+
+  it('Pro call is bounded by the 3s ceiling (PRO_TIMEOUT_MS) and aborts to a safe fallback', async () => {
+    // Assert the literal 3s ceiling by spying on setTimeout during the Pro
+    // call, then assert an aborted Pro returns a safe fallback rather than
+    // throwing/hanging. Flash succeeds low-confidence → triggers escalation.
+    mockFetch
+      .mockResolvedValueOnce(mockDeepSeekResponse('compare', 0.6))
+      .mockRejectedValueOnce(new DOMException('aborted', 'AbortError'));
+
+    const timerSpy = vi.spyOn(globalThis, 'setTimeout');
+    const result = await classifyWithEscalation('hmm not sure', 'test-api-key');
+
+    // Pro latency ceiling: exactly one setTimeout was scheduled with 3000ms
+    // (the Flash call's 500ms timeout is cleared before the Pro call, and
+    // disambiguate schedules its own PRO_TIMEOUT_MS=3000 abort).
+    const proTimeouts = timerSpy.mock.calls
+      .map((c) => c[1] as number)
+      .filter((ms) => ms === 3000);
+    expect(proTimeouts.length).toBe(1);
+    timerSpy.mockRestore();
+
+    // Two calls: Flash then Pro.
+    expect(mockFetch).toHaveBeenCalledTimes(2);
+    // Safe fallback, no throw.
+    expect(result.intent).toBe('unknown');
+    expect(result.confidence).toBe(0);
+    expect(result.needsDisambiguation).toBe(true);
+  });
+
+  it('Pro escalation is logged with model=pro', async () => {
+    mockFetch
+      .mockResolvedValueOnce(mockDeepSeekResponse('compare', 0.7))
+      .mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({ intent: 'compare', confidence: 0.88, entities: {} }),
+              },
+            },
+          ],
+        }),
+      } as unknown as Response);
+
+    const spy = vi.spyOn(console, 'log');
+    await classifyWithEscalation('is it better', 'test-api-key');
+
+    const logCalls = spy.mock.calls
+      .map((c) => {
+        try {
+          return JSON.parse(c[0] as string);
+        } catch {
+          return null;
+        }
+      });
+    const proLogs = logCalls.filter(
+      (l): l is Record<string, unknown> =>
+        l !== null && (l as Record<string, unknown>).type === 'llm_call' &&
+        (l as Record<string, unknown>).model === 'pro'
+    );
+
+    expect(proLogs.length).toBe(1);
     spy.mockRestore();
   });
 });
