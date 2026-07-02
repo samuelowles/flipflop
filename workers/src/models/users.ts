@@ -267,6 +267,32 @@ export async function deleteUser(
 }
 
 /**
+ * Issue #126 — read a user's configured notification threshold (cents).
+ * Returns the per-user value, defaulting to DEFAULT_NOTIFICATION_THRESHOLD_CENTS
+ * when the user or column is missing/unset.
+ *
+ * Reuses getUserById rather than issuing a dedicated query — the notifier
+ * already needs the full user row (for phone) and the threshold is one column.
+ */
+export const DEFAULT_NOTIFICATION_THRESHOLD_CENTS = 5000;
+
+export async function getNotificationThreshold(
+  db: D1Database,
+  env: EncryptionEnv,
+  userId: string
+): Promise<number> {
+  const user = await getUserById(db, env, userId);
+  if (!user) return DEFAULT_NOTIFICATION_THRESHOLD_CENTS;
+  const threshold = user.notificationThresholdCents;
+  // ponytail: guard against a non-positive / NaN value slipping through;
+  // schema default is 5000 but defend at the boundary where we read it.
+  if (!Number.isFinite(threshold) || threshold <= 0) {
+    return DEFAULT_NOTIFICATION_THRESHOLD_CENTS;
+  }
+  return threshold;
+}
+
+/**
  * Issue #75 — return just the IDs of users whose current retailer matches.
  * Used by the plan-diff consumer to find who to re-compare when a retailer's
  * plans change. Returns IDs only (no PII decryption needed; the caller only
