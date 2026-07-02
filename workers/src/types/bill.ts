@@ -22,6 +22,7 @@ export interface Bill {
   readonly rawR2Key: string | null;
   readonly parsedJson: string | null;
   readonly source: BillSource | null;
+  readonly sourceMessageId: string | null;
   readonly createdAt: string; // ISO 8601
 }
 
@@ -30,6 +31,7 @@ export interface CreateBillInput {
   readonly rawR2Key: string;
   readonly source?: BillSource;
   readonly retailerId?: string;
+  readonly sourceMessageId?: string;
 }
 
 export interface UpdateBillParsedData {

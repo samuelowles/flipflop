@@ -98,6 +98,12 @@ function createTestEnv(options: {
         if (sql.includes('SELECT * FROM bills WHERE id')) {
           return Promise.resolve((billsById.get(boundArgs[0] as string) ?? null) as T | null);
         }
+        if (sql.includes('SELECT * FROM bills WHERE source_message_id')) {
+          const found = Array.from(billsById.values()).find(
+            (b) => b.source_message_id === (boundArgs[0] as string)
+          );
+          return Promise.resolve((found ?? null) as T | null);
+        }
         return Promise.resolve(null);
       },
       run: () => {
@@ -126,10 +132,11 @@ function createTestEnv(options: {
           messagesById.set(id as string, row);
         }
         if (sql.includes('INSERT INTO bills')) {
-          const [id, userId, retailerId, rawR2Key, source, created] = boundArgs;
+          const [id, userId, retailerId, rawR2Key, source, sourceMessageId, created] = boundArgs;
           const row: Record<string, unknown> = {
             id, user_id: userId, retailer_id: retailerId ?? null,
             raw_r2_key: rawR2Key, source: source ?? null,
+            source_message_id: sourceMessageId ?? null,
             status: 'pending_parse', created_at: created,
           };
           billsById.set(id as string, row);
@@ -152,8 +159,17 @@ function createTestEnv(options: {
     getWithMetadata: (key: string) => Promise.resolve({ value: kvStore.get(key) ?? null, metadata: null }),
   } as unknown as KVNamespace;
 
-  const mockBills = { put: () => Promise.resolve({} as R2Object), get: () => Promise.resolve(null) } as unknown as R2Bucket;
-  const mockParseQueue = { send: () => Promise.resolve(), sendBatch: () => Promise.resolve() } as unknown as Queue<{ billId: string; r2Key: string }>;
+  let r2PutCount = 0;
+  let queueSendCount = 0;
+  const r2Keys: string[] = [];
+  const mockBills = {
+    put: (key: string) => { r2PutCount++; r2Keys.push(key); return Promise.resolve({} as R2Object); },
+    get: () => Promise.resolve(null),
+  } as unknown as R2Bucket;
+  const mockParseQueue = {
+    send: () => { queueSendCount++; return Promise.resolve(); },
+    sendBatch: () => Promise.resolve(),
+  } as unknown as Queue<{ billId: string; r2Key: string }>;
 
   return {
     SENT_API_KEY: 'test-sent-key',
@@ -164,6 +180,7 @@ function createTestEnv(options: {
     KV: mockKV,
     BILLS: mockBills,
     PARSE_QUEUE: mockParseQueue,
+    _counts: { r2Put: () => r2PutCount, queueSend: () => queueSendCount, r2Keys: () => [...r2Keys] },
     ...(options.envOverrides ?? {}),
   };
 }
@@ -463,5 +480,141 @@ describe('POST /webhook/messaging — integration (issue #22)', () => {
     expect(res.status).toBe(200);
     const payload = (await res.json()) as { status: string };
     expect(payload.status).toBe('ok');
+  });
+});
+
+// Issue #38 — bill dispatch idempotency + R2 key format + PDF/photo/duplicate.
+describe('POST /webhook/messaging — bill dispatch (issue #38)', () => {
+  beforeEach(() => {
+    mockFetch.mockReset();
+  });
+
+  function mediaFetchMock() {
+    mockFetch.mockImplementation(async (url: string) => {
+      if ((url as string).includes('cdn.sent.dm'))
+        return { ok: true, arrayBuffer: async () => new ArrayBuffer(8) } as unknown as Response;
+      if ((url as string).includes('sent.dm')) return mockSentResponse('resp_bill');
+      return new Response('{}', { status: 200 });
+    });
+  }
+
+  it('uploads PDF media to R2 with bills/{user_id}/{uuid}.pdf key and enqueues', async () => {
+    mediaFetchMock();
+
+    const existingPhone = '+6421888777666';
+    const existingRow = makeUserRow({ id: 'usr-bill-pdf', phone: existingPhone });
+    const app = createTestApp();
+    const env = createTestEnv({ existingPhone, existingUserRow: existingRow });
+
+    const res = await app.request('/webhook/messaging', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'msg_pdf_001',
+        from: existingPhone,
+        media: { url: 'https://cdn.sent.dm/bill.pdf', type: 'pdf' },
+        channel: 'whatsapp',
+        timestamp: '2026-07-02T09:00:00+12:00',
+      }),
+    }, env);
+
+    expect(res.status).toBe(200);
+    const counts = (env as unknown as { _counts: { r2Put: () => number; queueSend: () => number; r2Keys: () => string[] } })._counts;
+    expect(counts.r2Put()).toBe(1);
+    expect(counts.queueSend()).toBe(1);
+    const key = counts.r2Keys()[0];
+    expect(key).toMatch(/^bills\/usr-bill-pdf\/[0-9a-f-]{36}\.pdf$/);
+  });
+
+  it('uploads photo media to R2 with .jpg extension and enqueues', async () => {
+    mediaFetchMock();
+
+    const existingPhone = '+6421888777666';
+    const existingRow = makeUserRow({ id: 'usr-bill-jpg', phone: existingPhone });
+    const app = createTestApp();
+    const env = createTestEnv({ existingPhone, existingUserRow: existingRow });
+
+    const res = await app.request('/webhook/messaging', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'msg_photo_001',
+        from: existingPhone,
+        media: { url: 'https://cdn.sent.dm/bill.jpg', type: 'image' },
+        channel: 'sms',
+        timestamp: '2026-07-02T09:05:00+12:00',
+      }),
+    }, env);
+
+    expect(res.status).toBe(200);
+    const counts = (env as unknown as { _counts: { r2Put: () => number; queueSend: () => number; r2Keys: () => string[] } })._counts;
+    expect(counts.r2Put()).toBe(1);
+    expect(counts.queueSend()).toBe(1);
+    expect(counts.r2Keys()[0]).toMatch(/^bills\/usr-bill-jpg\/[0-9a-f-]{36}\.jpg$/);
+  });
+
+  it('duplicate Sent message_id is a no-op: no second R2 put or queue send', async () => {
+    mediaFetchMock();
+
+    const existingPhone = '+6421888777666';
+    const existingRow = makeUserRow({ id: 'usr-bill-dup', phone: existingPhone });
+    const app = createTestApp();
+    const env = createTestEnv({ existingPhone, existingUserRow: existingRow });
+
+    const requestBody = JSON.stringify({
+      id: 'msg_dup_001',
+      from: existingPhone,
+      media: { url: 'https://cdn.sent.dm/bill.pdf', type: 'pdf' },
+      channel: 'whatsapp',
+      timestamp: '2026-07-02T09:10:00+12:00',
+    });
+
+    const first = await app.request('/webhook/messaging', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: requestBody,
+    }, env);
+    expect(first.status).toBe(200);
+
+    const counts = (env as unknown as { _counts: { r2Put: () => number; queueSend: () => number; r2Keys: () => string[] } })._counts;
+    const putsAfterFirst = counts.r2Put();
+    const sendsAfterFirst = counts.queueSend();
+    expect(putsAfterFirst).toBe(1);
+    expect(sendsAfterFirst).toBe(1);
+
+    // Redelivery of the same Sent message_id — must be idempotent.
+    const second = await app.request('/webhook/messaging', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: requestBody,
+    }, env);
+
+    expect(second.status).toBe(200);
+    const secondBody = (await second.json()) as { status: string; duplicate?: boolean };
+    expect(secondBody.duplicate).toBe(true);
+    expect(counts.r2Put()).toBe(putsAfterFirst);   // no additional R2 put
+    expect(counts.queueSend()).toBe(sendsAfterFirst); // no additional enqueue
+  });
+
+  it('returns 200 well within 2s latency target', async () => {
+    mediaFetchMock();
+
+    const existingPhone = '+6421888777666';
+    const existingRow = makeUserRow({ id: 'usr-bill-lat', phone: existingPhone });
+    const app = createTestApp();
+    const env = createTestEnv({ existingPhone, existingUserRow: existingRow });
+
+    const start = Date.now();
+    const res = await app.request('/webhook/messaging', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id: 'msg_lat_001',
+        from: existingPhone,
+        media: { url: 'https://cdn.sent.dm/bill.pdf', type: 'pdf' },
+        channel: 'whatsapp',
+        timestamp: '2026-07-02T09:15:00+12:00',
+      }),
+    }, env);
+    const latency = Date.now() - start;
+
+    expect(res.status).toBe(200);
+    expect(latency).toBeLessThan(2000);
   });
 });

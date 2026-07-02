@@ -25,6 +25,7 @@ function rowToBill(row: Record<string, unknown>): Bill {
     rawR2Key: row.raw_r2_key as string | null,
     parsedJson: row.parsed_json as string | null,
     source: row.source as Bill['source'],
+    sourceMessageId: row.source_message_id as string | null,
     createdAt: row.created_at as string,
   };
 }
@@ -40,12 +41,12 @@ export async function createBill(
   const now = new Date().toISOString();
 
   const stmt = db.prepare(
-    `INSERT INTO bills (id, user_id, retailer_id, raw_r2_key, source, status, created_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, 'pending_parse', ?6)`
+    `INSERT INTO bills (id, user_id, retailer_id, raw_r2_key, source, status, source_message_id, created_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, 'pending_parse', ?6, ?7)`
   );
 
   await stmt
-    .bind(id, input.userId, input.retailerId ?? null, input.rawR2Key, input.source ?? null, now)
+    .bind(id, input.userId, input.retailerId ?? null, input.rawR2Key, input.source ?? null, input.sourceMessageId ?? null, now)
     .run();
 
   const bill = await getBillById(db, id);
@@ -62,6 +63,22 @@ export async function getBillById(
 ): Promise<Bill | null> {
   const stmt = db.prepare('SELECT * FROM bills WHERE id = ?1');
   const result = await stmt.bind(id).first<Record<string, unknown>>();
+
+  if (!result) return null;
+  return rowToBill(result);
+}
+
+/**
+ * Get a bill by the inbound Sent message id that triggered it.
+ * Used for idempotent dispatch: if a bill exists for this message_id,
+ * the webhook has already been processed and must not re-enqueue.
+ */
+export async function getBillBySourceMessageId(
+  db: D1Database,
+  sourceMessageId: string
+): Promise<Bill | null> {
+  const stmt = db.prepare('SELECT * FROM bills WHERE source_message_id = ?1');
+  const result = await stmt.bind(sourceMessageId).first<Record<string, unknown>>();
 
   if (!result) return null;
   return rowToBill(result);
