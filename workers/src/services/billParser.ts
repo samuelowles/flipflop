@@ -1,4 +1,4 @@
-import { getBillById, updateBillStatus, updateBillParsedData } from '../models/bills';
+import { getBillById, markBillCompareEnqueued, updateBillStatus, updateBillParsedData } from '../models/bills';
 import { getUserById } from '../models/users';
 import { sendAndLog } from './messaging';
 import { getRetailerById } from '../models/retailers';
@@ -28,10 +28,17 @@ interface ParseServiceResponse {
   readonly error?: string;
 }
 
+interface CompareMessage {
+  /** AC #43 message shape: snake_case. The compare consumer reads user_id. */
+  readonly user_id: string;
+  readonly bill_id: string;
+  readonly parsed_at: string;
+}
+
 interface ParseEnv {
   readonly DB: D1Database;
   readonly BILLS: R2Bucket;
-  readonly COMPARE_QUEUE: Queue<{ userId: string; billId: string }>;
+  readonly COMPARE_QUEUE: Queue<CompareMessage>;
   readonly SENT_API_KEY: string;
   readonly ENCRYPTION_KEY: string;
   readonly PYTHON_SERVICE_URL?: string;
@@ -239,16 +246,36 @@ export async function handleParseJob(
     status,
   });
 
-  // 7. Enqueue comparison if confidence is good
+  // 7. Enqueue comparison if confidence is good.
+  //    Idempotency (Issue #43): atomically claim the enqueue via a conditional
+  //    UPDATE on compare_enqueued_at. A duplicate PARSE_QUEUE redelivery would
+  //    re-run handleParseJob; markBillCompareEnqueued returns false the second
+  //    time, so we skip the COMPARE_QUEUE.send and never enqueue twice per bill.
   if (status === 'parsed') {
-    await env.COMPARE_QUEUE.send({ userId: bill.userId, billId });
+    const claimed = await markBillCompareEnqueued(env.DB, billId);
+    if (claimed) {
+      const parsedAt = new Date().toISOString();
+      await env.COMPARE_QUEUE.send({
+        user_id: bill.userId,
+        bill_id: billId,
+        parsed_at: parsedAt,
+      });
 
-    console.log(JSON.stringify({
-      type: 'parse_enqueued_comparison',
-      billId,
-      userId: bill.userId,
-      timestamp: new Date().toISOString(),
-    }));
+      console.log(JSON.stringify({
+        type: 'parse_enqueued_comparison',
+        billId,
+        userId: bill.userId,
+        parsedAt,
+        timestamp: parsedAt,
+      }));
+    } else {
+      console.log(JSON.stringify({
+        type: 'parse_compare_enqueue_skipped',
+        billId,
+        reason: 'compare_enqueued_at already set',
+        timestamp: new Date().toISOString(),
+      }));
+    }
   }
 
   // 8. Send confirmation message to user (Epic #2 #42: bill_received template)

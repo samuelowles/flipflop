@@ -6,6 +6,7 @@ vi.mock('../models/bills', () => ({
   getBillById: vi.fn(),
   updateBillStatus: vi.fn(),
   updateBillParsedData: vi.fn(),
+  markBillCompareEnqueued: vi.fn().mockResolvedValue(true),
 }));
 
 vi.mock('./messaging', () => ({
@@ -13,7 +14,7 @@ vi.mock('./messaging', () => ({
   sendAndLog: vi.fn().mockResolvedValue({ messageId: 'msg-1', channel: 'whatsapp', fallback: false, whatsappAttempts: 1 }),
 }));
 
-import { getBillById, updateBillStatus, updateBillParsedData } from '../models/bills';
+import { getBillById, updateBillStatus, updateBillParsedData, markBillCompareEnqueued } from '../models/bills';
 import { sendAndLog } from './messaging';
 
 function createMockR2Object(size: number, body: Uint8Array): R2Object {
@@ -54,11 +55,11 @@ function createMockR2Bucket(objects: Map<string, R2Object>): R2Bucket {
   } as unknown as R2Bucket;
 }
 
-function createMockQueue(): Queue<{ userId: string; billId: string }> {
+function createMockQueue(): Queue<{ user_id: string; bill_id: string; parsed_at: string }> {
   return {
     send: vi.fn(),
     sendBatch: vi.fn(),
-  } as unknown as Queue<{ userId: string; billId: string }>;
+  } as unknown as Queue<{ user_id: string; bill_id: string; parsed_at: string }>;
 }
 
 describe('parseBill', () => {
@@ -122,6 +123,8 @@ describe('parseBill', () => {
 describe('handleParseJob', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: idempotency claim wins (first enqueue proceeds).
+    vi.mocked(markBillCompareEnqueued).mockResolvedValue(true);
   });
 
   it('should complete full parse flow with high confidence', async () => {
@@ -189,9 +192,12 @@ describe('handleParseJob', () => {
         confidence: 0.92,
       })
     );
+    expect(markBillCompareEnqueued).toHaveBeenCalledWith(mockDb, 'bill123');
+    // AC #43: message shape is snake_case { user_id, bill_id, parsed_at }.
     expect(mockCompareQueue.send).toHaveBeenCalledWith({
-      userId: 'user123',
-      billId: 'bill123',
+      user_id: 'user123',
+      bill_id: 'bill123',
+      parsed_at: expect.any(String),
     });
     expect(sendAndLog).toHaveBeenCalled();
     // bill_received template body should be rendered with retailer, usage_kwh, days, total_dollars
@@ -203,6 +209,65 @@ describe('handleParseJob', () => {
       '+64211234567',
       expect.stringMatching(/contact/)
     );
+  });
+
+  it('should NOT enqueue comparison when compare was already claimed (idempotent on bill_id)', async () => {
+    // Issue #43: a duplicate PARSE_QUEUE redelivery re-runs handleParseJob.
+    // markBillCompareEnqueued returns false the second time (the conditional
+    // UPDATE found compare_enqueued_at already set), so no second enqueue.
+    const mockBill = {
+      id: 'bill-idem',
+      userId: 'user-idem',
+      retailerId: 'contact',
+      status: 'pending_parse',
+    };
+
+    const mockParsedResult = {
+      usage_kwh: 500,
+      total_cents: 12500,
+      confidence: 0.92,
+    };
+
+    const r2Body = new Uint8Array([20, 21]);
+    const r2Objects = new Map<string, R2Object>();
+    r2Objects.set('bills/idem.pdf', createMockR2Object(r2Body.length, r2Body));
+
+    const mockCompareQueue = createMockQueue();
+
+    const mockDb = {
+      prepare: vi.fn().mockReturnValue({
+        bind: vi.fn().mockReturnValue({
+          first: vi.fn().mockResolvedValue({ phone: '+64210000001' }),
+        }),
+      }),
+    } as unknown as D1Database;
+
+    vi.mocked(getBillById).mockResolvedValue(mockBill as never);
+    vi.mocked(updateBillStatus).mockResolvedValue(undefined);
+    vi.mocked(updateBillParsedData).mockResolvedValue(undefined);
+    // Idempotency guard: a previous run already claimed the enqueue.
+    vi.mocked(markBillCompareEnqueued).mockResolvedValue(false);
+
+    globalThis.fetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: async () => mockParsedResult,
+    });
+
+    const env = {
+      DB: mockDb,
+      BILLS: createMockR2Bucket(r2Objects),
+      COMPARE_QUEUE: mockCompareQueue,
+      SENT_API_KEY: 'test-key',
+      ENCRYPTION_KEY: 'test-encryption-key',
+      PYTHON_SERVICE_URL: 'http://localhost:8000',
+    };
+
+    await handleParseJob('bill-idem', 'bills/idem.pdf', env);
+
+    // The claim was still attempted (idempotency check ran)...
+    expect(markBillCompareEnqueued).toHaveBeenCalledWith(mockDb, 'bill-idem');
+    // ...but no COMPARE_QUEUE message was sent for this bill.
+    expect(mockCompareQueue.send).not.toHaveBeenCalled();
   });
 
   it('should set needs_review when confidence is below threshold', async () => {
