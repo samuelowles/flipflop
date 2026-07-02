@@ -16,15 +16,27 @@ import type {
   ComparisonInput,
   ComparisonResult,
   ComparisonUsageProfile,
+  NotifyQueuePayload,
 } from '../types/comparison';
 
 interface CompareEnv {
   readonly DB: D1Database;
-  readonly NOTIFY_QUEUE: Queue<{ userId: string; comparisonId: string }>;
+  // KV is optional on the env so the compare-queue dispatch in index.ts does
+  // not need a parallel edit (Issue #75 owns index.ts this wave). When present,
+  // AC #74 comparison_id dedup is armed; when absent, notify enqueues without
+  // dedup (trace-logged). Wiring KV through index.ts is a one-line follow-up.
+  readonly KV?: KVNamespace;
+  readonly NOTIFY_QUEUE: Queue<NotifyQueuePayload>;
   readonly SENT_API_KEY: string;
   readonly PYTHON_SERVICE_URL?: string;
   readonly PYTHON_SERVICE_AUTH_TOKEN?: string;
 }
+
+// AC #74 — idempotency: skip enqueuing a notify for a comparison_id that was
+// already notified. KV key per comparison; TTL matches the notify cooldown
+// window so a re-compare that produces a fresh comparison_id can notify later.
+const NOTIFIED_KEY_PREFIX = 'notified:';
+const NOTIFIED_KEY_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 // Minimal runtime validation — no zod dependency (Issue #123 boundary check).
 function assertComparisonInput(input: ComparisonInput): void {
@@ -355,19 +367,50 @@ export async function runComparison(
 
   // 8. Enqueue notification only on a switch verdict that clears the saving
   // threshold. stay_put (any reason) must never trigger a switch nudge.
+  // AC #74 — idempotent on comparison_id: skip if already notified (KV marker).
   if (
     recommendation === 'switch' &&
     topSwitch != null &&
     topSwitch.saving_cents > SAVING_THRESHOLD_CENTS
   ) {
-    await env.NOTIFY_QUEUE.send({ userId, comparisonId: comparison.id });
-    console.log(JSON.stringify({
-      type: 'compare_enqueued_notification',
-      userId,
-      comparisonId: comparison.id,
-      savingCents: topSwitch.saving_cents,
-      timestamp: new Date().toISOString(),
-    }));
+    const dedupKey = `${NOTIFIED_KEY_PREFIX}${comparison.id}`;
+    const alreadyNotified = env.KV ? await env.KV.get(dedupKey) : null;
+    if (alreadyNotified !== null) {
+      console.log(JSON.stringify({
+        type: 'compare_notify_skip_dedup',
+        userId,
+        comparisonId: comparison.id,
+        reason: 'comparison_id already notified',
+        timestamp: new Date().toISOString(),
+      }));
+    } else {
+      // Set the idempotency marker BEFORE sending so a concurrent producer
+      // (or a retry) cannot double-enqueue for the same comparison_id.
+      if (env.KV) {
+        await env.KV.put(dedupKey, new Date().toISOString(), {
+          expirationTtl: NOTIFIED_KEY_TTL_SECONDS,
+        });
+      }
+      const payload: NotifyQueuePayload = {
+        userId,
+        comparisonId: comparison.id,
+        billId: latestBill.id,
+        recommendation,
+      };
+      await env.NOTIFY_QUEUE.send(payload);
+      // AC #74 — trace log linking comparison_id → notify dispatch.
+      console.log(JSON.stringify({
+        type: 'compare_enqueued_notification',
+        userId,
+        comparisonId: comparison.id,
+        billId: latestBill.id,
+        recommendation,
+        savingCents: topSwitch.saving_cents,
+        notifyDedupKey: env.KV ? dedupKey : null,
+        dedupArmed: env.KV !== undefined,
+        timestamp: new Date().toISOString(),
+      }));
+    }
   }
 
   console.log(JSON.stringify({

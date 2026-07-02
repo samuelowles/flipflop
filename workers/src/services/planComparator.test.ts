@@ -37,11 +37,16 @@ const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
 
 const notifySend = vi.fn();
+const kvGet = vi.fn().mockResolvedValue(null);
+const kvPut = vi.fn().mockResolvedValue(undefined);
 const env = {
   DB: {} as D1Database,
+  KV: { get: kvGet, put: kvPut } as unknown as KVNamespace,
   NOTIFY_QUEUE: { send: notifySend, sendBatch: vi.fn() } as unknown as Queue<{
     userId: string;
     comparisonId: string;
+    billId: string;
+    recommendation: 'switch' | 'stay_put';
   }>,
   SENT_API_KEY: 'sent-key',
   PYTHON_SERVICE_URL: 'http://python.test',
@@ -173,6 +178,10 @@ describe('runComparison — happy path (#70)', () => {
     vi.mocked(getLatestSwitchForUser).mockReset();
     mockFetch.mockReset();
     notifySend.mockReset();
+    kvGet.mockReset();
+    kvPut.mockReset();
+    // Default: no prior KV dedup marker → enqueue proceeds.
+    kvGet.mockResolvedValue(null);
     // Default: no prior switch → no cooldown override.
     vi.mocked(getLatestSwitchForUser).mockResolvedValue(null);
   });
@@ -234,8 +243,17 @@ describe('runComparison — happy path (#70)', () => {
     });
 
     // 6. Notify enqueued only for the plan that beat the $50 saving threshold.
+    // AC #74 — payload carries billId + recommendation; KV dedup marker set.
     expect(notifySend).toHaveBeenCalledTimes(1);
-    expect(notifySend).toHaveBeenCalledWith({ userId: 'user-1', comparisonId: 'cmp-1' });
+    expect(notifySend).toHaveBeenCalledWith({
+      userId: 'user-1',
+      comparisonId: 'cmp-1',
+      billId: 'bill-1',
+      recommendation: 'switch',
+    });
+    // KV idempotency marker written before enqueue (AC #74 dedup).
+    expect(kvPut).toHaveBeenCalledTimes(1);
+    expect(kvPut.mock.calls[0]![0]).toBe('notified:cmp-1');
   });
 
   it('skips and returns null when the user has no parsed bills', async () => {
@@ -260,6 +278,9 @@ describe('runComparison — stay_put recommendation surfacing (#72)', () => {
     vi.mocked(getLatestSwitchForUser).mockReset();
     mockFetch.mockReset();
     notifySend.mockReset();
+    kvGet.mockReset();
+    kvPut.mockReset();
+    kvGet.mockResolvedValue(null);
     vi.mocked(getLatestSwitchForUser).mockResolvedValue(null);
   });
 
@@ -285,8 +306,14 @@ describe('runComparison — stay_put recommendation surfacing (#72)', () => {
     });
 
     // Notify fired exactly once for the switch-recommended plan.
+    // AC #74 — payload carries billId + recommendation.
     expect(notifySend).toHaveBeenCalledTimes(1);
-    expect(notifySend).toHaveBeenCalledWith({ userId: 'user-1', comparisonId: 'cmp-1' });
+    expect(notifySend).toHaveBeenCalledWith({
+      userId: 'user-1',
+      comparisonId: 'cmp-1',
+      billId: 'bill-1',
+      recommendation: 'switch',
+    });
   });
 
   it('overrides to stay_put/recent_switch and suppresses notify when a switch is recent', async () => {
@@ -351,5 +378,41 @@ describe('runComparison — stay_put recommendation surfacing (#72)', () => {
 
     // Outside cooldown → switch recommendation stands → notify fires.
     expect(notifySend).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('runComparison — NOTIFY_QUEUE dispatch + dedup (#74)', () => {
+  beforeEach(() => {
+    vi.mocked(getBillsByUserId).mockReset();
+    vi.mocked(getPlansByRetailer).mockReset();
+    vi.mocked(getCanonicalPlans).mockReset();
+    vi.mocked(createComparison).mockReset();
+    vi.mocked(getLatestSwitchForUser).mockReset();
+    mockFetch.mockReset();
+    notifySend.mockReset();
+    kvGet.mockReset();
+    kvPut.mockReset();
+    kvGet.mockResolvedValue(null);
+    vi.mocked(getLatestSwitchForUser).mockResolvedValue(null);
+  });
+
+  it('skips enqueuing when comparison_id was already notified (KV dedup marker present)', async () => {
+    vi.mocked(getBillsByUserId).mockResolvedValueOnce([makeParsedBill()]);
+    vi.mocked(getPlansByRetailer).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(getCanonicalPlans).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(createComparison).mockResolvedValueOnce(mockComparison('cmp-dup'));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => pythonResult,
+    } as unknown as Response);
+    // KV marker already present → this comparison_id was notified before.
+    kvGet.mockResolvedValueOnce('2026-06-01T00:00:00.000Z');
+
+    await runComparison('user-1', env);
+
+    // Dedup: no new enqueue, no KV rewrite.
+    expect(notifySend).not.toHaveBeenCalled();
+    expect(kvPut).not.toHaveBeenCalled();
   });
 });

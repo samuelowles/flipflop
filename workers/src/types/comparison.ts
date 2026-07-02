@@ -99,3 +99,17 @@ export interface ComparisonResultItem {
 }
 
 export type ComparisonResult = readonly ComparisonResultItem[];
+
+// ---------------------------------------------------------------------------
+// NOTIFY_QUEUE payload (Issue #74)
+// Enqueued by runComparison when a switch verdict clears the saving threshold.
+// CamelCase to match the notify consumer (notificationEngine.evaluateAndNotify),
+// which destructures { userId, comparisonId } — billId/recommendation are
+// carried for traceability/forward use; the consumer re-fetches by comparisonId.
+// ---------------------------------------------------------------------------
+export interface NotifyQueuePayload {
+  readonly userId: string;
+  readonly comparisonId: string;
+  readonly billId: string;
+  readonly recommendation: Recommendation;
+}
