@@ -117,6 +117,51 @@ export async function classifyIntent(
   };
 }
 
+/**
+ * Orchestrates Flash→Pro escalation. Runs the cheap Flash classification,
+ * then escalates to Pro only when confidence is low or multi-turn context
+ * is required. High-confidence simple intents skip Pro entirely.
+ *
+ * Escalation triggers (per #34):
+ *  - Flash confidence < LOW_CONFIDENCE_THRESHOLD (0.85)
+ *  - multi-turn conversation (options.multiTurn === true)
+ *  - notification content generation — deferred to Epic 8
+ *    (ponytail: that trigger will call disambiguate directly or extend
+ *    shouldEscalate with a `notificationContent: true` flag).
+ */
+export async function classifyWithEscalation(
+  message: string,
+  apiKey: string,
+  options?: { readonly multiTurn?: boolean; readonly history?: DeepSeekMessage[] }
+): Promise<IntentClassification> {
+  const flash = await classifyIntent(message, apiKey, options?.history);
+
+  if (!shouldEscalate(flash, options?.multiTurn ?? false)) {
+    return flash;
+  }
+
+  const recentMessages = (options?.history ?? [])
+    .filter((m) => m.role === 'user')
+    .map((m) => m.content);
+  const pro = await disambiguate(
+    message,
+    { currentState: 'AWAITING_INPUT', recentMessages },
+    apiKey
+  );
+  // Disambiguate returns clarification optionally; strip it to match the
+  // IntentClassification shape callers of classify expect.
+  const { clarification: _clarification, ...classification } = pro;
+  return classification;
+}
+
+/** Pure escalation gate — extracted so Epic 8 can extend it (notification trigger). */
+function shouldEscalate(
+  flash: IntentClassification,
+  multiTurn: boolean
+): boolean {
+  return flash.confidence < LOW_CONFIDENCE_THRESHOLD || multiTurn;
+}
+
 // Pro model for complex disambiguation
 export async function disambiguate(
   message: string,
