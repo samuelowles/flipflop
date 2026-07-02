@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { isEiep14aEnabled, computeContentHash, type EnvWithPlans } from './eiep14a';
+import { isEiep14aEnabled, computeContentHash, transformRecords, type EnvWithPlans } from './eiep14a';
 import { upsertPlan } from '../models/plans';
 import type { Plan } from '../types/plan';
 
@@ -40,6 +40,7 @@ describe('computeContentHash (issue #64 idempotency)', () => {
     low_user_eligible: 1,
     source: 'eiep14a',
     eiep14a_id: 'abc',
+    source_url: null,
     effective_from: '2026-07-02T00:00:00Z',
   };
 
@@ -60,6 +61,49 @@ describe('computeContentHash (issue #64 idempotency)', () => {
     const a = await computeContentHash(plan);
     const b = await computeContentHash({ ...plan, effective_from: '1999-01-01' });
     expect(a).toBe(b);
+  });
+});
+
+
+describe('transformRecords field mapping (issue #65)', () => {
+  it('folds rate_type + gst_inclusive into conditions_json', () => {
+    const plans = transformRecords([{
+      Retailer: 'Contact',
+      PlanName: 'Anytime Plan',
+      PlanId: 'C-001',
+      Region: 'Auckland',
+      VariableRate: 25.5,
+      DailyCharge: 2.0,
+      RateType: 'anytime',
+      GSTInclusive: 'yes',
+    }]);
+    expect(plans).toHaveLength(1);
+    const cond = JSON.parse(plans[0]!.conditions_json);
+    expect(cond.rate_type).toBe('ANYTIME');
+    expect(cond.gst_inclusive).toBe(true);
+  });
+
+  it('defaults gst_inclusive to true when absent (feed spec)', () => {
+    const plans = transformRecords([{
+      Retailer: 'Mercury', PlanName: 'P', PlanId: 'M-1', Region: 'Wellington',
+    }]);
+    const cond = JSON.parse(plans[0]!.conditions_json);
+    expect(cond.gst_inclusive).toBe(true);
+  });
+
+  it('propagates per-record SourceURL into source_url', () => {
+    const plans = transformRecords([{
+      Retailer: 'Genesis', PlanName: 'P', PlanId: 'G-1', Region: 'Auckland',
+      SourceURL: 'https://example.com/feed.json',
+    }]);
+    expect(plans[0]!.source_url).toBe('https://example.com/feed.json');
+  });
+
+  it('leaves source_url null when no per-record URL is present', () => {
+    const plans = transformRecords([{
+      Retailer: 'Genesis', PlanName: 'P', PlanId: 'G-2', Region: 'Auckland',
+    }]);
+    expect(plans[0]!.source_url).toBeNull();
   });
 });
 

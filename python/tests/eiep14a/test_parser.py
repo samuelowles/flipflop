@@ -1,5 +1,6 @@
 """Tests for EIEP14A record parser."""
 import json
+import os
 
 import pytest
 from eiep14a.parser import (
@@ -7,9 +8,13 @@ from eiep14a.parser import (
     _normalise_retailer,
     _retailer_name_to_id,
     _extract_region,
+    _extract_conditions,
     _safe_float,
     _safe_int,
+    _to_bool,
 )
+
+FIXTURE_PATH = os.path.join(os.path.dirname(__file__), "fixtures", "sample_eiep14a_rows.json")
 
 
 class TestParseEIEP14ARecords:
@@ -167,3 +172,168 @@ class TestSafeConverters:
     def test_safe_int_defaults_zero(self):
         assert _safe_int(None) == 0
         assert _safe_int("abc") == 0
+
+
+# ---------------------------------------------------------------------------
+# Issue #65: schema normalization — rate_type, gst_inclusive, region codes,
+# source_url. Driven by the anonymized fixture file.
+# ---------------------------------------------------------------------------
+
+
+class TestFixtureFieldMapping:
+    """Parametrized over every record in sample_eiep14a_rows.json.
+
+    Asserts that each EIEP14A field lands in the right place in the plan dict:
+    region codes resolve to names, rate_type/gst_inclusive fold into
+    conditions_json, and source_url propagates from the batch parameter.
+    """
+
+    @pytest.fixture(scope="class")
+    def fixture_payload(self):
+        with open(FIXTURE_PATH, encoding="utf-8") as f:
+            return json.load(f)
+
+    @pytest.fixture(scope="class")
+    def transformed(self, fixture_payload):
+        return {
+            r["eiep14a_id"].upper(): r
+            for r in parse_eiep14a_records(
+                fixture_payload["records"],
+                source_url=fixture_payload["source_url"],
+            )
+        }
+
+    @pytest.mark.parametrize("plan_id,expected_region", [
+        ("FIX-CONTACT-NRC-001", "Northland"),
+        ("FIX-MERCURY-WEL-002", "Wellington"),
+        ("FIX-GENESIS-ORION-003", "Canterbury"),
+        ("FIX-MERIDIAN-UNI-004", "Manawatu-Whanganui"),
+        ("FIX-NOVA-AUR-005", "Otago"),
+        ("FIX-TRUSTPOWER-SLD-006", "Southland"),
+    ])
+    def test_region_code_resolves_to_name(self, transformed, plan_id, expected_region):
+        assert transformed[plan_id]["region"] == expected_region
+
+    @pytest.mark.parametrize("plan_id,expected_rate_type", [
+        ("FIX-CONTACT-NRC-001", "CONTROLLED"),
+        ("FIX-MERCURY-WEL-002", "ANYTIME"),
+        ("FIX-GENESIS-ORION-003", "UNCONTROLLED"),
+        ("FIX-MERIDIAN-UNI-004", "CONTROLLED"),
+        ("FIX-NOVA-AUR-005", "ANYTIME"),
+        ("FIX-TRUSTPOWER-SLD-006", "ANYTIME"),
+    ])
+    def test_rate_type_uppercased_in_conditions(self, transformed, plan_id, expected_rate_type):
+        conditions = json.loads(transformed[plan_id]["conditions_json"])
+        assert conditions["rate_type"] == expected_rate_type
+
+    @pytest.mark.parametrize("plan_id,expected_gst", [
+        ("FIX-CONTACT-NRC-001", True),
+        ("FIX-MERCURY-WEL-002", True),
+        ("FIX-GENESIS-ORION-003", False),
+        ("FIX-MERIDIAN-UNI-004", True),
+        ("FIX-NOVA-AUR-005", True),
+        ("FIX-TRUSTPOWER-SLD-006", True),
+    ])
+    def test_gst_inclusive_boolean_in_conditions(self, transformed, plan_id, expected_gst):
+        conditions = json.loads(transformed[plan_id]["conditions_json"])
+        assert conditions["gst_inclusive"] is expected_gst
+
+    def test_source_url_propagates_to_each_row(self, transformed, fixture_payload):
+        for plan in transformed.values():
+            assert plan["source_url"] == fixture_payload["source_url"]
+
+    def test_all_six_records_transformed(self, transformed):
+        assert len(transformed) == 6
+
+    def test_per_record_source_url_overrides_batch(self, fixture_payload):
+        records = fixture_payload["records"]
+        records[0]["SourceURL"] = "https://override.example/feed.json"
+        plans = parse_eiep14a_records(records, source_url=fixture_payload["source_url"])
+        contact = next(p for p in plans if p["eiep14a_id"] == "FIX-CONTACT-NRC-001")
+        assert contact["source_url"] == "https://override.example/feed.json"
+
+
+class TestExtractRegionNetworkCodes:
+    """#65: NETWORK_CODE_TO_REGION is consulted before name matching."""
+
+    @pytest.mark.parametrize("code,expected", [
+        ("NRC", "Northland"),
+        ("nrc", "Northland"),       # case-insensitive
+        ("WEL", "Wellington"),
+        ("ORION", "Canterbury"),
+        ("UNI", "Manawatu-Whanganui"),
+        ("AUR", "Otago"),
+        ("SLD", "Southland"),
+        ("APE", "Auckland"),
+    ])
+    def test_resolves_network_code(self, code, expected):
+        assert _extract_region({"Region": code}) == expected
+
+    def test_name_still_resolves_when_not_a_code(self):
+        assert _extract_region({"Region": "Canterbury"}) == "Canterbury"
+
+    def test_unknown_value_passes_through(self):
+        assert _extract_region({"Region": "Pacific Isles"}) == "Pacific Isles"
+
+
+class TestExtractConditionsNewFields:
+    def test_rate_type_uppercased(self):
+        conditions = _extract_conditions({"RateType": "anytime"})
+        assert conditions["rate_type"] == "ANYTIME"
+
+    def test_rate_type_absent_when_missing(self):
+        conditions = _extract_conditions({})
+        assert "rate_type" not in conditions
+
+    def test_gst_inclusive_defaults_true(self):
+        conditions = _extract_conditions({})
+        assert conditions["gst_inclusive"] is True
+
+    def test_gst_inclusive_explicit_false(self):
+        conditions = _extract_conditions({"GSTInclusive": False})
+        assert conditions["gst_inclusive"] is False
+
+    def test_gst_inclusive_string_truthy(self):
+        conditions = _extract_conditions({"gst_inclusive": "yes"})
+        assert conditions["gst_inclusive"] is True
+
+
+class TestToBool:
+    @pytest.mark.parametrize("value,expected", [
+        (True, True),
+        (False, False),
+        (1, True),
+        (0, False),
+        ("true", True),
+        ("TRUE", True),
+        ("yes", True),
+        ("1", True),
+        ("no", False),
+        ("0", False),
+        ("random", False),
+    ])
+    def test_coerces_value(self, value, expected):
+        assert _to_bool(value) is expected
+
+
+class TestSourceUrlPropagation:
+    def test_batch_source_url_applied(self):
+        plans = parse_eiep14a_records(
+            [{"Retailer": "Contact", "PlanName": "P", "PlanId": "S-1"}],
+            source_url="https://batch.example",
+        )
+        assert plans[0]["source_url"] == "https://batch.example"
+
+    def test_per_record_source_url_wins(self):
+        plans = parse_eiep14a_records(
+            [{"Retailer": "Contact", "PlanName": "P", "PlanId": "S-2",
+              "SourceURL": "https://per-rec.example"}],
+            source_url="https://batch.example",
+        )
+        assert plans[0]["source_url"] == "https://per-rec.example"
+
+    def test_source_url_none_when_absent(self):
+        plans = parse_eiep14a_records(
+            [{"Retailer": "Contact", "PlanName": "P", "PlanId": "S-3"}],
+        )
+        assert plans[0]["source_url"] is None

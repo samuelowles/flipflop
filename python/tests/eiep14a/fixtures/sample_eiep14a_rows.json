@@ -1,0 +1,88 @@
+{
+  "source_url": "https://www.emi.ea.govt.nz/Wholesale/Datasets/Mappings/RetailerPlanMapping",
+  "records": [
+    {
+      "PlanId": "FIX-CONTACT-NRC-001",
+      "Retailer": "Contact Energy",
+      "PlanName": "Goodnights",
+      "Region": "NRC",
+      "VariableRate": 27.85,
+      "DailyCharge": 3.41,
+      "PromptPaymentDiscount": 12.0,
+      "FixedTermMonths": 12,
+      "ExitFee": 15000,
+      "RateType": "controlled",
+      "GSTInclusive": true,
+      "LowUserEligible": 1,
+      "PaymentType": "direct_debit"
+    },
+    {
+      "PlanId": "FIX-MERCURY-WEL-002",
+      "Retailer": "Mercury",
+      "PlanName": "Open",
+      "Region": "WEL",
+      "VariableRate": 29.1,
+      "DailyCharge": 2.8,
+      "RateType": "anytime",
+      "GSTInclusive": "yes",
+      "LowUserEligible": 0
+    },
+    {
+      "PlanId": "FIX-GENESIS-ORION-003",
+      "Retailer": "Genesis Energy",
+      "PlanName": "Living Energy",
+      "Region": "ORION",
+      "VariableRate": 26.4,
+      "DailyCharge": 3.1,
+      "FixedTermMonths": 24,
+      "ExitFee": 22500,
+      "RateType": "UNCONTROLLED",
+      "GSTInclusive": false,
+      "Tiers": [
+        {
+          "Threshold": 0,
+          "Rate": 26.4
+        },
+        {
+          "Threshold": 800,
+          "Rate": 24.1
+        }
+      ]
+    },
+    {
+      "PlanId": "FIX-MERIDIAN-UNI-004",
+      "Retailer": "Meridian Energy",
+      "PlanName": "Electric Vehicle",
+      "Region": "UNI",
+      "VariableRate": 22.99,
+      "DailyCharge": 4.05,
+      "RateType": "CONTROLLED",
+      "GSTInclusive": 1,
+      "LowUserEligible": 1
+    },
+    {
+      "plan_id": "fix-nova-aur-005",
+      "retailer": "Nova Energy",
+      "plan_name": "Stay Ahead",
+      "region": "AUR",
+      "variable_rate": 31.2,
+      "daily_charge": 2.55,
+      "rate_type": "anytime",
+      "gst_inclusive": "true",
+      "fixed_term_months": 36,
+      "exit_fee": 0
+    },
+    {
+      "PlanId": "FIX-TRUSTPOWER-SLD-006",
+      "Retailer": "Trustpower",
+      "PlanName": "Standard Residential",
+      "Region": "SLD",
+      "VariableRate": 28.65,
+      "DailyCharge": 3.2,
+      "PromptPaymentDiscount": 8.5,
+      "RateType": "anytime",
+      "GSTInclusive": true,
+      "ContractType": "variable"
+    }
+  ]
+}
