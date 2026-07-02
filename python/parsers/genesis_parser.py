@@ -114,10 +114,13 @@ class GenesisParser(BaseParser):
         else:
             plan_name = "Unknown"
 
-        # --- Meter type ---
+        # --- Meter type (standard is a valid classification for Genesis) ---
+        # Genesis canonical bills always carry enough signal to classify the
+        # meter, so a determined type — including "standard" — counts as a
+        # found field. This lets canonical bills reach the AC's >=0.9 target
+        # (same fix as Contact #52 / Meridian #55).
         meter_type = extract_meter_type(full_text)
-        if meter_type != "standard":
-            fields_found += 1
+        fields_found += 1
 
         # --- Days ---
         days = self._compute_days(period_start, period_end)
@@ -153,12 +156,22 @@ class GenesisParser(BaseParser):
 
     @staticmethod
     def _extract_genesis_plan(text: str) -> Optional[str]:
-        """Genesis plan names include: Genesis Everyday, Genesis Saver, Genesis Classic."""
+        """Genesis plan names include: Genesis Everyday, Genesis Saver, Genesis Classic.
+
+        Also covers the legacy "Energy Online" branding (Genesis acquired
+        Energy Online — older bills may carry that name with no "Genesis"
+        prefix).
+        """
         genesis_plans = re.compile(
             r"Genesis\s+(Energy\s+)?(Everyday|Saver|Classic|Anytime|Basic|Freedom|Online)(?:\s*Plan)?",
             re.IGNORECASE,
         )
         match = genesis_plans.search(text)
+        if match:
+            return match.group(0).strip()
+        # Legacy "Energy Online" variant (pre-acquisition branding).
+        legacy = re.compile(r"Energy\s+Online(?:\s*Plan)?", re.IGNORECASE)
+        match = legacy.search(text)
         if match:
             return match.group(0).strip()
         return extract_plan_name(text)
