@@ -13,12 +13,15 @@
 import type {
   Switch,
   SwitchStatus,
+  SwitchTransitionActor,
   TransitionSwitchInput,
 } from '../types/switch';
 import {
   getSwitchById,
   updateSwitchStatus,
   createSwitchTransition,
+  createSwitch as insertSwitch,
+  getActiveSwitchForUserAndPlan,
 } from '../models/switches';
 
 /**
@@ -104,4 +107,77 @@ export async function transitionSwitch(
     throw new Error(`Switch vanished mid-transition: ${input.switchId}`);
   }
   return updated;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #130 — switch request creation with duplicate-active validation.
+//
+// Validation rule: a user MUST NOT have two active (non-terminal) switches for
+// the SAME plan. Different plans are allowed. Active = status IN
+// (requested, confirmed, in_progress) — matches getActiveSwitchForUser.
+//
+// SEAM for #131: this returns the created Switch record only. Issue #131 will
+// extend the response with the retailer deep-link / switch URL. The seam is
+// the return value — #131 wraps createSwitch and appends `switchUrl`.
+// ---------------------------------------------------------------------------
+
+/** Thrown when an active switch already exists for the (user, plan) pair.
+ *  Callers map this to HTTP 409 Conflict. */
+export class DuplicateActiveSwitchError extends Error {
+  readonly existingSwitchId: string;
+  constructor(existingSwitchId: string) {
+    super(
+      `An active switch already exists for this user + plan (switch ${existingSwitchId})`
+    );
+    this.name = 'DuplicateActiveSwitchError';
+    this.existingSwitchId = existingSwitchId;
+  }
+}
+
+export interface CreateSwitchRequestInput {
+  readonly userId: string;
+  readonly fromRetailerId: string;
+  readonly toPlanId: string;
+  readonly actor: SwitchTransitionActor;
+}
+
+/**
+ * Create a new switch request, validating no duplicate active switch exists
+ * for the same (user, plan). Inserts the switch in `requested` status and
+ * writes the initial `switch_transitions` row (from_status=null → requested,
+ * actor, reason='created'). AC #130 "Idempotent on retries: 2 clicks = 1 switch".
+ *
+ * Throws `DuplicateActiveSwitchError` if an active switch already exists for
+ * the (user, plan) pair.
+ */
+export async function createSwitch(
+  db: D1Database,
+  input: CreateSwitchRequestInput
+): Promise<Switch> {
+  const existing = await getActiveSwitchForUserAndPlan(
+    db,
+    input.userId,
+    input.toPlanId
+  );
+  if (existing) {
+    throw new DuplicateActiveSwitchError(existing.id);
+  }
+
+  // ponytail: reuse the model's raw INSERT (single source of truth for the
+  // switches row shape) rather than duplicating the SQL here.
+  const switchRecord = await insertSwitch(db, {
+    userId: input.userId,
+    fromRetailerId: input.fromRetailerId,
+    toPlanId: input.toPlanId,
+  });
+
+  await createSwitchTransition(db, {
+    switchId: switchRecord.id,
+    fromStatus: null,
+    toStatus: 'requested',
+    actor: input.actor,
+    reason: 'created',
+  });
+
+  return switchRecord;
 }
