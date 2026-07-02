@@ -46,6 +46,7 @@ class ParserResult:
     break_fee_cents: int
     confidence: float  # 0.0 - 1.0
     raw_json: str  # full parser output as JSON string
+    parser_used: Optional[str] = None  # id of parser that produced this result
 
     VALID_METER_TYPES = frozenset(
         {"standard", "low_user", "day_night", "controlled"}
