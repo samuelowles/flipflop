@@ -205,6 +205,43 @@ async function queue(
         continue;
       }
 
+      // Issue #70: compare-queue retry/DLQ policy. Mirrors the parse-queue
+      // pattern. No terminal/transient distinction here (the comparator does
+      // not throw a classified error type), so every error is retryable until
+      // MAX_COMPARE_ATTEMPTS is exhausted, then ack (platform DLQ is the
+      // safety net). Compare jobs have no bill-row failure state to persist,
+      // so unlike parse there is no DB write on exhaustion.
+      if (queueName === 'flip-compare-queue') {
+        const body = message.body as { user_id?: string; bill_id?: string };
+        const errorMessage = error instanceof Error ? error.message : 'unknown';
+
+        if (message.attempts < MAX_COMPARE_ATTEMPTS) {
+          console.log(JSON.stringify({
+            type: 'compare_queue_retry',
+            queueName,
+            userId: body?.user_id,
+            billId: body?.bill_id,
+            error: errorMessage,
+            attempts: message.attempts,
+            timestamp: new Date().toISOString(),
+          }));
+          message.retry({ delaySeconds: compareBackoffSeconds(message.attempts) });
+          continue;
+        }
+
+        console.log(JSON.stringify({
+          type: 'compare_queue_failed',
+          queueName,
+          userId: body?.user_id,
+          billId: body?.bill_id,
+          error: errorMessage,
+          attempts: message.attempts,
+          timestamp: new Date().toISOString(),
+        }));
+        message.ack();
+        continue;
+      }
+
       console.log(JSON.stringify({
         type: 'queue_error',
         queueName,
@@ -220,6 +257,14 @@ async function queue(
 const MAX_PARSE_ATTEMPTS = 3;
 
 function parseBackoffSeconds(attempts: number): number {
+  // attempts is 1-based on first delivery. 30s then 60s.
+  return 30 * attempts;
+}
+
+// Issue #70: same retry shape as parse — 3 attempts, 30s then 60s backoff.
+const MAX_COMPARE_ATTEMPTS = 3;
+
+function compareBackoffSeconds(attempts: number): number {
   // attempts is 1-based on first delivery. 30s then 60s.
   return 30 * attempts;
 }
