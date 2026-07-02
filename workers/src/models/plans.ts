@@ -211,6 +211,17 @@ export function computeChangedFields(
 }
 
 /**
+ * #69 — Incomplete-row predicate. A plan is incomplete (and thus excluded from
+ * switch recommendations) when it carries neither a flat c_per_kwh rate NOR a
+ * tier_thresholds_json schedule — i.e. there is no way to price a bill against
+ * it. Kept as an exported helper so the aggregator and tests share one
+ * definition of "incomplete".
+ */
+export function isIncompletePlan(plan: Pick<Plan, 'cPerKwh' | 'tierThresholdsJson'>): boolean {
+  return plan.cPerKwh === null && plan.tierThresholdsJson === null;
+}
+
+/**
  * Get all plans for a specific retailer.
  */
 export async function getPlansByRetailer(
