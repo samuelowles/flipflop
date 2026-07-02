@@ -47,6 +47,13 @@ const MATERIAL_CHANGE_THRESHOLD_PCT = 20; // notify if saving changes by >20%
 const SEND_DEDUP_KEY_PREFIX = 'dedup:';
 const SEND_DEDUP_TTL_SECONDS = 60 * 60; // 1 hour
 
+// Issue #127 — per-user+plan cooldown. A FOURTH guard, distinct from the three
+// above. Supersedes a second notification of the SAME user about the SAME best
+// plan within 7 days (PRD 3.4). Keying on planId means a plan change clears the
+// cooldown automatically (different plan -> different key -> absent).
+const COOLDOWN_KEY_PREFIX = 'cooldown:';
+const COOLDOWN_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
+
 /**
  * Issue #128 — build the send-side dedup KV key for a (user, plan) pair.
  * Pure helper; tested directly. planId may be empty for stay_put verdicts
@@ -62,6 +69,23 @@ export function buildSendDedupKey(userId: string, planId: string): string {
  */
 export function isWithinSendDedupWindow(dedupKeyExists: boolean): boolean {
   return dedupKeyExists;
+}
+
+/**
+ * Issue #127 — build the per-user+plan cooldown KV key. Pure helper; tested
+ * directly. Mirrors `buildSendDedupKey` but lives in its own namespace so the
+ * 7d cooldown and the 1h dedup compose without colliding.
+ */
+export function buildCooldownKey(userId: string, planId: string): string {
+  return `${COOLDOWN_KEY_PREFIX}${userId}:${planId}`;
+}
+
+/**
+ * Issue #127 — pure predicate: given the KV-exists result, decide whether the
+ * dispatch falls inside the 7d per-user+plan cooldown and must be skipped.
+ */
+export function isWithinCooldownWindow(cooldownKeyExists: boolean): boolean {
+  return cooldownKeyExists;
 }
 
 function savingToDollars(cents: number): number {
@@ -225,6 +249,24 @@ export async function evaluateAndNotify(
     return;
   }
 
+  // Issue #127 — per-user+plan 7d cooldown. Distinct from the 1h dedup above:
+  // the 1h guard suppresses burst re-evaluations; this suppresses re-notifying
+  // the same user about the same best plan for a week. Keyed on planId so a
+  // plan change clears it automatically (AC: "cleared automatically on plan
+  // change"). Weekends and NZ public holidays are included — it is a flat 7d
+  // TTL, not a business-day calc.
+  const planCooldownKey = buildCooldownKey(userId, comparison.planId ?? '');
+  if (isWithinCooldownWindow((await env.KV.get(planCooldownKey)) !== null)) {
+    console.log(JSON.stringify({
+      type: 'notify_skip',
+      userId,
+      reason: 'cooldown window active (7d, same user+plan)',
+      planId: comparison.planId ?? null,
+      timestamp: new Date().toISOString(),
+    }));
+    return;
+  }
+
   try {
     await sendText(env.SENT_API_KEY, phone, message);
   } catch (error) {
@@ -241,6 +283,12 @@ export async function evaluateAndNotify(
   // after a successful dispatch so a failed send can be retried immediately.
   await env.KV.put(sendDedupKey, new Date().toISOString(), {
     expirationTtl: SEND_DEDUP_TTL_SECONDS,
+  });
+
+  // Issue #127 — mark this (user, plan) as notified for the 7d cooldown. Set
+  // only after a successful dispatch; cleared automatically on plan change.
+  await env.KV.put(planCooldownKey, new Date().toISOString(), {
+    expirationTtl: COOLDOWN_TTL_SECONDS,
   });
 
   // 6. Update cooldown
