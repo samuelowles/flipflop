@@ -13,13 +13,14 @@
  * per refreshPlans() run.
  */
 
-import { upsertPlan } from '../models/plans';
+import { upsertPlan, type UpsertPlanResult } from '../models/plans';
 
 export const EIEP14A_FEED_URL =
   'https://www.emi.ea.govt.nz/Wholesale/Datasets/Mappings/RetailerPlanMapping';
 
 const CACHE_KEY = 'plans:all';
 const _CACHE_TTL = 60 * 60 * 24; // 24 hours
+const DIFF_KEY_PREFIX = 'plans:diff:';
 
 interface EIEP14ARecord {
   PlanId?: string;
@@ -100,10 +101,16 @@ export async function refreshPlans(env: EnvWithPlans): Promise<number> {
   let upserted = 0;
   const now = new Date().toISOString();
 
+  // #68: group change events per retailer so we can emit one KV diff per
+  // retailer that had ≥1 change. Retailers with zero changes are left alone
+  // (their last-known diff in KV is preserved).
+  const changedFieldsByRetailer = new Map<string, string[]>();
+  const changeEvents: Array<{ retailer_id: string; plan_id: string; change_type: string }> = [];
+
   for (const plan of plans) {
     try {
       const contentHash = await computeContentHash(plan);
-      const { changed } = await upsertPlan(env.DB, {
+      const result: UpsertPlanResult = await upsertPlan(env.DB, {
         retailerId: plan.retailer_id,
         name: plan.name,
         region: plan.region,
@@ -123,7 +130,33 @@ export async function refreshPlans(env: EnvWithPlans): Promise<number> {
         contentHash,
         isCurrent: true,
       });
-      if (changed) upserted++;
+
+      if (result.changeType !== 'unchanged') {
+        upserted++;
+        changeEvents.push({
+          retailer_id: result.retailerId,
+          plan_id: result.plan.id,
+          change_type: result.changeType,
+        });
+        console.log(JSON.stringify({
+          type: 'plan_change_event',
+          retailer_id: result.retailerId,
+          plan_id: result.plan.id,
+          change_type: result.changeType,
+          changed_fields: result.changedFields,
+          timestamp: new Date().toISOString(),
+        }));
+      }
+
+      // Only 'updated' carries a field-level diff worth recording; 'created'
+      // and 'unchanged' do not contribute to a retailer's changed_fields list.
+      if (result.changeType === 'updated' && result.changedFields.length > 0) {
+        const acc = changedFieldsByRetailer.get(result.retailerId) ?? [];
+        for (const f of result.changedFields) {
+          if (!acc.includes(f)) acc.push(f);
+        }
+        changedFieldsByRetailer.set(result.retailerId, acc);
+      }
     } catch (error) {
       console.log(JSON.stringify({
         type: 'plan_upsert_error',
@@ -133,6 +166,10 @@ export async function refreshPlans(env: EnvWithPlans): Promise<number> {
       }));
     }
   }
+
+  // #68: emit one per-retailer KV diff. Retailers with zero changes are NOT
+  // overwritten — last-known diff is preserved.
+  await writePlanDiffs(env.KV, changedFieldsByRetailer, now);
 
   // One plan_data_provenance audit row per run (#64).
   await insertProvenanceAudit(env.DB, {
@@ -179,6 +216,31 @@ export async function computeContentHash(plan: TransformedPlan): Promise<string>
     name: plan.name,
   });
   return sha256Hex(payload);
+}
+
+/**
+ * #68 — write one per-retailer KV diff for each retailer with ≥1 changed field.
+ * Format: `{ retailer_id, changed_fields: [...], detected_at: <iso> }` at key
+ * `plans:diff:{retailer_id}`. Retailers with zero changes are intentionally
+ * NOT written: last-known diff is preserved so a later consumer can still see
+ * the most recent change even across no-op refreshes.
+ */
+async function writePlanDiffs(
+  kv: KVNamespace,
+  changedFieldsByRetailer: Map<string, string[]>,
+  detectedAt: string
+): Promise<void> {
+  for (const [retailerId, changedFields] of changedFieldsByRetailer) {
+    if (changedFields.length === 0) continue;
+    try {
+      await kv.put(
+        `${DIFF_KEY_PREFIX}${retailerId}`,
+        JSON.stringify({ retailer_id: retailerId, changed_fields: changedFields, detected_at: detectedAt })
+      );
+    } catch {
+      // KV may not be available in all environments; non-fatal.
+    }
+  }
 }
 
 interface ProvenanceAuditInput {
