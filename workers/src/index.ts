@@ -14,6 +14,7 @@ import { scrapePowerswitchPlans, isPowerswitchEnabled, type EnvWithPowerswitch }
 import { handleParseJob, ParseError } from './services/billParser';
 import { updateBillFailed } from './models/bills';
 import { runComparison } from './services/planComparator';
+import { consumePlanDiffs, type PlanDiffConsumerEnv } from './services/planDiffConsumer';
 import { evaluateAndNotify } from './services/notificationEngine';
 import { purgeOldLLMAudit } from './services/llmAudit';
 
@@ -333,6 +334,15 @@ async function scheduled(
       GMAIL_CLIENT_SECRET: string;
       ENCRYPTION_KEY: string;
     });
+    return;
+  }
+
+  // 0 8 * * * — Daily re-compare sanity check (issue #75). Scans the
+  // `plans:diff:{retailer_id}` KV keys written by plan ingestion (EIEP14A/
+  // powerswitch) and enqueues affected users to COMPARE_QUEUE. INERT-by-nature:
+  // no-op when no diff keys are present. 7-day per-user dedup via KV.
+  if (cron.includes('8')) {
+    await consumePlanDiffs(env as unknown as PlanDiffConsumerEnv);
     return;
   }
 

@@ -265,3 +265,20 @@ export async function deleteUser(
   const stmt = db.prepare('DELETE FROM users WHERE id = ?1');
   await stmt.bind(id).run();
 }
+
+/**
+ * Issue #75 — return just the IDs of users whose current retailer matches.
+ * Used by the plan-diff consumer to find who to re-compare when a retailer's
+ * plans change. Returns IDs only (no PII decryption needed; the caller only
+ * enqueues `{ user_id }` to COMPARE_QUEUE).
+ */
+export async function getUsersByRetailer(
+  db: D1Database,
+  retailerId: string
+): Promise<string[]> {
+  const result = await db
+    .prepare('SELECT id FROM users WHERE current_retailer_id = ?1')
+    .bind(retailerId)
+    .all<{ id: string }>();
+  return (result.results ?? []).map(r => r.id);
+}
