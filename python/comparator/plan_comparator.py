@@ -13,7 +13,7 @@ import json
 from datetime import datetime, timezone
 
 from comparator.confidence import compute_comparison_confidence
-from comparator.pricing import calculate_bill_cost, is_low_user_eligible
+from comparator.pricing import calculate_bill_cost, is_low_user_eligible, is_unsupported_plan
 
 
 def compare(
@@ -69,6 +69,33 @@ def compare(
         if not _plan_matches_meter_type(plan, usage_profile.get("meter_type", "standard")):
             continue
 
+        # TOU / missing-field guard (AC #125): unsupported plans must not be
+        # priced at zero (which would fake a saving). Mark them unsupported and
+        # zero the saving so they cannot trigger a switch recommendation.
+        unsupported, unsupported_reason = is_unsupported_plan(plan)
+
+        if unsupported:
+            result = {
+                "plan_id": plan_id,
+                "plan_name": plan_name,
+                "retailer_id": retailer_id,
+                "projected_cost_cents": 0,
+                "current_cost_cents": current_annual_cost,
+                "saving_cents": 0,
+                "confidence": compute_comparison_confidence(bill_history),
+                "stay_where_you_are": plan_id == current_plan.get("id"),
+                "unsupported": True,
+                "unsupported_reason": unsupported_reason,
+                "comparison_details": json.dumps({
+                    "avg_daily_kwh": round(avg_daily_kwh, 2),
+                    "annual_kwh_estimate": round(annual_kwh, 0),
+                    "bill_count": len(bill_history),
+                    "compared_at": now,
+                }),
+            }
+            results.append(result)
+            continue
+
         projected_cost = _project_annual(avg_daily_kwh, plan)
         saving = current_annual_cost - projected_cost  # positive = saving
 
@@ -81,6 +108,7 @@ def compare(
             "saving_cents": saving,
             "confidence": compute_comparison_confidence(bill_history),
             "stay_where_you_are": plan_id == current_plan.get("id"),
+            "unsupported": False,
             "comparison_details": json.dumps({
                 "avg_daily_kwh": round(avg_daily_kwh, 2),
                 "annual_kwh_estimate": round(annual_kwh, 0),
