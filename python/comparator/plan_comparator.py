@@ -15,6 +15,11 @@ from datetime import datetime, timezone
 from comparator.confidence import compute_comparison_confidence
 from comparator.pricing import calculate_bill_cost, is_low_user_eligible, is_unsupported_plan
 
+# Minimum saving (cents NZD) for a switch to be "worth it". Matches the TS
+# notification threshold (SAVING_THRESHOLD_CENTS in planComparator.ts). The AC
+# (#72) calls this the "configured notification threshold".
+SWITCH_THRESHOLD_CENTS = 5000
+
 
 def compare(
     usage_profile: dict,
@@ -133,7 +138,62 @@ def compare(
     # Sort: cheapest first, but current plan flagged with stay_where_you_are
     results.sort(key=lambda r: (not r["stay_where_you_are"], r["projected_cost_cents"]))
 
+    # -----------------------------------------------------------------------
+    # Recommendation derivation (AC #72): "stay_put" is a first-class outcome.
+    # Python owns all money-derived decisions, so the verdict is computed here
+    # from the best supported alternative's numbers and stamped onto every
+    # result item. The TS side surfaces it; the recent_switch cooldown (also a
+    # "stay" verdict) is applied in TS because it requires a DB read.
+    # -----------------------------------------------------------------------
+    recommendation, reason = _derive_recommendation(
+        results, break_fee_cents, fixed_term_expiry
+    )
+    for r in results:
+        r["recommendation"] = recommendation
+        r["reason"] = reason
+
     return results
+
+
+def _derive_recommendation(
+    results: list[dict],
+    break_fee_cents: int,
+    fixed_term_expiry: str | None,
+) -> tuple[str, str | None]:
+    """Return (recommendation, reason) per AC #72.
+
+    recommendation is "switch" or "stay_put"; reason is None for "switch" and
+    one of {no_savings, low_savings, contract_constraints, lock_in_too_high}
+    for "stay_put". recent_switch is applied TS-side (DB read).
+    """
+    # Best supported alternative (unsupported plans must never be recommended).
+    alternatives = [
+        r for r in results
+        if not r.get("stay_where_you_are") and not r.get("unsupported")
+    ]
+    if not alternatives:
+        return "stay_put", "no_savings"
+
+    best = max(alternatives, key=lambda r: r["saving_cents"])
+    best_saving = int(best.get("saving_cents", 0))
+
+    # AC: no savings
+    if best_saving <= 0:
+        return "stay_put", "no_savings"
+
+    # AC: contract_constraints — fixed term still active and would be broken
+    if fixed_term_expiry and _is_future_date(fixed_term_expiry):
+        return "stay_put", "contract_constraints"
+
+    # AC: lock_in_too_high — break fee wipes out the first-year saving
+    if break_fee_cents > 0 and best_saving - break_fee_cents < 0:
+        return "stay_put", "lock_in_too_high"
+
+    # AC: low_savings — positive but below the configured notification threshold
+    if best_saving < SWITCH_THRESHOLD_CENTS:
+        return "stay_put", "low_savings"
+
+    return "switch", None
 
 
 # ---------------------------------------------------------------------------

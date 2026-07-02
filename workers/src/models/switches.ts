@@ -81,6 +81,27 @@ export async function getActiveSwitchForUser(
 }
 
 /**
+ * Get the user's most recent switch (any status), newest first.
+ * Used by AC #72 recent_switch cooldown: if the newest switch falls inside
+ * the cooldown window, the comparison recommendation is overridden to stay_put.
+ */
+export async function getLatestSwitchForUser(
+  db: D1Database,
+  userId: string
+): Promise<Switch | null> {
+  const stmt = db.prepare(
+    `SELECT * FROM switches
+     WHERE user_id = ?1
+     ORDER BY requested_at DESC
+     LIMIT 1`
+  );
+  const result = await stmt.bind(userId).first<Record<string, unknown>>();
+
+  if (!result) return null;
+  return rowToSwitch(result);
+}
+
+/**
  * Update the status of a switch.
  * Sets confirmed_at when status changes to 'confirmed'.
  * Sets completed_at when status changes to 'completed'.
