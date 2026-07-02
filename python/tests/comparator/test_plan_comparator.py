@@ -3,7 +3,12 @@ import json
 
 import pytest
 
-from comparator.plan_comparator import compare, _compute_avg_daily_kwh, _plan_matches_meter_type
+from comparator.plan_comparator import (
+    compare,
+    _compute_avg_daily_kwh,
+    _plan_matches_meter_type,
+    _project_annual,
+)
 
 
 @pytest.fixture
@@ -80,6 +85,51 @@ def bill_history():
             "retailer": "Contact Energy",
         },
     ]
+
+
+class TestUsageBandSelection:
+    """AC #124: chooses the cheapest valid plan for low/medium/high usage bands."""
+
+    @pytest.mark.parametrize(
+        "avg_daily_kwh, band",
+        [
+            (8.0, "low"),
+            (15.0, "medium"),
+            (25.0, "high"),
+        ],
+    )
+    def test_cheapest_plan_selected_per_band(
+        self, avg_daily_kwh, band, current_plan, cheaper_plan, expensive_plan, bill_history
+    ):
+        usage = {"avg_daily_kwh": avg_daily_kwh, "meter_type": "standard"}
+        results = compare(
+            usage,
+            current_plan,
+            [current_plan, cheaper_plan, expensive_plan],
+            bill_history,
+        )
+        alternatives = [r for r in results if not r["stay_where_you_are"]]
+        assert alternatives, f"no alternatives returned for {band} band"
+        cheapest = alternatives[0]
+        assert cheapest["plan_id"] == "plan-cheaper"
+        for other in alternatives[1:]:
+            assert cheapest["projected_cost_cents"] <= other["projected_cost_cents"]
+
+    @pytest.mark.parametrize(
+        "avg_daily_kwh, band",
+        [
+            (8.0, "low"),
+            (15.0, "medium"),
+            (25.0, "high"),
+        ],
+    )
+    def test_projected_cost_known_values(self, avg_daily_kwh, band, cheaper_plan):
+        """AC: known inputs and expected costs across usage bands."""
+        cost = _project_annual(avg_daily_kwh, cheaper_plan)
+        monthly_kwh = avg_daily_kwh * (365 / 12)
+        expected_monthly = int(round(monthly_kwh * 24.0)) + int(round(30 * 90.0))
+        expected = expected_monthly * 12
+        assert cost == expected
 
 
 class TestCompare:
