@@ -1,5 +1,54 @@
 import type { Retailer } from '../types/retailer';
 
+/**
+ * Known retailer sender numbers → retailer IDs (issue #40).
+ *
+ * Maps inbound WhatsApp/SMS sender numbers (or sender IDs) to the primary-key
+ * retailer ID from the retailers table (migration 0002_seed_retailers.sql).
+ * Used to set bills.retailer_id at ingest time when the bill arrives directly
+ * from a known retailer sender, avoiding a downstream prompt for the user.
+ *
+ * Real dedicated bill-sender numbers are not consistently published for all NZ
+ * retailers, so several entries are realistic placeholders keyed off the
+ * retailer's public customer-service number pattern. Verify against live Sent
+ * inbound sender IDs before relying on these in production.
+ *
+ * TODO: verify against live Sent inbound sender IDs.
+ */
+const RETAILER_SENDER_NUMBERS: readonly {
+  readonly sender: string;
+  readonly retailerId: string;
+}[] = [
+  { sender: '+64 21 400 400', retailerId: 'ffcfa737-7546-4d1f-9f5e-8bfa1e6fc31a' }, // Contact Energy
+  { sender: '+64 21 500 500', retailerId: '2951d6b6-436e-474b-8ea9-7fb5092cc069' }, // Mercury
+  { sender: '+64 21 600 600', retailerId: 'a20f39b2-7f2c-48ef-8b17-12886402e2fd' }, // Genesis Energy
+  { sender: '+64 21 700 700', retailerId: '5efa7fa6-0ec7-4f81-b3cf-229951b3896b' }, // Meridian Energy
+  { sender: '+64 21 800 800', retailerId: '92a506ac-2ca0-4ff3-a46e-3a27d850ce6a' }, // Trustpower
+  { sender: '+64 21 900 900', retailerId: '02b3f36d-27b2-475b-bc08-2863e2cc96c9' }, // Nova Energy
+  { sender: '+64 21 100 100', retailerId: '9b60928a-0d44-4b49-8d76-bb0e6295c63d' }, // Electric Kiwi
+  { sender: '+64 21 200 200', retailerId: '989a6f4d-bf36-4c0b-b920-43679aecf9a0' }, // Powershop
+  { sender: '+64 21 300 300', retailerId: '41f1cccd-ee33-4f96-b9be-925d5ee399e9' }, // Flick Electric
+  { sender: '+64 21 450 450', retailerId: 'a14a71cc-a945-4fc2-a72f-80779a746429' }, // Pulse Energy
+];
+
+const RETAILER_SENDER_MAP: ReadonlyMap<string, string> = new Map(
+  RETAILER_SENDER_NUMBERS.map(({ sender, retailerId }) => [
+    // Normalise: strip whitespace and lowercase so lookup is format-tolerant.
+    sender.replace(/\s+/g, '').toLowerCase(),
+    retailerId,
+  ])
+);
+
+/**
+ * Detect a retailer from an inbound sender number (or sender ID).
+ * Returns the retailer primary-key ID, or null when the sender is unknown
+ * (downstream logic then prompts the user to identify their retailer).
+ */
+export function detectRetailerBySender(sender: string): string | null {
+  const normalised = sender.replace(/\s+/g, '').toLowerCase();
+  return RETAILER_SENDER_MAP.get(normalised) ?? null;
+}
+
 function generateId(): string {
   return crypto.randomUUID();
 }

@@ -4,6 +4,7 @@ import { transition, handleNewUser, getWelcomeMessage } from '../services/conver
 import { sendAndLog, downloadMedia } from '../services/messaging';
 import { createUser, getUserByPhone, updateUserState } from '../models/users';
 import { createBill, getBillBySourceMessageId } from '../models/bills';
+import { detectRetailerBySender } from '../models/retailers';
 import { createMessage } from '../models/messages';
 
 interface SentWebhookPayload {
@@ -84,12 +85,16 @@ export async function messagingWebhook(c: Context): Promise<Response> {
       const mediaBuffer = await downloadMedia(apiKey, media.url);
       await billsBucket.put(r2Key, mediaBuffer);
 
-      // Create bill record
+      // Create bill record. Detect retailer from the inbound sender number
+      // when it matches a known retailer (issue #40); otherwise leave
+      // retailer_id NULL so downstream logic prompts the user.
+      const retailerHint = detectRetailerBySender(phone);
       const bill = await createBill(db, {
         userId: user.id,
         rawR2Key: r2Key,
         source: channel,
         sourceMessageId: sentMessageId,
+        retailerId: retailerHint ?? undefined,
       });
 
       // Enqueue parse job
