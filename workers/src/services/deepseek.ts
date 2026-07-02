@@ -5,6 +5,7 @@ import {
   INTENT_CLASSIFICATION_PROMPT,
   ENTITY_EXTRACTION_PROMPT,
 } from './prompts';
+import { persistLLMCall } from './llmAudit';
 
 const DEEPSEEK_API_BASE = 'https://api.deepseek.com/v1';
 const FLASH_MODEL = 'deepseek-chat';
@@ -32,9 +33,11 @@ ${ENTITY_EXTRACTION_PROMPT}`;
 export async function classifyIntent(
   message: string,
   apiKey: string,
-  history?: DeepSeekMessage[]
+  history?: DeepSeekMessage[],
+  db?: D1Database
 ): Promise<IntentClassification> {
   const start = Date.now();
+  const requestId = crypto.randomUUID();
   const messages: DeepSeekMessage[] = [
     { role: 'system', content: CLASSIFY_SYSTEM_PROMPT },
     ...(history ?? []),
@@ -84,6 +87,16 @@ export async function classifyIntent(
       const latencyMs = Date.now() - start;
 
       logLLMCall('flash', intent, latencyMs, confidence, PROMPT_VERSION);
+      if (db) {
+        await persistLLMCall(db, {
+          request_id: requestId,
+          model: 'flash',
+          intent,
+          confidence,
+          latency_ms: latencyMs,
+          prompt_version: PROMPT_VERSION,
+        });
+      }
 
       return {
         intent,
@@ -108,6 +121,16 @@ export async function classifyIntent(
     error: lastError?.message,
     timestamp: new Date().toISOString(),
   }));
+  if (db) {
+    await persistLLMCall(db, {
+      request_id: requestId,
+      model: 'flash',
+      intent: 'unknown',
+      confidence: 0,
+      latency_ms: latencyMs,
+      prompt_version: PROMPT_VERSION,
+    });
+  }
 
   return {
     intent: 'unknown',
@@ -132,9 +155,9 @@ export async function classifyIntent(
 export async function classifyWithEscalation(
   message: string,
   apiKey: string,
-  options?: { readonly multiTurn?: boolean; readonly history?: DeepSeekMessage[] }
+  options?: { readonly multiTurn?: boolean; readonly history?: DeepSeekMessage[]; readonly db?: D1Database }
 ): Promise<IntentClassification> {
-  const flash = await classifyIntent(message, apiKey, options?.history);
+  const flash = await classifyIntent(message, apiKey, options?.history, options?.db);
 
   if (!shouldEscalate(flash, options?.multiTurn ?? false)) {
     return flash;
@@ -146,7 +169,8 @@ export async function classifyWithEscalation(
   const pro = await disambiguate(
     message,
     { currentState: 'AWAITING_INPUT', recentMessages },
-    apiKey
+    apiKey,
+    options?.db
   );
   // Disambiguate returns clarification optionally; strip it to match the
   // IntentClassification shape callers of classify expect.
@@ -166,9 +190,11 @@ function shouldEscalate(
 export async function disambiguate(
   message: string,
   context: { readonly currentState: string; readonly recentMessages: string[] },
-  apiKey: string
+  apiKey: string,
+  db?: D1Database
 ): Promise<IntentClassification & { readonly clarification?: string }> {
   const start = Date.now();
+  const requestId = crypto.randomUUID();
   const contextStr = `Current state: ${context.currentState}. Recent messages: ${context.recentMessages.join(' | ')}`;
 
   const messages: DeepSeekMessage[] = [
@@ -217,6 +243,16 @@ export async function disambiguate(
     const latencyMs = Date.now() - start;
 
     logLLMCall('pro', intent, latencyMs, parsed.confidence ?? 0, PROMPT_VERSION);
+    if (db) {
+      await persistLLMCall(db, {
+        request_id: requestId,
+        model: 'pro',
+        intent,
+        confidence: parsed.confidence ?? 0,
+        latency_ms: latencyMs,
+        prompt_version: PROMPT_VERSION,
+      });
+    }
 
     return {
       intent,
@@ -234,6 +270,16 @@ export async function disambiguate(
       error: (err as Error).message,
       timestamp: new Date().toISOString(),
     }));
+    if (db) {
+      await persistLLMCall(db, {
+        request_id: requestId,
+        model: 'pro',
+        intent: 'unknown',
+        confidence: 0,
+        latency_ms: latencyMs,
+        prompt_version: PROMPT_VERSION,
+      });
+    }
     return {
       intent: 'unknown',
       confidence: 0,
