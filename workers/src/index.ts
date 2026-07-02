@@ -9,7 +9,7 @@ import { evalUploadPage, evalUploadHandler, evalResultPage, evalStatus } from '.
 import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates';
 import { adminRateLimitStatus } from './routes/adminRateLimit';
 import { pollAllUsers } from './services/emailPoller';
-import { refreshPlans } from './services/planIngestion';
+import { refreshPlans, isEiep14aEnabled, type EnvWithPlans } from './services/eiep14a';
 import { handleParseJob, ParseError } from './services/billParser';
 import { updateBillFailed } from './models/bills';
 import { runComparison } from './services/planComparator';
@@ -230,14 +230,20 @@ async function scheduled(
 ): Promise<void> {
   const cron = controller.cron;
 
-  // 0 3 * * * — Plan ingestion from EIEP14A feed (daily at 03:00 UTC)
+  // 0 3 * * * — Plan ingestion from EIEP14A feed (daily at 03:00 UTC).
+  // #64: ships INERT behind EIF_EIEP14A_ENABLED (defaults false); flips live
+  // in October when the EA EIEP14A feed becomes available.
   if (cron.includes('3')) {
-    await refreshPlans(env as {
-      DB: D1Database;
-      KV: KVNamespace;
-      PYTHON_SERVICE_URL?: string;
-      EIEP14A_API_KEY?: string;
-    });
+    const plansEnv = env as unknown as EnvWithPlans;
+    if (isEiep14aEnabled(plansEnv)) {
+      await refreshPlans(plansEnv);
+    } else {
+      console.log(JSON.stringify({
+        type: 'eiep14a_skipped',
+        reason: 'EIF_EIEP14A_ENABLED not "true"',
+        timestamp: new Date().toISOString(),
+      }));
+    }
     // #36 — daily 30-day purge of LLM audit metadata.
     await purgeOldLLMAudit(env.DB as D1Database, 30);
     return;

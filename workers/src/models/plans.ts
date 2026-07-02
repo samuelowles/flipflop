@@ -107,22 +107,34 @@ export async function createPlan(
 /**
  * Upsert a plan by eiep14a_id (used for bulk imports from the Electricity Authority).
  * If a plan with the same eiep14a_id exists, update it; otherwise insert.
+ * #64: hash-based idempotency — when input.contentHash matches the stored
+ * content_hash, the row is returned unchanged and `changed` is false.
+ * Returns { plan, changed }.
  */
 export async function upsertPlan(
   db: D1Database,
   input: Omit<Plan, 'id'>
-): Promise<Plan> {
+): Promise<{ plan: Plan; changed: boolean }> {
   if (!input.eiep14aId) {
-    return createPlan(db, input);
+    const plan = await createPlan(db, input);
+    return { plan, changed: true };
   }
 
   // Check if a plan with this eiep14a_id already exists
   const existing = db.prepare(
-    'SELECT id FROM plans WHERE eiep14a_id = ?1'
+    'SELECT id, content_hash FROM plans WHERE eiep14a_id = ?1'
   );
-  const existingRow = await existing.bind(input.eiep14aId).first<{ id: string } | null>();
+  const existingRow = await existing.bind(input.eiep14aId).first<{ id: string; content_hash: string | null } | null>();
 
   if (existingRow) {
+    // #64: hash-based idempotency — skip the write when the tracked-field
+    // hash already matches the stored content_hash.
+    if (input.contentHash && existingRow.content_hash === input.contentHash) {
+      const plan = await getPlanById(db, existingRow.id);
+      if (!plan) throw new Error('Failed to upsert plan');
+      return { plan, changed: false };
+    }
+
     // Update existing plan
     const stmt = db.prepare(
       `UPDATE plans SET
@@ -159,10 +171,11 @@ export async function upsertPlan(
 
     const plan = await getPlanById(db, existingRow.id);
     if (!plan) throw new Error('Failed to upsert plan');
-    return plan;
+    return { plan, changed: true };
   }
 
-  return createPlan(db, input);
+  const plan = await createPlan(db, input);
+  return { plan, changed: true };
 }
 
 /**
