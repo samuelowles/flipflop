@@ -1,0 +1,15 @@
+{
+  "retailer": "Meridian Energy",
+  "plan_name": "Energy Online",
+  "meter_type": "standard",
+  "icp_number": "000123456789ABC",
+  "period_start": "2026-05-14",
+  "period_end": "2026-06-13",
+  "days": 31,
+  "usage_kwh": 612.0,
+  "total_cents": 40242,
+  "c_per_kwh": 28.5,
+  "c_per_day": 152.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

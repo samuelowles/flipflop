@@ -1,0 +1,15 @@
+{
+  "retailer": "Meridian Energy",
+  "plan_name": "Good Energy",
+  "meter_type": "standard",
+  "icp_number": "0000987654321XY",
+  "period_start": "2026-04-14",
+  "period_end": "2026-05-13",
+  "days": 30,
+  "usage_kwh": 450.0,
+  "total_cents": 27030,
+  "c_per_kwh": 25.4,
+  "c_per_day": 130.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

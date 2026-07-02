@@ -1,0 +1,15 @@
+{
+  "retailer": "Nova Energy",
+  "plan_name": "Standard",
+  "meter_type": "day_night",
+  "icp_number": "000777888999QQQ",
+  "period_start": "2026-04-01",
+  "period_end": "2026-04-30",
+  "days": 30,
+  "usage_kwh": 620.0,
+  "total_cents": 17300,
+  "c_per_kwh": 28.9,
+  "c_per_day": 85.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

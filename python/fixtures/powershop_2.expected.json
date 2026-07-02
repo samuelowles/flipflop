@@ -1,0 +1,15 @@
+{
+  "retailer": "Powershop",
+  "plan_name": "Everyday Low User",
+  "meter_type": "low_user",
+  "icp_number": "000111222333PS1",
+  "period_start": "2026-05-01",
+  "period_end": "2026-05-31",
+  "days": 31,
+  "usage_kwh": 260.0,
+  "total_cents": 11800,
+  "c_per_kwh": 27.5,
+  "c_per_day": 150.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

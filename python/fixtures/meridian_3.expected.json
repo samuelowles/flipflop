@@ -1,0 +1,15 @@
+{
+  "retailer": "Meridian Energy",
+  "plan_name": "SimpleSaver",
+  "meter_type": "standard",
+  "icp_number": "0000456789012QR",
+  "period_start": "2026-03-14",
+  "period_end": "2026-04-13",
+  "days": 31,
+  "usage_kwh": 380.0,
+  "total_cents": 18904,
+  "c_per_kwh": 26.3,
+  "c_per_day": 90.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

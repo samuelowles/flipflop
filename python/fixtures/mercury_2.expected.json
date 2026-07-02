@@ -1,0 +1,15 @@
+{
+  "retailer": "Mercury",
+  "plan_name": "Everyday",
+  "meter_type": "low_user",
+  "icp_number": "000444555666XY7",
+  "period_start": "2026-05-01",
+  "period_end": "2026-05-31",
+  "days": 31,
+  "usage_kwh": 280.0,
+  "total_cents": 12630,
+  "c_per_kwh": 28.5,
+  "c_per_day": 150.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

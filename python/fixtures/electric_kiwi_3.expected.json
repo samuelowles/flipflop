@@ -1,0 +1,15 @@
+{
+  "retailer": "Electric Kiwi",
+  "plan_name": "On The Go Day/Night",
+  "meter_type": "day_night",
+  "icp_number": "000777888999EK3",
+  "period_start": "2026-07-01",
+  "period_end": "2026-07-31",
+  "days": 31,
+  "usage_kwh": 530.0,
+  "total_cents": 15400,
+  "c_per_kwh": 23.5,
+  "c_per_day": 95.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

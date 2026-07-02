@@ -1,0 +1,5 @@
+# Dev-only dependencies. NOT installed in the production Flask container.
+# CI installs this file in the python-eval job (see .github/workflows/ci.yml).
+reportlab>=4.0
+pytest>=8.0
+pytest-cov>=6.0

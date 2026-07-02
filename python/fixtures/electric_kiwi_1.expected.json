@@ -1,0 +1,15 @@
+{
+  "retailer": "Electric Kiwi",
+  "plan_name": "Kiwi Saver",
+  "meter_type": "standard",
+  "icp_number": "000111222333EK1",
+  "period_start": "2026-05-14",
+  "period_end": "2026-06-13",
+  "days": 31,
+  "usage_kwh": 520.0,
+  "total_cents": 16050,
+  "c_per_kwh": 25.5,
+  "c_per_day": 90.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

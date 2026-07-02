@@ -43,3 +43,33 @@ jobs:
           path: workers/coverage/
           if-no-files-found: ignore
 
+  python-eval:
+    name: parser pytest + eval harness
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: |
+            python/requirements.txt
+            python/requirements-dev.txt
+
+      - name: Install Python dependencies
+        run: |
+          pip install -r python/requirements.txt
+          pip install -r python/requirements-dev.txt
+
+      - name: Run parser unit tests (pytest)
+        run: pytest python/ -q
+
+      - name: Run parse-eval harness (golden fixtures)
+        # Runs every committed PDF in python/fixtures/ through the parser and
+        # compares to its sibling .expected.json. Prints a per-retailer pass
+        # rate + average confidence table. Exits non-zero on any mismatch
+        # (fails the PR). See scripts/eval_parser.py for the comparison contract.
+        run: python scripts/eval_parser.py
+
