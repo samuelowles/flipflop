@@ -8,40 +8,13 @@
 import { getBillsByUserId } from '../models/bills';
 import { getPlansByRegion, getPlansByRetailer } from '../models/plans';
 import { createComparison } from '../models/comparisons';
-
-interface UsageProfile {
-  readonly avgDailyKwh: number;
-  readonly meterType: string;
-  readonly seasonalWeights: { readonly summer: number; readonly winter: number };
-}
-
-interface BillSummary {
-  readonly id: string;
-  readonly usageKwh: number;
-  readonly totalCents: number;
-  readonly periodStart: string;
-  readonly periodEnd: string;
-  readonly days: number;
-  readonly breakFeeCents?: number;
-}
-
-interface ComparisonRequest {
-  readonly usageProfile: UsageProfile;
-  readonly currentPlan: Record<string, unknown>;
-  readonly availablePlans: readonly Record<string, unknown>[];
-  readonly billHistory: readonly BillSummary[];
-}
-
-interface ComparisonResultItem {
-  readonly plan_name: string;
-  readonly retailer_name: string;
-  readonly retailer_id: string;
-  readonly projected_cost_cents: number;
-  readonly current_cost_cents: number;
-  readonly saving_cents: number; // positive = saving (Python convention)
-  readonly confidence: number;
-  readonly stay_where_you_are: boolean;
-}
+import type {
+  ComparisonBillSummary,
+  ComparisonCurrentPlan,
+  ComparisonInput,
+  ComparisonResult,
+  ComparisonUsageProfile,
+} from '../types/comparison';
 
 interface CompareEnv {
   readonly DB: D1Database;
@@ -51,9 +24,70 @@ interface CompareEnv {
   readonly PYTHON_SERVICE_AUTH_TOKEN?: string;
 }
 
+// Minimal runtime validation — no zod dependency (Issue #123 boundary check).
+function assertComparisonInput(input: ComparisonInput): void {
+  const { usageProfile, currentPlan, availablePlans, billHistory } = input;
+  if (typeof usageProfile?.avgDailyKwh !== 'number' || usageProfile.avgDailyKwh < 0) {
+    throw new Error('Invalid comparison input: usageProfile.avgDailyKwh must be a non-negative number');
+  }
+  if (typeof usageProfile?.meterType !== 'string') {
+    throw new Error('Invalid comparison input: usageProfile.meterType must be a string');
+  }
+  if (!currentPlan || typeof currentPlan !== 'object') {
+    throw new Error('Invalid comparison input: currentPlan is required');
+  }
+  if (!Array.isArray(availablePlans) || availablePlans.length === 0) {
+    throw new Error('Invalid comparison input: availablePlans must be a non-empty array');
+  }
+  if (!Array.isArray(billHistory)) {
+    throw new Error('Invalid comparison input: billHistory must be an array');
+  }
+}
+
+/**
+ * Call the Python comparator service and return the typed result.
+ *
+ * This is the narrow Worker/Python boundary primitive: it validates the
+ * input, POSTs to ${PYTHON_SERVICE_URL}/compare, and returns the ranked
+ * comparison list. No persistence, no notifications — orchestration lives
+ * in runComparison.
+ *
+ * Python owns all plan-cost math (deterministic); TypeScript holds schema only.
+ */
+export async function comparePlans(
+  input: ComparisonInput,
+  env: { readonly PYTHON_SERVICE_URL?: string; readonly PYTHON_SERVICE_AUTH_TOKEN?: string }
+): Promise<ComparisonResult> {
+  assertComparisonInput(input);
+
+  const pythonUrl = env.PYTHON_SERVICE_URL ?? 'http://localhost:8000';
+
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (env.PYTHON_SERVICE_AUTH_TOKEN) {
+    headers['Authorization'] = `Bearer ${env.PYTHON_SERVICE_AUTH_TOKEN}`;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+  const response = await fetch(`${pythonUrl}/compare`, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify(input),
+    signal: controller.signal,
+  }).finally(() => clearTimeout(timeoutId));
+
+  if (!response.ok) {
+    throw new Error(`Python compare service returned ${response.status}`);
+  }
+
+  // Python server returns the bare ranked list (jsonify(results)).
+  return (await response.json()) as ComparisonResult;
+}
+
 const SAVING_THRESHOLD_CENTS = 5000; // $50 NZD minimum saving to notify
 
-function billToSummary(bill: { id: string; usageKwh: number | null; totalCents: number | null; periodStart: string | null; periodEnd: string | null; days: number | null; breakFeeCents: number | null }): BillSummary | null {
+function billToSummary(bill: { id: string; usageKwh: number | null; totalCents: number | null; periodStart: string | null; periodEnd: string | null; days: number | null; breakFeeCents: number | null }): ComparisonBillSummary | null {
   if (bill.usageKwh == null || bill.totalCents == null || !bill.periodStart || !bill.periodEnd || bill.days == null) return null;
   return {
     id: bill.id,
@@ -66,7 +100,7 @@ function billToSummary(bill: { id: string; usageKwh: number | null; totalCents: 
   };
 }
 
-function computeAvgDailyKwh(bills: readonly BillSummary[]): number {
+function computeAvgDailyKwh(bills: readonly ComparisonBillSummary[]): number {
   if (bills.length === 0) return 0;
   const totalKwh = bills.reduce((sum, b) => sum + b.usageKwh, 0);
   const totalDays = bills.reduce((sum, b) => sum + b.days, 0);
@@ -79,7 +113,7 @@ function getSeason(m: number): 'summer' | 'winter' | 'shoulder' {
   return 'shoulder';
 }
 
-function computeSeasonalWeights(bills: readonly BillSummary[]): { summer: number; winter: number } {
+function computeSeasonalWeights(bills: readonly ComparisonBillSummary[]): { summer: number; winter: number } {
   const seasonal = { summer: 0, winter: 0 };
   const counts = { summer: 0, winter: 0 };
 
@@ -109,8 +143,6 @@ export async function runComparison(
   userId: string,
   env: CompareEnv
 ): Promise<string | null> {
-  const pythonUrl = env.PYTHON_SERVICE_URL ?? 'http://localhost:8000';
-
   // 1. Fetch user's bill history (parsed bills only)
   const allBills = await getBillsByUserId(env.DB, userId);
   const parsedBills = allBills.filter(b => b.status === 'parsed');
@@ -126,7 +158,7 @@ export async function runComparison(
   }
 
   // 2. Build bill summaries for Python
-  const billSummaries = parsedBills.map(billToSummary).filter(Boolean) as BillSummary[];
+  const billSummaries = parsedBills.map(billToSummary).filter(Boolean) as ComparisonBillSummary[];
   if (billSummaries.length === 0) {
     console.log(JSON.stringify({
       type: 'compare_skip',
@@ -142,7 +174,7 @@ export async function runComparison(
   const seasonalWeights = computeSeasonalWeights(billSummaries);
   const meterType = parsedBills[0]?.meterType ?? 'standard';
 
-  const usageProfile: UsageProfile = {
+  const usageProfile: ComparisonUsageProfile = {
     avgDailyKwh,
     meterType,
     seasonalWeights,
@@ -150,14 +182,13 @@ export async function runComparison(
 
   // 4. Build current plan from most recent bill
   const latestBill = parsedBills[0]!;
-  const currentPlan: Record<string, unknown> = {
+  let currentPlan: ComparisonCurrentPlan = {
     plan_name: latestBill.planName ?? 'Unknown',
-    retailer_id: latestBill.retailerId,
-    c_per_kwh: latestBill.cPerKwh,
-    c_per_day: latestBill.cPerDay,
-    meter_type: latestBill.meterType,
-    break_fee_cents: latestBill.breakFeeCents,
-    fixed_term_expiry: latestBill.fixedTermExpiry,
+    retailer_id: latestBill.retailerId ?? '',
+    c_per_kwh: latestBill.cPerKwh ?? undefined,
+    c_per_day: latestBill.cPerDay ?? undefined,
+    break_fee_cents: latestBill.breakFeeCents ?? undefined,
+    fixed_term_expiry: latestBill.fixedTermExpiry ?? undefined,
   };
 
   // 5. Derive region from bill data — look up the user's retailer to find region
@@ -181,7 +212,7 @@ export async function runComparison(
       p => p.retailerId === latestBill.retailerId && p.name === latestBill.planName
     );
     if (matchedCurrentPlan) {
-      currentPlan.id = matchedCurrentPlan.id;
+      currentPlan = { ...currentPlan, id: matchedCurrentPlan.id };
     }
   }
 
@@ -189,12 +220,12 @@ export async function runComparison(
     id: p.id,
     retailer_id: p.retailerId,
     name: p.name,
-    region: p.region,
-    c_per_kwh: p.cPerKwh,
-    c_per_day: p.cPerDay,
-    tier_thresholds_json: p.tierThresholdsJson,
-    prompt_payment_discount: p.promptPaymentDiscount,
-    conditions_json: p.conditionsJson,
+    region: p.region ?? undefined,
+    c_per_kwh: p.cPerKwh ?? undefined,
+    c_per_day: p.cPerDay ?? undefined,
+    tier_thresholds_json: p.tierThresholdsJson ?? undefined,
+    prompt_payment_discount: p.promptPaymentDiscount ?? undefined,
+    conditions_json: p.conditionsJson ?? undefined,
     low_user_eligible: p.lowUserEligible,
   }));
 
@@ -208,38 +239,20 @@ export async function runComparison(
     return null;
   }
 
-  // 6. POST to Python /compare
-  const request: ComparisonRequest = {
-    usageProfile,
-    currentPlan,
-    availablePlans: planDicts,
-    billHistory: billSummaries,
-  };
-
-  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
-  if (env.PYTHON_SERVICE_AUTH_TOKEN) {
-    headers['Authorization'] = `Bearer ${env.PYTHON_SERVICE_AUTH_TOKEN}`;
-  }
-
-  const controller = new AbortController();
-  const timeoutId = setTimeout(() => controller.abort(), 30000);
-
-  const response = await fetch(`${pythonUrl}/compare`, {
-    method: 'POST',
-    headers,
-    body: JSON.stringify(request),
-    signal: controller.signal,
-  }).finally(() => clearTimeout(timeoutId));
-
-  if (!response.ok) {
-    throw new Error(`Python compare service returned ${response.status}`);
-  }
-
-  const results = await response.json() as { comparisons: ComparisonResultItem[] };
+  // 6. POST to Python /compare via the typed boundary primitive
+  const results = await comparePlans(
+    {
+      usageProfile,
+      currentPlan,
+      availablePlans: planDicts,
+      billHistory: billSummaries,
+    },
+    env
+  );
 
   // Log warning if savings don't cover exit fees
   if (latestBill.breakFeeCents != null) {
-    for (const item of results.comparisons) {
+    for (const item of results) {
       if (item.saving_cents > 0 && item.saving_cents < latestBill.breakFeeCents) {
         console.log(JSON.stringify({
           type: 'compare_break_fee_warning',
@@ -254,7 +267,7 @@ export async function runComparison(
 
   // 7. Store results in D1
   const comparisonIds: string[] = [];
-  for (const item of results.comparisons) {
+  for (const item of results) {
     // Find matching plan ID from availablePlans
     const matchedPlan = availablePlans.find(
       p => p.retailerId === item.retailer_id && p.name === item.plan_name
@@ -289,7 +302,7 @@ export async function runComparison(
   console.log(JSON.stringify({
     type: 'compare_complete',
     userId,
-    plansCompared: results.comparisons.length,
+    plansCompared: results.length,
     storedResults: comparisonIds.length,
     timestamp: new Date().toISOString(),
   }));
