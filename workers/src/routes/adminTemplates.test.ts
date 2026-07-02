@@ -1,13 +1,18 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import { adminListTemplates, adminTemplateStatus } from './adminTemplates';
+import { adminAuth } from '../middleware/adminAuth';
 import * as sentTemplates from '../services/sentTemplates';
 
 const mockGetTemplateStatus = vi.spyOn(sentTemplates, 'getTemplateStatus');
 const consoleLogSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
 
+const ADMIN_API_KEY = 'test-admin-key';
+
 function buildApp(): Hono {
   const app = new Hono();
+  // Mirrors index.ts: middleware applied to /admin/* before the handlers.
+  app.use('/admin/*', adminAuth);
   app.get('/admin/templates', adminListTemplates);
   app.get('/admin/templates/status', adminTemplateStatus);
   return app;
@@ -16,9 +21,11 @@ function buildApp(): Hono {
 describe('adminListTemplates', () => {
   it('returns the 6 PRD templates with content + variable lists', async () => {
     const app = buildApp();
-    const res = await app.request('/admin/templates', {
-      method: 'GET',
-    });
+    const res = await app.request(
+      '/admin/templates',
+      { method: 'GET', headers: { Authorization: `Bearer ${ADMIN_API_KEY}` } },
+      { ADMIN_API_KEY }
+    );
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as {
@@ -41,10 +48,36 @@ describe('adminListTemplates', () => {
     ]);
   });
 
+  it('returns 401 without a Bearer header', async () => {
+    const app = buildApp();
+    const res = await app.request(
+      '/admin/templates',
+      { method: 'GET' },
+      { ADMIN_API_KEY }
+    );
+    expect(res.status).toBe(401);
+    const body = (await res.json()) as { code: string };
+    expect(body.code).toBe('unauthorized');
+  });
+
+  it('returns 401 with a wrong Bearer token', async () => {
+    const app = buildApp();
+    const res = await app.request(
+      '/admin/templates',
+      { method: 'GET', headers: { Authorization: 'Bearer wrong-key' } },
+      { ADMIN_API_KEY }
+    );
+    expect(res.status).toBe(401);
+  });
+
   it('does not call Sent API (registry is static)', async () => {
     mockGetTemplateStatus.mockReset();
     const app = buildApp();
-    await app.request('/admin/templates', { method: 'GET' });
+    await app.request(
+      '/admin/templates',
+      { method: 'GET', headers: { Authorization: `Bearer ${ADMIN_API_KEY}` } },
+      { ADMIN_API_KEY }
+    );
     expect(mockGetTemplateStatus).not.toHaveBeenCalled();
   });
 });
@@ -53,6 +86,16 @@ describe('adminTemplateStatus', () => {
   beforeEach(() => {
     mockGetTemplateStatus.mockReset();
     consoleLogSpy.mockClear();
+  });
+
+  it('returns 401 without a Bearer header', async () => {
+    const app = buildApp();
+    const res = await app.request(
+      '/admin/templates/status',
+      { method: 'GET' },
+      { ADMIN_API_KEY, SENT_API_KEY: 'test-key' }
+    );
+    expect(res.status).toBe(401);
   });
 
   it('returns per-template statuses from Sent', async () => {
@@ -68,8 +111,8 @@ describe('adminTemplateStatus', () => {
     const app = buildApp();
     const res = await app.request(
       '/admin/templates/status',
-      { method: 'GET' },
-      { SENT_API_KEY: 'test-key' }
+      { method: 'GET', headers: { Authorization: `Bearer ${ADMIN_API_KEY}` } },
+      { ADMIN_API_KEY, SENT_API_KEY: 'test-key' }
     );
     expect(res.status).toBe(200);
 
@@ -103,8 +146,8 @@ describe('adminTemplateStatus', () => {
     const app = buildApp();
     const res = await app.request(
       '/admin/templates/status',
-      { method: 'GET' },
-      { SENT_API_KEY: 'test-key' }
+      { method: 'GET', headers: { Authorization: `Bearer ${ADMIN_API_KEY}` } },
+      { ADMIN_API_KEY, SENT_API_KEY: 'test-key' }
     );
     const body = (await res.json()) as {
       templates: { name: string; status: string; rejectionReason?: string }[];
@@ -131,8 +174,8 @@ describe('adminTemplateStatus', () => {
     const app = buildApp();
     const res = await app.request(
       '/admin/templates/status',
-      { method: 'GET' },
-      { SENT_API_KEY: 'test-key' }
+      { method: 'GET', headers: { Authorization: `Bearer ${ADMIN_API_KEY}` } },
+      { ADMIN_API_KEY, SENT_API_KEY: 'test-key' }
     );
     expect(res.status).toBe(200);
 

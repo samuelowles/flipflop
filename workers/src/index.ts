@@ -2,6 +2,7 @@ import { Hono, type Context } from 'hono';
 import { errorHandler } from './middleware/errorHandler';
 import { sentAuth } from './middleware/sentAuth';
 import { rateLimit } from './middleware/rateLimit';
+import { adminAuth } from './middleware/adminAuth';
 import { messagingWebhook } from './routes/messaging';
 import { gmailConnectPage, gmailLogin, gmailCallback, gmailScanStatus, gmailEvalStatus } from './routes/gmail';
 import { evalUploadPage, evalUploadHandler, evalResultPage, evalStatus } from './routes/eval';
@@ -59,6 +60,12 @@ app.get('/eval/', evalUploadPage);
 app.post('/eval/upload', evalUploadHandler); // inline rate limiter with HTML error page
 app.get('/eval/result', rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 60_000 }), evalResultPage);
 app.get('/eval/status', rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 60_000 }), evalStatus);
+
+// Admin auth — gates EVERY /admin/* route behind ADMIN_API_KEY Bearer auth.
+// Registered BEFORE the specific admin routes so the middleware runs first
+// for all of them, including the /admin/* 501 catch-all. Non-admin paths
+// (/, /health, /webhook/*, /auth/*, /eval*) are unaffected by the matcher.
+app.use('/admin/*', adminAuth);
 
 // Epic 2 #24-29: admin template status (registered before the /admin/* 501
 // catch-all so Hono's first-match routing resolves these).
