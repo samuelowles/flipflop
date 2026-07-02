@@ -1,4 +1,9 @@
-import type { Switch, SwitchStatus } from '../types/switch';
+import type {
+  Switch,
+  SwitchStatus,
+  SwitchTransition,
+  SwitchTransitionActor,
+} from '../types/switch';
 
 function generateId(): string {
   return crypto.randomUUID();
@@ -12,8 +17,21 @@ function rowToSwitch(row: Record<string, unknown>): Switch {
     toPlanId: row.to_plan_id as string,
     status: row.status as SwitchStatus,
     requestedAt: row.requested_at as string,
-    confirmedAt: row.confirmed_at as string | null,
-    completedAt: row.completed_at as string | null,
+    confirmedAt: (row.confirmed_at as string | null | undefined) ?? null,
+    completedAt: (row.completed_at as string | null | undefined) ?? null,
+    failureReason: (row.failure_reason as string | null | undefined) ?? null,
+  };
+}
+
+function rowToTransition(row: Record<string, unknown>): SwitchTransition {
+  return {
+    id: row.id as string,
+    switchId: row.switch_id as string,
+    fromStatus: (row.from_status as SwitchStatus | null | undefined) ?? null,
+    toStatus: row.to_status as SwitchStatus,
+    actor: row.actor as SwitchTransitionActor,
+    reason: (row.reason as string | null | undefined) ?? null,
+    at: row.at as string,
   };
 }
 
@@ -105,28 +123,95 @@ export async function getLatestSwitchForUser(
  * Update the status of a switch.
  * Sets confirmed_at when status changes to 'confirmed'.
  * Sets completed_at when status changes to 'completed'.
+ * Sets failure_reason when provided (issue #129 migration 0016; consumed by #132).
  */
 export async function updateSwitchStatus(
   db: D1Database,
   id: string,
-  status: SwitchStatus
+  status: SwitchStatus,
+  failureReason?: string | null
 ): Promise<void> {
   const now = new Date().toISOString();
 
-  let sql: string;
-  let params: unknown[];
+  const sets: string[] = ['status = ?1'];
+  const params: unknown[] = [status];
 
   if (status === 'confirmed') {
-    sql = 'UPDATE switches SET status = ?1, confirmed_at = ?2 WHERE id = ?3';
-    params = [status, now, id];
+    sets.push('confirmed_at = ?2');
+    params.push(now);
   } else if (status === 'completed') {
-    sql = 'UPDATE switches SET status = ?1, completed_at = ?2 WHERE id = ?3';
-    params = [status, now, id];
-  } else {
-    sql = 'UPDATE switches SET status = ?1 WHERE id = ?2';
-    params = [status, id];
+    sets.push('completed_at = ?2');
+    params.push(now);
   }
+  if (failureReason !== undefined) {
+    // ponytail: append failure_reason only when supplied so non-failed paths
+    // don't clobber a previously stored reason. Bind index continues from
+    // current length + 1.
+    params.push(failureReason);
+    sets.push(`failure_reason = ?${params.length}`);
+  }
+  params.push(id);
 
+  const sql = `UPDATE switches SET ${sets.join(', ')} WHERE id = ?${params.length}`;
   const stmt = db.prepare(sql);
   await stmt.bind(...params).run();
+}
+
+// ---------------------------------------------------------------------------
+// Issue #129 — switch state-machine transition log (migration 0016).
+// ---------------------------------------------------------------------------
+
+/**
+ * Persist one transition row to `switch_transitions`. Called by the
+ * switchService.transitionSwitch boundary after a status change succeeds.
+ * `fromStatus` is null only on the initial creation row.
+ */
+export async function createSwitchTransition(
+  db: D1Database,
+  input: {
+    readonly switchId: string;
+    readonly fromStatus: SwitchStatus | null;
+    readonly toStatus: SwitchStatus;
+    readonly actor: SwitchTransitionActor;
+    readonly reason?: string | null;
+  }
+): Promise<string> {
+  const id = generateId();
+  const now = new Date().toISOString();
+
+  await db
+    .prepare(
+      `INSERT INTO switch_transitions (id, switch_id, from_status, to_status, actor, reason, at)
+       VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)`
+    )
+    .bind(
+      id,
+      input.switchId,
+      input.fromStatus,
+      input.toStatus,
+      input.actor,
+      input.reason ?? null,
+      now
+    )
+    .run();
+
+  return id;
+}
+
+/**
+ * List the transition history for one switch, oldest-first. Used by ops/admin
+ * to reconstruct a switch lifecycle. AC #129 "All transitions logged".
+ */
+export async function listSwitchTransitions(
+  db: D1Database,
+  switchId: string
+): Promise<readonly SwitchTransition[]> {
+  const result = await db
+    .prepare(
+      `SELECT * FROM switch_transitions WHERE switch_id = ?1 ORDER BY at ASC`
+    )
+    .bind(switchId)
+    .all<Record<string, unknown>>();
+
+  return result.results?.map(rowToTransition) ?? [];
 }
