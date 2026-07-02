@@ -182,3 +182,23 @@ export async function updateBillFailed(
   );
   await stmt.bind(errorCode, id).run();
 }
+
+/**
+ * Atomically claim the COMPARE_QUEUE enqueue for a bill. Sets
+ * compare_enqueued_at only if it is still NULL, returning true when this call
+ * won the claim (enqueue should proceed) and false when a prior enqueue for
+ * the same bill already happened (enqueue must be skipped — idempotency).
+ * Issue #43: guards the parse→compare hop against duplicate PARSE_QUEUE
+ * redelivery.
+ */
+export async function markBillCompareEnqueued(
+  db: D1Database,
+  id: string
+): Promise<boolean> {
+  const now = new Date().toISOString();
+  const stmt = db.prepare(
+    `UPDATE bills SET compare_enqueued_at = ?1 WHERE id = ?2 AND compare_enqueued_at IS NULL`
+  );
+  const result = await stmt.bind(now, id).run();
+  return (result.meta?.changes ?? 0) > 0;
+}

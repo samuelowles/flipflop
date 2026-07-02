@@ -114,7 +114,7 @@ async function queue(
         await handleParseJob(body.billId, body.r2Key, {
           DB: env.DB as D1Database,
           BILLS: env.BILLS as R2Bucket,
-          COMPARE_QUEUE: env.COMPARE_QUEUE as Queue<{ userId: string; billId: string }>,
+          COMPARE_QUEUE: env.COMPARE_QUEUE as Queue<{ user_id: string; bill_id: string; parsed_at: string }>,
           SENT_API_KEY: env.SENT_API_KEY as string,
           ENCRYPTION_KEY: env.ENCRYPTION_KEY as string,
           PYTHON_SERVICE_URL: env.PYTHON_SERVICE_URL as string | undefined,
@@ -122,8 +122,9 @@ async function queue(
         });
         message.ack();
       } else if (queueName === 'flip-compare-queue') {
-        const body = message.body as { userId: string; billId: string };
-        await runComparison(body.userId, {
+        // Issue #43: message shape is { user_id, bill_id, parsed_at } (snake_case).
+        const body = message.body as { user_id: string; bill_id: string; parsed_at?: string };
+        await runComparison(body.user_id, {
           DB: env.DB as D1Database,
           NOTIFY_QUEUE: env.NOTIFY_QUEUE as Queue<{ userId: string; comparisonId: string }>,
           SENT_API_KEY: env.SENT_API_KEY as string,
