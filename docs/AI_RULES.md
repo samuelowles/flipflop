@@ -149,6 +149,17 @@ Flip is NOT a comparison website. It is a passive monitoring agent. Its most imp
 - No comparison website or on-demand comparison tool
 - No scraping of Billy (Electricity Authority), Powerswitch (Consumer NZ), or any retailer website
 - No scraping of retailer pricing pages -- use EIEP14A or public rate cards only
+
+<!-- #66 TEMPORARY OVERRIDE (approved 2026-06-19): Powerswitch plan-listing scrape.
+     Scope: public plan-listing pages on https://www.powerswitch.org.nz ONLY.
+     Zero PII submitted (no ICP, address, or user data). Gated behind
+     POWERSWITCH_SCRAPER_ENABLED (defaults false — ships INERT).
+     Why: the EIEP14A feed (#64) is not available until October 2026 and
+     Powerswitch is the temporary live plan-data path.
+     Sunset trigger: set POWERSWITCH_SCRAPER_ENABLED="false" and remove the
+     bridge module (workers/src/services/powerswitchScraper.ts) + its cron
+     branch once #64 is live AND EIEP14A coverage is sufficient.
+     The original no-scraping rules above REMAIN IN FORCE for all other sources. -->
 - No discount code repository or promotional deals
 - No marketing messages or promotional content via WhatsApp/SMS
 - No "recommended" or "sponsored" plan rankings

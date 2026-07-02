@@ -10,6 +10,7 @@ import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates
 import { adminRateLimitStatus } from './routes/adminRateLimit';
 import { pollAllUsers } from './services/emailPoller';
 import { refreshPlans, isEiep14aEnabled, type EnvWithPlans } from './services/eiep14a';
+import { scrapePowerswitchPlans, isPowerswitchEnabled, type EnvWithPowerswitch } from './services/powerswitchScraper';
 import { handleParseJob, ParseError } from './services/billParser';
 import { updateBillFailed } from './models/bills';
 import { runComparison } from './services/planComparator';
@@ -241,6 +242,19 @@ async function scheduled(
       console.log(JSON.stringify({
         type: 'eiep14a_skipped',
         reason: 'EIF_EIEP14A_ENABLED not "true"',
+        timestamp: new Date().toISOString(),
+      }));
+    }
+    // #66 — Temporary Powerswitch scraper bridge. Runs in the same 03:00 UTC
+    // window. INERT behind POWERSWITCH_SCRAPER_ENABLED (defaults false). Sunset
+    // when #64 EIEP14A feed covers the retailers (see docs/AI_RULES.md override).
+    const psEnv = env as unknown as EnvWithPowerswitch;
+    if (isPowerswitchEnabled(psEnv)) {
+      await scrapePowerswitchPlans(psEnv);
+    } else {
+      console.log(JSON.stringify({
+        type: 'powerswitch_skipped',
+        reason: 'POWERSWITCH_SCRAPER_ENABLED not "true"',
         timestamp: new Date().toISOString(),
       }));
     }

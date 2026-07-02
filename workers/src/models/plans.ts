@@ -1,5 +1,21 @@
 import type { Plan, PlanSource } from '../types/plan';
 
+/** Minimal plan shape consumed by the powerswitch upsert (#66). Disjoint from
+ *  the eiep14a.ts upsert path: provenance is always 'powerswitch' and manual
+ *  rows are never overwritten. */
+export interface PowerswitchPlanInput {
+  readonly retailer: string;
+  readonly retailerId: string;
+  readonly planName: string;
+  readonly region: string;
+  readonly cPerKwh: number | null;
+  readonly cPerDay: number | null;
+  readonly promptPaymentDiscount: number | null;
+  readonly lowUserEligible: boolean;
+  readonly conditions: Record<string, unknown>;
+  readonly sourceUrl: string;
+}
+
 function generateId(): string {
   return crypto.randomUUID();
 }
@@ -191,4 +207,90 @@ export async function getPlansByRetailer(
   const results = await stmt.bind(retailerId).all<Record<string, unknown>>();
 
   return results.results?.map(rowToPlan) ?? [];
+}
+
+/**
+ * #66 — Upsert a Powerswitch-scraped plan. Disjoint from upsertPlan (eiep14a):
+ * keyed by (retailer_id, name, region) rather than eiep14a_id, and CRITICALLY
+ * never overwrites an existing provenance='manual' row — manual data always
+ * wins. Returns { changed, blockedByManual }.
+ */
+export async function upsertPowerswitchPlan(
+  db: D1Database,
+  input: { plan: PowerswitchPlanInput; ingestedAt: string }
+): Promise<{ changed: boolean; blockedByManual: boolean }> {
+  const { plan, ingestedAt } = input;
+  const conditionsJson = JSON.stringify(plan.conditions);
+
+  // Look for an existing row on the natural key (retailer_id, name, region).
+  const existing = await db
+    .prepare(
+      `SELECT id, provenance FROM plans
+       WHERE retailer_id = ?1 AND name = ?2 AND COALESCE(region, '') = COALESCE(?3, '')`
+    )
+    .bind(plan.retailerId, plan.planName, plan.region)
+    .first<{ id: string; provenance: string | null } | null>();
+
+  if (existing) {
+    // Manual-protection: never overwrite a manually curated row.
+    if (existing.provenance === 'manual') {
+      return { changed: false, blockedByManual: true };
+    }
+    await db
+      .prepare(
+        `UPDATE plans SET
+           retailer_id = ?1, name = ?2, region = ?3, c_per_kwh = ?4, c_per_day = ?5,
+           prompt_payment_discount = ?6, conditions_json = ?7,
+           low_user_eligible = ?8, source = ?9, effective_from = ?10,
+           provenance = ?11, source_url = ?12, ingested_at = ?13, is_current = 1
+         WHERE id = ?14`
+      )
+      .bind(
+        plan.retailerId,
+        plan.planName,
+        plan.region,
+        plan.cPerKwh,
+        plan.cPerDay,
+        plan.promptPaymentDiscount,
+        conditionsJson,
+        plan.lowUserEligible ? 1 : 0,
+        'powerswitch',
+        ingestedAt,
+        'powerswitch',
+        plan.sourceUrl,
+        ingestedAt,
+        existing.id
+      )
+      .run();
+    return { changed: true, blockedByManual: false };
+  }
+
+  // Insert new row.
+  await db
+    .prepare(
+      `INSERT INTO plans (
+         id, retailer_id, name, region, c_per_kwh, c_per_day,
+         tier_thresholds_json, prompt_payment_discount, conditions_json,
+         low_user_eligible, source, eiep14a_id, effective_from, effective_to,
+         provenance, source_url, ingested_at, content_hash, is_current
+       ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7, ?8, ?9, ?10, NULL, ?11, NULL, ?12, ?13, ?14, NULL, 1)`
+    )
+    .bind(
+      generateId(),
+      plan.retailerId,
+      plan.planName,
+      plan.region,
+      plan.cPerKwh,
+      plan.cPerDay,
+      plan.promptPaymentDiscount,
+      conditionsJson,
+      plan.lowUserEligible ? 1 : 0,
+      'powerswitch',
+      ingestedAt,
+      'powerswitch',
+      plan.sourceUrl,
+      ingestedAt
+    )
+    .run();
+  return { changed: true, blockedByManual: false };
 }
