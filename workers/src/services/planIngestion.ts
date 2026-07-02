@@ -90,6 +90,11 @@ export async function refreshPlans(env: EnvWithPlans): Promise<number> {
         eiep14aId: plan.eiep14a_id,
         effectiveFrom: plan.effective_from,
         effectiveTo: null,
+        provenance: 'eiep14a',
+        sourceUrl: null,
+        ingestedAt: null,
+        contentHash: null,
+        isCurrent: true,
       });
       upserted++;
     } catch (error) {
