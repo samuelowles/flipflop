@@ -10,7 +10,8 @@ import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates
 import { adminRateLimitStatus } from './routes/adminRateLimit';
 import { pollAllUsers } from './services/emailPoller';
 import { refreshPlans } from './services/planIngestion';
-import { handleParseJob } from './services/billParser';
+import { handleParseJob, ParseError } from './services/billParser';
+import { updateBillFailed } from './models/bills';
 import { runComparison } from './services/planComparator';
 import { evaluateAndNotify } from './services/notificationEngine';
 import { purgeOldLLMAudit } from './services/llmAudit';
@@ -119,6 +120,7 @@ async function queue(
           PYTHON_SERVICE_URL: env.PYTHON_SERVICE_URL as string | undefined,
           PYTHON_SERVICE_AUTH_TOKEN: env.PYTHON_SERVICE_AUTH_TOKEN as string | undefined,
         });
+        message.ack();
       } else if (queueName === 'flip-compare-queue') {
         const body = message.body as { userId: string; billId: string };
         await runComparison(body.userId, {
@@ -128,6 +130,7 @@ async function queue(
           PYTHON_SERVICE_URL: env.PYTHON_SERVICE_URL as string | undefined,
           PYTHON_SERVICE_AUTH_TOKEN: env.PYTHON_SERVICE_AUTH_TOKEN as string | undefined,
         });
+        message.ack();
       } else if (queueName === 'flip-notify-queue') {
         const body = message.body as { userId: string; comparisonId: string };
         await evaluateAndNotify(body.userId, body.comparisonId, {
@@ -137,15 +140,69 @@ async function queue(
           ENCRYPTION_KEY: env.ENCRYPTION_KEY as string,
           DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY as string | undefined,
         });
+        message.ack();
       } else {
         console.log(JSON.stringify({
           type: 'queue_unknown',
           queueName,
           timestamp: new Date().toISOString(),
         }));
+        message.ack();
       }
-      message.ack();
     } catch (error) {
+      // Issue #39: parse-queue retry/DLQ policy.
+      // - ParseError carries `transient` (5xx/network/timeout → retry) vs
+      //   terminal (4xx, extract_failed, no_media → fail immediately).
+      // - Transient: retry with exponential backoff until max attempts, then
+      //   mark the bill failed + ack (the platform DLQ is the safety net).
+      // - Terminal: mark the bill failed + ack immediately. No retry.
+      // - Unknown non-ParseError: treat as transient (retain prior behaviour).
+      if (queueName === 'flip-parse-queue') {
+        const body = message.body as { billId?: string };
+        const billId = body?.billId;
+        const isParseError = error instanceof ParseError;
+        const transient = !isParseError || error.transient;
+        const errorCode = isParseError ? error.errorCode : 'unknown_error';
+
+        if (transient && message.attempts < MAX_PARSE_ATTEMPTS) {
+          console.log(JSON.stringify({
+            type: 'parse_queue_retry',
+            queueName,
+            billId,
+            errorCode,
+            attempts: message.attempts,
+            timestamp: new Date().toISOString(),
+          }));
+          message.retry({ delaySeconds: parseBackoffSeconds(message.attempts) });
+          continue;
+        }
+
+        // Retries exhausted OR terminal error — persist failure, ack.
+        if (billId) {
+          try {
+            await updateBillFailed(env.DB as D1Database, billId, errorCode);
+          } catch (dbErr) {
+            console.log(JSON.stringify({
+              type: 'parse_queue_fail_write_error',
+              billId,
+              error: dbErr instanceof Error ? dbErr.message : 'unknown',
+              timestamp: new Date().toISOString(),
+            }));
+          }
+        }
+        console.log(JSON.stringify({
+          type: 'parse_queue_failed',
+          queueName,
+          billId,
+          errorCode,
+          terminal: !transient,
+          attempts: message.attempts,
+          timestamp: new Date().toISOString(),
+        }));
+        message.ack();
+        continue;
+      }
+
       console.log(JSON.stringify({
         type: 'queue_error',
         queueName,
@@ -155,6 +212,14 @@ async function queue(
       message.ack(); // ack to avoid infinite retry loop
     }
   }
+}
+
+// Issue #39: 3 attempts with exponential backoff (30s, 60s) before DLQ/fail.
+const MAX_PARSE_ATTEMPTS = 3;
+
+function parseBackoffSeconds(attempts: number): number {
+  // attempts is 1-based on first delivery. 30s then 60s.
+  return 30 * attempts;
 }
 
 // Cron trigger handler
