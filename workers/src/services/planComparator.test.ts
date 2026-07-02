@@ -184,10 +184,8 @@ describe('runComparison — happy path (#70)', () => {
     vi.mocked(getPlansByRetailer).mockResolvedValueOnce(canonicalPlans);
     // Canonical aggregator returns de-duplicated plans.
     vi.mocked(getCanonicalPlans).mockResolvedValueOnce(canonicalPlans);
-    // Persistence returns a comparison row per saved result.
-    vi.mocked(createComparison)
-      .mockResolvedValueOnce(mockComparison('cmp-1'))
-      .mockResolvedValueOnce(mockComparison('cmp-2'));
+    // Persistence returns a single summary row per run (AC #73).
+    vi.mocked(createComparison).mockResolvedValueOnce(mockComparison('cmp-1'));
     // Python boundary returns the bare ranked list.
     mockFetch.mockResolvedValueOnce({
       ok: true,
@@ -197,7 +195,7 @@ describe('runComparison — happy path (#70)', () => {
 
     const result = await runComparison('user-1', env);
 
-    // Returns the first comparison id (cheapest non-current plan saved).
+    // Returns the single summary comparison id.
     expect(result).toBe('cmp-1');
 
     // 1. Bill fetched.
@@ -222,8 +220,18 @@ describe('runComparison — happy path (#70)', () => {
     expect(body.availablePlans).toHaveLength(2);
     expect(body.availablePlans[0].retailer_id).toBe('ret-a');
 
-    // 5. Persisted one comparison per result that matched an available plan.
-    expect(createComparison).toHaveBeenCalledTimes(2);
+    // 5. AC #73 — exactly ONE summary row per run, not one per candidate.
+    expect(createComparison).toHaveBeenCalledTimes(1);
+    // The persisted summary carries the switch verdict + recommended plan.
+    const persisted = vi.mocked(createComparison).mock.calls[0]![1];
+    expect(persisted).toMatchObject({
+      recommendation: 'switch',
+      recommendedPlanId: 'plan-cheap-1',
+      currentPlanId: 'plan-current-1',
+      billId: 'bill-1',
+      projectedAnnualCost: 280000,
+      savings: 20000,
+    });
 
     // 6. Notify enqueued only for the plan that beat the $50 saving threshold.
     expect(notifySend).toHaveBeenCalledTimes(1);
@@ -259,9 +267,7 @@ describe('runComparison — stay_put recommendation surfacing (#72)', () => {
     vi.mocked(getBillsByUserId).mockResolvedValueOnce([makeParsedBill()]);
     vi.mocked(getPlansByRetailer).mockResolvedValueOnce(canonicalPlans);
     vi.mocked(getCanonicalPlans).mockResolvedValueOnce(canonicalPlans);
-    vi.mocked(createComparison)
-      .mockResolvedValueOnce(mockComparison('cmp-1'))
-      .mockResolvedValueOnce(mockComparison('cmp-2'));
+    vi.mocked(createComparison).mockResolvedValueOnce(mockComparison('cmp-1'));
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -270,9 +276,13 @@ describe('runComparison — stay_put recommendation surfacing (#72)', () => {
 
     await runComparison('user-1', env);
 
-    // The persisted comparison payload carries the recommendation through.
+    // AC #73 — single summary row carrying the recommendation verdict.
+    expect(createComparison).toHaveBeenCalledTimes(1);
     const persisted = vi.mocked(createComparison).mock.calls[0]![1];
-    expect(persisted).toMatchObject({ savingCents: 20000 });
+    expect(persisted).toMatchObject({
+      recommendation: 'switch',
+      savingCents: 20000,
+    });
 
     // Notify fired exactly once for the switch-recommended plan.
     expect(notifySend).toHaveBeenCalledTimes(1);
@@ -283,9 +293,7 @@ describe('runComparison — stay_put recommendation surfacing (#72)', () => {
     vi.mocked(getBillsByUserId).mockResolvedValueOnce([makeParsedBill()]);
     vi.mocked(getPlansByRetailer).mockResolvedValueOnce(canonicalPlans);
     vi.mocked(getCanonicalPlans).mockResolvedValueOnce(canonicalPlans);
-    vi.mocked(createComparison)
-      .mockResolvedValueOnce(mockComparison('cmp-1'))
-      .mockResolvedValueOnce(mockComparison('cmp-2'));
+    vi.mocked(createComparison).mockResolvedValueOnce(mockComparison('cmp-1'));
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
@@ -305,6 +313,14 @@ describe('runComparison — stay_put recommendation surfacing (#72)', () => {
 
     await runComparison('user-1', env);
 
+    // AC #73 — cooldown forces stay_put verdict in the summary row.
+    expect(createComparison).toHaveBeenCalledTimes(1);
+    const persisted = vi.mocked(createComparison).mock.calls[0]![1];
+    expect(persisted).toMatchObject({
+      recommendation: 'stay_put',
+      reason: 'recent_switch',
+    });
+
     // No notification — stay_put must never trigger a switch nudge.
     expect(notifySend).not.toHaveBeenCalled();
   });
@@ -313,9 +329,7 @@ describe('runComparison — stay_put recommendation surfacing (#72)', () => {
     vi.mocked(getBillsByUserId).mockResolvedValueOnce([makeParsedBill()]);
     vi.mocked(getPlansByRetailer).mockResolvedValueOnce(canonicalPlans);
     vi.mocked(getCanonicalPlans).mockResolvedValueOnce(canonicalPlans);
-    vi.mocked(createComparison)
-      .mockResolvedValueOnce(mockComparison('cmp-1'))
-      .mockResolvedValueOnce(mockComparison('cmp-2'));
+    vi.mocked(createComparison).mockResolvedValueOnce(mockComparison('cmp-1'));
     mockFetch.mockResolvedValueOnce({
       ok: true,
       status: 200,
