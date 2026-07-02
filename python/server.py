@@ -127,13 +127,32 @@ def parse_bill():
 
         # Select parser
         parser = parser_for_retailer(retailer_id) if retailer_id else None
-        if parser is None:
+        used_generic = parser is None
+        if used_generic:
             logger.info(
                 "No retailer-specific parser for '%s', using generic", retailer_id
             )
             parser = GenericParser()
 
         result = parser.parse(file_path)
+        parser_name = "generic" if used_generic else (retailer_id or "generic")
+
+        # Retry once with the generic fallback when the primary parser's
+        # confidence is below the 0.7 threshold (AI_RULES Bill Parsing
+        # Thresholds). Only retries if the primary was NOT already generic.
+        if result.confidence < 0.7 and not used_generic:
+            fallback = GenericParser()
+            fallback_result = fallback.parse(file_path)
+            logger.debug(
+                "Primary parser '%s' confidence %.3f < 0.7; "
+                "generic fallback confidence %.3f",
+                parser_name, result.confidence, fallback_result.confidence,
+            )
+            if fallback_result.confidence > result.confidence:
+                result = fallback_result
+                parser_name = "generic"
+
+        result.parser_used = parser_name
         return app.response_class(
             response=result.to_json(),
             status=200,
