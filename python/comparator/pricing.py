@@ -7,6 +7,7 @@ Deterministic arithmetic — NO AI/LLM.
 
 from __future__ import annotations
 
+import json
 from typing import Optional
 
 # ---------------------------------------------------------------------------
@@ -26,6 +27,40 @@ DEFAULT_STANDARD_DAILY = 90.0  # cents/day
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def is_unsupported_plan(plan: dict) -> tuple[bool, str]:
+    """Return (unsupported, reason) for a plan that cannot be safely priced.
+
+    A plan is unsupported when pricing it with the flat-rate model would
+    produce a bogus result, so it must NOT trigger a switch recommendation.
+
+    Two cases (AC #125):
+
+    1. Time-of-use. conditions_json.is_tou is truthy, or
+       conditions_json.rate_type is a TOU indicator. TOU windows are not
+       captured in plan fixtures (see powerswitch.completeness), so a TOU plan
+       priced at the flat c_per_kwh would be wrong -- flag it instead.
+    2. Missing required fields. Neither a flat c_per_kwh nor a
+       tier_thresholds_json schedule is present -- mirrors the TS
+       isIncompletePlan guard (plans.ts).
+    """
+    conditions = _get_conditions(plan)
+
+    # 1. TOU detection
+    if conditions.get("is_tou"):
+        return True, "time-of-use plan: usage windows not available for pricing"
+    rate_type = str(conditions.get("rate_type", "")).upper()
+    if rate_type in {"TOU", "TIME_OF_USE", "TIME-OF-USE"}:
+        return True, f"time-of-use rate_type ({rate_type}) not supported"
+
+    # 2. Missing required fields (mirror TS isIncompletePlan)
+    has_flat_rate = plan.get("c_per_kwh") is not None
+    has_tiers = bool(_get_tiers(plan))
+    if not has_flat_rate and not has_tiers:
+        return True, "missing required pricing fields (c_per_kwh and tier_thresholds_json)"
+
+    return False, ""
 
 
 def calculate_bill_cost(kwh: float, days: int, plan: dict) -> int:
@@ -192,8 +227,6 @@ def _get_tiers(plan: dict) -> list[dict]:
     if isinstance(tiers, list):
         return tiers
     if isinstance(tiers, str):
-        import json
-
         try:
             parsed = json.loads(tiers)
             if isinstance(parsed, list):
@@ -201,3 +234,21 @@ def _get_tiers(plan: dict) -> list[dict]:
         except json.JSONDecodeError:
             pass
     return []
+
+
+def _get_conditions(plan: dict) -> dict:
+    """Extract the conditions_json dict from a plan, tolerant of shape.
+
+    Handles JSON-string, dict, or missing entirely (returns {}).
+    """
+    conditions = plan.get("conditions_json")
+    if isinstance(conditions, dict):
+        return conditions
+    if isinstance(conditions, str):
+        try:
+            parsed = json.loads(conditions)
+            if isinstance(parsed, dict):
+                return parsed
+        except json.JSONDecodeError:
+            pass
+    return {}

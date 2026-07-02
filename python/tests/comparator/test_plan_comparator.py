@@ -227,3 +227,124 @@ class TestPlanMatchesMeterType:
     def test_standard_plan_matches_all(self):
         assert _plan_matches_meter_type({"low_user_eligible": 0}, "standard") is True
         assert _plan_matches_meter_type({"low_user_eligible": 0}, "low_user") is True
+
+
+class TestUnsupportedFlag:
+    """AC #125: TOU and missing-field plans flagged unsupported, no fake saving."""
+
+    def test_tou_plan_flagged_unsupported(self, usage_profile, current_plan, bill_history):
+        tou_plan = {
+            "id": "plan-tou",
+            "name": "TOU Plan",
+            "retailer_id": "mercury",
+            "c_per_kwh": 25.0,
+            "c_per_day": 90.0,
+            "conditions_json": json.dumps({"is_tou": True}),
+        }
+        results = compare(usage_profile, current_plan, [current_plan, tou_plan], bill_history)
+
+        tou_result = [r for r in results if r["plan_id"] == "plan-tou"][0]
+        assert tou_result["unsupported"] is True
+        assert "time-of-use" in tou_result["unsupported_reason"]
+        # Must NOT show a saving (zero prevents bogus switch recommendation)
+        assert tou_result["saving_cents"] == 0
+        assert tou_result["projected_cost_cents"] == 0
+
+    def test_tou_plan_via_rate_type_flagged(self, usage_profile, current_plan, bill_history):
+        tou_plan = {
+            "id": "plan-tou-rt",
+            "name": "TOU Rate",
+            "retailer_id": "genesis",
+            "c_per_kwh": 25.0,
+            "c_per_day": 90.0,
+            "conditions_json": json.dumps({"rate_type": "TOU"}),
+        }
+        results = compare(usage_profile, current_plan, [current_plan, tou_plan], bill_history)
+        tou_result = [r for r in results if r["plan_id"] == "plan-tou-rt"][0]
+        assert tou_result["unsupported"] is True
+
+    def test_missing_field_plan_flagged_unsupported(
+        self, usage_profile, current_plan, bill_history
+    ):
+        # No c_per_kwh and no tier_thresholds_json -> unsupported
+        missing_plan = {
+            "id": "plan-missing",
+            "name": "Missing Fields",
+            "retailer_id": "contact",
+            "c_per_day": 90.0,
+        }
+        results = compare(
+            usage_profile, current_plan, [current_plan, missing_plan], bill_history
+        )
+        missing_result = [r for r in results if r["plan_id"] == "plan-missing"][0]
+        assert missing_result["unsupported"] is True
+        assert "missing" in missing_result["unsupported_reason"]
+        assert missing_result["saving_cents"] == 0
+
+    def test_supported_plan_has_unsupported_false(
+        self, usage_profile, current_plan, cheaper_plan, bill_history
+    ):
+        results = compare(
+            usage_profile, current_plan, [current_plan, cheaper_plan], bill_history
+        )
+        for r in results:
+            assert r["unsupported"] is False
+            assert "unsupported_reason" not in r
+
+    def test_unsupported_plan_does_not_trigger_switch(
+        self, usage_profile, current_plan, bill_history
+    ):
+        # A TOU plan with a deceptively low c_per_kwh must NOT appear as a saving
+        tou_plan = {
+            "id": "plan-tou-cheap",
+            "name": "Cheap TOU",
+            "retailer_id": "mercury",
+            "c_per_kwh": 1.0,  # would fake a huge saving if priced at flat rate
+            "c_per_day": 30.0,
+            "conditions_json": json.dumps({"is_tou": True}),
+        }
+        results = compare(usage_profile, current_plan, [current_plan, tou_plan], bill_history)
+        tou_result = [r for r in results if r["plan_id"] == "plan-tou-cheap"][0]
+        assert tou_result["unsupported"] is True
+        assert tou_result["saving_cents"] == 0
+
+
+class TestExitFeeAwareness:
+    """AC #125: exit-fee / break-fee logic still works (regression guard)."""
+
+    def test_break_fee_warning_when_saving_erased(self, bill_history):
+        # Current plan has a break fee that exceeds the saving from switching
+        current = {
+            "id": "plan-current",
+            "name": "Current",
+            "retailer_id": "contact",
+            "c_per_kwh": 28.0,
+            "c_per_day": 90.0,
+            "break_fee_cents": 50000,  # large break fee in cents
+        }
+        cheaper = {
+            "id": "plan-cheaper",
+            "name": "Cheaper",
+            "retailer_id": "mercury",
+            "c_per_kwh": 27.5,  # small saving, well under the break fee
+            "c_per_day": 90.0,
+        }
+        results = compare(
+            {"avg_daily_kwh": 15.0, "meter_type": "standard"},
+            current,
+            [current, cheaper],
+            bill_history,
+        )
+        cheaper_result = [r for r in results if r["plan_id"] == "plan-cheaper"][0]
+        # The raw saving is positive but the break fee erases it
+        assert cheaper_result.get("break_fee_warning") is True
+        assert cheaper_result["net_first_year_saving_cents"] < 0
+
+    def test_no_break_fee_warning_when_fee_zero(
+        self, usage_profile, current_plan, cheaper_plan, bill_history
+    ):
+        results = compare(
+            usage_profile, current_plan, [current_plan, cheaper_plan], bill_history
+        )
+        cheaper_result = [r for r in results if r["plan_id"] == "plan-cheaper"][0]
+        assert "break_fee_warning" not in cheaper_result

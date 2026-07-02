@@ -1,9 +1,12 @@
 """Tests for pricing helper functions."""
+import json
+
 from comparator.pricing import (
     calculate_bill_cost,
     apply_tiers,
     apply_discount,
     is_low_user_eligible,
+    is_unsupported_plan,
     project_annual_cost,
 )
 
@@ -133,3 +136,74 @@ class TestProjectAnnualCost:
         # Total: 124100 cents
         cost = project_annual_cost(10.0, 365, plan)
         assert cost == 124100
+
+
+class TestIsUnsupportedPlan:
+    """AC #125: TOU and missing-field plans must be flagged unsupported."""
+
+    def test_flat_plan_supported(self):
+        plan = {"c_per_kwh": 25.0, "c_per_day": 90.0}
+        unsupported, reason = is_unsupported_plan(plan)
+        assert unsupported is False
+        assert reason == ""
+
+    def test_tiered_plan_supported_without_flat_rate(self):
+        # Tiers present even without c_per_kwh -> supported
+        plan = {"tier_thresholds_json": [{"threshold_kwh": 0, "c_per_kwh": 25.0}]}
+        unsupported, _ = is_unsupported_plan(plan)
+        assert unsupported is False
+
+    def test_tou_plan_via_is_tou_flag(self):
+        plan = {
+            "c_per_kwh": 25.0,
+            "conditions_json": json.dumps({"is_tou": True}),
+        }
+        unsupported, reason = is_unsupported_plan(plan)
+        assert unsupported is True
+        assert "time-of-use" in reason
+
+    def test_tou_plan_via_rate_type(self):
+        plan = {
+            "c_per_kwh": 25.0,
+            "conditions_json": json.dumps({"rate_type": "TOU"}),
+        }
+        unsupported, reason = is_unsupported_plan(plan)
+        assert unsupported is True
+        assert "TOU" in reason
+
+    def test_non_tou_rate_type_supported(self):
+        # ANYTIME / CONTROLLED / UNCONTROLLED are flat-rate indicators, not TOU
+        for rate_type in ("ANYTIME", "CONTROLLED", "UNCONTROLLED"):
+            plan = {
+                "c_per_kwh": 25.0,
+                "conditions_json": json.dumps({"rate_type": rate_type}),
+            }
+            unsupported, _ = is_unsupported_plan(plan)
+            assert unsupported is False, f"{rate_type} should not be unsupported"
+
+    def test_tou_flag_falsy_supported(self):
+        plan = {
+            "c_per_kwh": 25.0,
+            "conditions_json": json.dumps({"is_tou": False}),
+        }
+        unsupported, _ = is_unsupported_plan(plan)
+        assert unsupported is False
+
+    def test_missing_required_fields(self):
+        # Neither c_per_kwh nor tier_thresholds_json -> unsupported (mirrors TS
+        # isIncompletePlan)
+        plan = {"c_per_day": 90.0}
+        unsupported, reason = is_unsupported_plan(plan)
+        assert unsupported is True
+        assert "missing" in reason
+
+    def test_conditions_as_dict_supported(self):
+        # conditions_json may already be a parsed dict
+        plan = {"c_per_kwh": 25.0, "conditions_json": {"is_tou": False}}
+        unsupported, _ = is_unsupported_plan(plan)
+        assert unsupported is False
+
+    def test_malformed_conditions_does_not_crash(self):
+        plan = {"c_per_kwh": 25.0, "conditions_json": "not-json"}
+        unsupported, _ = is_unsupported_plan(plan)
+        assert unsupported is False
