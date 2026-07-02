@@ -170,16 +170,23 @@ export async function setState(
   await kv.put(key, state, { expirationTtl: KV_TTL_SECONDS });
 }
 
+// Trigger source: inbound = user-initiated (user texted a command),
+// outbound = system/notification-initiated (e.g. parse-complete moving
+// AWAITING_BILL -> ACTIVE, switch-complete). Defaults to inbound since the
+// only production caller today is the inbound webhook handler.
+export type TransitionTrigger = 'inbound' | 'outbound';
+
 // Perform a full transition: validate, persist, return response.
 // On an invalid pair, throws a ConversationError internally, logs it at WARN
-// with the full state pair + request_id, then returns a soft no-op response
-// (preserving the existing contract webhook callers depend on).
+// with the full state pair + request_id + trigger source, then returns a soft
+// no-op response (preserving the existing contract webhook callers depend on).
 export async function transition(
   kv: KVNamespace,
   userId: string,
   intent: Intent,
   _ctx?: TransitionContext,
-  request_id: string = defaultRequestId()
+  request_id: string = defaultRequestId(),
+  trigger: TransitionTrigger = 'inbound'
 ): Promise<StateTransition> {
   const from = await getState(kv, userId);
   const nextState = validateTransition(from, intent);
@@ -196,6 +203,7 @@ export async function transition(
       to: ce.to,
       intent,
       request_id: ce.request_id,
+      trigger,
       timestamp: new Date().toISOString(),
     }));
     return {
