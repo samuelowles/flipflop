@@ -25,6 +25,15 @@ applied directly via the Wrangler CLI.
 | 0008 | `0008_seed_additional_plans.sql` | Backfill additional plan rows | PENDING — to be applied via separate issue |
 | 0009 | `0009_plan_data_provenance.sql` | Plan data provenance tracking | PENDING — to be applied via separate issue |
 
+## Note on `plans.is_current`
+
+The `plans` table (migration 0001) expresses "current plan" via
+`effective_to IS NULL` rather than a boolean `is_current` column — see
+`docs/ARCHITECTURE.md`. A real `is_current INTEGER` column will be added in
+migration `0013` (issue #63, Epic 6 Wave 2) because the change-detection (#68)
+and aggregator (#69) pipelines require a materialized versioning flag. No
+`is_current` index exists in 0001 by design.
+
 ## Apply a Single Migration by File
 
 Use this when a single migration needs to be applied out-of-band (for example,
