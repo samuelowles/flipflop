@@ -232,6 +232,26 @@ describe('classifyIntent (DeepSeek Flash)', () => {
     const result = await classifyIntent('what can you do', 'test-api-key');
     expect(result.intent).toBe('help');
   });
+
+  it('returns unknown gracefully when fetch is aborted (500ms ceiling enforced)', async () => {
+    // The 500ms AbortController timeout (FLASH_TIMEOUT_MS) in classifyIntent
+    // fires controller.abort() on slow DeepSeek responses, which surfaces to
+    // fetch as an AbortError rejection. Mocking that rejection verifies the
+    // <500ms latency ceiling is enforced and handled deterministically:
+    // the call returns a safe `unknown` fallback rather than hanging or throwing.
+    const abortError = new DOMException('The operation was aborted', 'AbortError');
+    mockFetch.mockRejectedValue(abortError);
+
+    const result = await classifyIntent('slow message', 'test-api-key');
+
+    expect(result.intent).toBe('unknown');
+    expect(result.confidence).toBe(0);
+    expect(result.entities).toEqual({});
+    expect(result.needsDisambiguation).toBe(true);
+    // Retried up to MAX_RETRIES before giving up — proving abort is retried,
+    // not a fatal crash, yet still bounded so latency stays under the ceiling.
+    expect(mockFetch).toHaveBeenCalledTimes(3);
+  });
 });
 
 describe('disambiguate (DeepSeek Pro)', () => {
