@@ -3,6 +3,8 @@ import {
   ALLOWED_TRANSITIONS,
   isValidTransition,
   transitionSwitch,
+  createSwitch,
+  DuplicateActiveSwitchError,
 } from './switchService';
 import type { SwitchStatus } from '../types/switch';
 
@@ -324,5 +326,200 @@ describe('transitionSwitch (issue #129 boundary)', () => {
     expect(result.status).toBe('in_progress');
     // failureReason not in the SET clause this call → unchanged.
     expect(store.switches.get('sw-1')!.failure_reason).toBe('pre-existing note');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 3. createSwitch — issue #130 duplicate-active validation
+//
+// Extends the fakeDB to handle the model's INSERT INTO switches + the
+// getActiveSwitchForUserAndPlan SELECT (user_id + to_plan_id + active statuses).
+// ---------------------------------------------------------------------------
+
+function fakeDB130(store: FakeStore): D1Database {
+  const db = {
+    prepare: (sql: string) => ({
+      bind: (...params: unknown[]) => ({
+        first: async <T>(): Promise<T | null> => {
+          const trimmed = sql.trim();
+          // getActiveSwitchForUserAndPlan: WHERE user_id AND to_plan_id AND active
+          if (trimmed.includes('to_plan_id')) {
+            const userId = params[0] as string;
+            const planId = params[1] as string;
+            const active: SwitchStatus[] = ['requested', 'confirmed', 'in_progress'];
+            const found = [...store.switches.values()]
+              .filter(
+                (r) =>
+                  r.user_id === userId &&
+                  r.to_plan_id === planId &&
+                  active.includes(r.status)
+              )
+              .sort((a, b) => (a.requested_at < b.requested_at ? 1 : -1))[0];
+            return (found as unknown as T) ?? null;
+          }
+          // getSwitchById: WHERE id
+          if (trimmed.startsWith('SELECT * FROM switches WHERE id')) {
+            const id = params[0] as string;
+            const row = store.switches.get(id);
+            return (row as unknown as T) ?? null;
+          }
+          return null;
+        },
+        run: async () => {
+          const trimmed = sql.trim();
+          // Model createSwitch INSERT. Status is a SQL literal ('requested'),
+          // not a bind param — bind order is (id, userId, fromRetailerId, toPlanId, now).
+          if (trimmed.startsWith('INSERT INTO switches')) {
+            const row: MutableSwitchRow = {
+              id: params[0] as string,
+              user_id: params[1] as string,
+              from_retailer_id: params[2] as string,
+              to_plan_id: params[3] as string,
+              status: 'requested',
+              requested_at: params[4] as string,
+              confirmed_at: null,
+              completed_at: null,
+              failure_reason: null,
+            };
+            store.switches.set(row.id, row);
+            return { success: true, meta: { changes: 1 } };
+          }
+          if (trimmed.startsWith('INSERT INTO switch_transitions')) {
+            store.transitions.push({
+              id: params[0] as string,
+              switch_id: params[1] as string,
+              from_status: params[2] as SwitchStatus | null,
+              to_status: params[3] as SwitchStatus,
+              actor: params[4] as string,
+              reason: (params[5] as string | null) ?? null,
+              at: params[6] as string,
+            });
+            return { success: true, meta: { changes: 1 } };
+          }
+          return { success: false, meta: { changes: 0 } };
+        },
+        all: async <T>() => ({ results: [] as unknown as T[], success: true, meta: {} }),
+      }),
+    }),
+  } as unknown as D1Database;
+
+  return db;
+}
+
+describe('createSwitch (issue #130 validation)', () => {
+  it('happy path: inserts switch + initial transition row (null -> requested, reason=created)', async () => {
+    const store: FakeStore = { switches: new Map(), transitions: [] };
+    const db = fakeDB130(store);
+
+    const result = await createSwitch(db, {
+      userId: 'u-1',
+      fromRetailerId: 'ret-a',
+      toPlanId: 'plan-b',
+      actor: 'user',
+    });
+
+    expect(result.status).toBe('requested');
+    expect(result.userId).toBe('u-1');
+    expect(result.toPlanId).toBe('plan-b');
+
+    // Exactly one switch row + one transition row.
+    expect(store.switches.size).toBe(1);
+    expect(store.transitions).toHaveLength(1);
+    expect(store.transitions[0]).toMatchObject({
+      switch_id: result.id,
+      from_status: null,
+      to_status: 'requested',
+      actor: 'user',
+      reason: 'created',
+    });
+  });
+
+  it('duplicate rejection: active switch for same user+plan exists → throws DuplicateActiveSwitchError', async () => {
+    const store: FakeStore = {
+      switches: new Map([
+        ['sw-existing', seedSwitch({ user_id: 'u-1', to_plan_id: 'plan-b', status: 'requested' })],
+      ]),
+      transitions: [],
+    };
+    const db = fakeDB130(store);
+
+    await expect(
+      createSwitch(db, {
+        userId: 'u-1',
+        fromRetailerId: 'ret-a',
+        toPlanId: 'plan-b',
+        actor: 'user',
+      })
+    ).rejects.toBeInstanceOf(DuplicateActiveSwitchError);
+
+    // No new switch inserted, no new transition written.
+    expect(store.switches.size).toBe(1);
+    expect(store.transitions).toHaveLength(0);
+  });
+
+  it('duplicate rejection exposes the existing switch id (for HTTP 409 body)', async () => {
+    const store: FakeStore = {
+      switches: new Map([
+        ['sw-existing', seedSwitch({ id: 'sw-existing', user_id: 'u-1', to_plan_id: 'plan-b', status: 'confirmed' })],
+      ]),
+      transitions: [],
+    };
+    const db = fakeDB130(store);
+
+    await expect(
+      createSwitch(db, {
+        userId: 'u-1',
+        fromRetailerId: 'ret-a',
+        toPlanId: 'plan-b',
+        actor: 'user',
+      })
+    ).rejects.toMatchObject({
+      name: 'DuplicateActiveSwitchError',
+      existingSwitchId: 'sw-existing',
+    });
+  });
+
+  it('different-plan allowed: active switch for a DIFFERENT plan does NOT block', async () => {
+    const store: FakeStore = {
+      switches: new Map([
+        ['sw-other', seedSwitch({ user_id: 'u-1', to_plan_id: 'plan-X', status: 'requested' })],
+      ]),
+      transitions: [],
+    };
+    const db = fakeDB130(store);
+
+    const result = await createSwitch(db, {
+      userId: 'u-1',
+      fromRetailerId: 'ret-a',
+      toPlanId: 'plan-b', // different plan
+      actor: 'user',
+    });
+
+    // New switch created despite the existing active switch for a different plan.
+    expect(store.switches.size).toBe(2);
+    expect(result.toPlanId).toBe('plan-b');
+    expect(store.transitions).toHaveLength(1);
+  });
+
+  it('terminal-status switch does NOT block: completed/failed switches are not "active"', async () => {
+    const store: FakeStore = {
+      switches: new Map([
+        ['sw-done', seedSwitch({ user_id: 'u-1', to_plan_id: 'plan-b', status: 'completed' })],
+        ['sw-failed', seedSwitch({ id: 'sw-failed', user_id: 'u-1', to_plan_id: 'plan-b', status: 'failed' })],
+      ]),
+      transitions: [],
+    };
+    const db = fakeDB130(store);
+
+    const result = await createSwitch(db, {
+      userId: 'u-1',
+      fromRetailerId: 'ret-a',
+      toPlanId: 'plan-b',
+      actor: 'user',
+    });
+
+    expect(store.switches.size).toBe(3);
+    expect(result.status).toBe('requested');
+    expect(store.transitions).toHaveLength(1);
   });
 });

@@ -99,6 +99,34 @@ export async function getActiveSwitchForUser(
 }
 
 /**
+ * Get the active (non-terminal) switch for a user + plan, if any.
+ * Active statuses: requested, confirmed, in_progress.
+ *
+ * Issue #130 AC: a user MUST NOT have two active switches for the SAME plan.
+ * A user MAY have active switches for DIFFERENT plans — this helper is scoped
+ * to (user, plan), unlike `getActiveSwitchForUser` which is user-only.
+ * Mirrors `getActiveSwitchForUser` exactly + `AND to_plan_id = ?`.
+ */
+export async function getActiveSwitchForUserAndPlan(
+  db: D1Database,
+  userId: string,
+  planId: string
+): Promise<Switch | null> {
+  const stmt = db.prepare(
+    `SELECT * FROM switches
+     WHERE user_id = ?1
+       AND to_plan_id = ?2
+       AND status IN ('requested', 'confirmed', 'in_progress')
+     ORDER BY requested_at DESC
+     LIMIT 1`
+  );
+  const result = await stmt.bind(userId, planId).first<Record<string, unknown>>();
+
+  if (!result) return null;
+  return rowToSwitch(result);
+}
+
+/**
  * Get the user's most recent switch (any status), newest first.
  * Used by AC #72 recent_switch cooldown: if the newest switch falls inside
  * the cooldown window, the comparison recommendation is overridden to stay_put.

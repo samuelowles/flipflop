@@ -9,6 +9,7 @@ import { evalUploadPage, evalUploadHandler, evalResultPage, evalStatus } from '.
 import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates';
 import { adminRateLimitStatus } from './routes/adminRateLimit';
 import { adminListNotifications } from './routes/adminNotifications';
+import { createSwitchRoute } from './routes/switch';
 import { purgeNotificationAudit } from './models/notificationAudit';
 import { pollAllUsers } from './services/emailPoller';
 import { refreshPlans, isEiep14aEnabled, type EnvWithPlans } from './services/eiep14a';
@@ -67,6 +68,15 @@ app.get('/eval/', evalUploadPage);
 app.post('/eval/upload', evalUploadHandler); // inline rate limiter with HTML error page
 app.get('/eval/result', rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 60_000 }), evalResultPage);
 app.get('/eval/status', rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 60_000 }), evalStatus);
+
+// Issue #130 — switch request API. Creates a switch for a user + target plan,
+// rejecting duplicates (active switch for same user+plan). rateLimit mirrors
+// the /eval user-facing routes (no user-session/JWT in the repo yet).
+app.post(
+  '/api/switch',
+  rateLimit({ userLimit: 30, globalLimit: 300, windowMs: 60_000 }),
+  createSwitchRoute
+);
 
 // Admin auth — gates EVERY /admin/* route behind ADMIN_API_KEY Bearer auth.
 // Registered BEFORE the specific admin routes so the middleware runs first
