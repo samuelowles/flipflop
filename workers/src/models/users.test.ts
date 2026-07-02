@@ -8,7 +8,7 @@ import { getUsersByRetailer } from './users';
 
 function fakeDB(rowsByRetailer: Record<string, { id: string }[]>): D1Database {
   return {
-    prepare: (sql: string) => ({
+    prepare: (_sql: string) => ({
       bind: (retailerId: string) => ({
         all: async () => ({
           results: rowsByRetailer[retailerId] ?? [],
