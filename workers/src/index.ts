@@ -8,6 +8,8 @@ import { gmailConnectPage, gmailLogin, gmailCallback, gmailScanStatus, gmailEval
 import { evalUploadPage, evalUploadHandler, evalResultPage, evalStatus } from './routes/eval';
 import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates';
 import { adminRateLimitStatus } from './routes/adminRateLimit';
+import { adminListNotifications } from './routes/adminNotifications';
+import { purgeNotificationAudit } from './models/notificationAudit';
 import { pollAllUsers } from './services/emailPoller';
 import { refreshPlans, isEiep14aEnabled, type EnvWithPlans } from './services/eiep14a';
 import { scrapePowerswitchPlans, isPowerswitchEnabled, type EnvWithPowerswitch } from './services/powerswitchScraper';
@@ -78,6 +80,10 @@ app.get('/admin/templates/status', adminTemplateStatus);
 // Issue #37 AC #4: admin visibility into per-user rate-limit state.
 // Registered before the /admin/* catch-all.  Auth-gated via ADMIN_API_KEY.
 app.get('/admin/rate-limit/:userKey', adminRateLimitStatus);
+
+// Issue #82 (Epic #8): notification compliance audit trail. Registered before
+// the /admin/* catch-all. Auth-gated via ADMIN_API_KEY (adminAuth middleware).
+app.get('/admin/notifications', adminListNotifications);
 
 // Epic 1 issue #17 — 501 stubs for unimplemented webhook + admin surfaces.
 // Placed after specific routes so Hono's first-match routing resolves
@@ -306,6 +312,10 @@ async function scheduled(
     }
     // #36 — daily 30-day purge of LLM audit metadata.
     await purgeOldLLMAudit(env.DB as D1Database, 30);
+    // #82 — daily 90-day purge of notification audit rows. Same 03:00 UTC slot
+    // as the LLM-audit purge (both are daily compliance purges; reusing the
+    // slot keeps the cron list from growing). Safe + idempotent.
+    await purgeNotificationAudit(env.DB as D1Database, 90);
     return;
   }
 
