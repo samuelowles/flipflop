@@ -12,8 +12,12 @@ import { getRetailerById } from '../models/retailers';
 import { getBillsByUserId } from '../models/bills';
 import { getUserById, getNotificationThreshold } from '../models/users';
 import { sendText } from './messaging';
+import { renderTemplate } from './sentTemplates';
 import { explainComparison as _explainComparison, generateStayPutMessage, generateSavingMessage } from './comparisonIntelligence';
+import { persistLLMCall } from './llmAudit';
+import { createNotificationAudit } from '../models/notificationAudit';
 import type { Recommendation } from '../types/comparison';
+import type { NotificationType } from '../types/notification';
 
 interface NotifyEnv {
   readonly DB: D1Database;
@@ -90,6 +94,21 @@ export function isWithinCooldownWindow(cooldownKeyExists: boolean): boolean {
 
 function savingToDollars(cents: number): number {
   return Math.round(Math.abs(cents) / 100);
+}
+
+/**
+ * Issue #77 — build the registry variable map for the comparison context.
+ * `stay_put` has no variables; `saving_alert` needs saving_amount +
+ * recommended_retailer. ponytail: a tiny pure helper beats a render adapter.
+ */
+function registryVars(ctx: {
+  readonly bestRetailerName: string;
+  readonly savingDollarsPerYear: number;
+}): Record<string, string> {
+  return {
+    saving_amount: String(ctx.savingDollarsPerYear),
+    recommended_retailer: ctx.bestRetailerName || 'another retailer',
+  };
 }
 
 /**
@@ -225,12 +244,24 @@ export async function evaluateAndNotify(
     billCount: Math.max(1, parsedBills.length),
   };
 
+  // Issue #77 — render the body via the Sent template REGISTRY (the AC's
+  // canonical source for stay_put / saving_alert). DeepSeek optionally
+  // personalises; on any failure the static registry template is the fallback
+  // (no user-facing error). render_ms is timed around the registry render.
+  const templateName: NotificationType = isStayPut ? 'stay_put' : 'saving_alert';
+  const renderStart = Date.now();
   let message: string;
-  if (isStayPut) {
-    message = await generateStayPutMessage(ctx, env.DEEPSEEK_API_KEY);
-  } else {
-    message = await generateSavingMessage(ctx, env.DEEPSEEK_API_KEY);
+  try {
+    // DeepSeek personalisation first (model=pro, low temp). On success the
+    // personalised body wins; on failure we fall back to the registry render.
+    const personalised = isStayPut
+      ? await generateStayPutMessage(ctx, env.DEEPSEEK_API_KEY)
+      : await generateSavingMessage(ctx, env.DEEPSEEK_API_KEY);
+    message = personalised || renderTemplate(templateName, registryVars(ctx));
+  } catch {
+    message = renderTemplate(templateName, registryVars(ctx));
   }
+  const renderMs = Date.now() - renderStart;
 
   // Issue #128 — send-side dedup. Checked immediately before dispatch so a
   // second evaluation of the SAME (user, plan) within 1h is dropped even if
@@ -267,15 +298,39 @@ export async function evaluateAndNotify(
     return;
   }
 
+  // Issue #77 — log the LLM render metadata (prompt_version, render_ms).
+  // body_length requires a column the llm_audit table does not have (no
+  // migration allowed here); latency_ms carries the render timing.
+  void persistLLMCall(env.DB, {
+    model: 'pro',
+    intent: templateName,
+    confidence: comparison.confidence,
+    latency_ms: renderMs,
+    prompt_version: 'sent-registry-v1',
+  });
+
+  let sentMessageId: string | null = null;
   try {
-    await sendText(env.SENT_API_KEY, phone, message);
+    const result = await sendText(env.SENT_API_KEY, phone, message);
+    sentMessageId = result.messageId;
   } catch (error) {
+    const reason = error instanceof Error ? error.message : 'unknown';
     console.log(JSON.stringify({
       type: 'notify_send_error',
       userId,
-      error: error instanceof Error ? error.message : 'unknown',
+      error: reason,
       timestamp: new Date().toISOString(),
     }));
+    // Issue #82 carry-over — record the failed dispatch in notification_audit.
+    void createNotificationAudit(env.DB, {
+      userId,
+      notificationType: templateName,
+      comparisonId: comparisonId,
+      channel: 'whatsapp',
+      template: templateName,
+      status: 'failed',
+      reason,
+    });
     return; // don't update cooldown if send failed
   }
 
@@ -304,4 +359,16 @@ export async function evaluateAndNotify(
     isStayPut,
     timestamp: new Date().toISOString(),
   }));
+
+  // Issue #82 carry-over (with #77) — record the successful dispatch in
+  // notification_audit so the compliance table is populated on send.
+  void createNotificationAudit(env.DB, {
+    userId,
+    notificationType: templateName,
+    comparisonId,
+    channel: 'whatsapp',
+    template: templateName,
+    sentMessageId,
+    status: 'sent',
+  });
 }
