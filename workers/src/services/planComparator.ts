@@ -6,7 +6,8 @@
  */
 
 import { getBillsByUserId } from '../models/bills';
-import { getPlansByRegion, getPlansByRetailer } from '../models/plans';
+import { getPlansByRetailer } from '../models/plans';
+import { getCanonicalPlans } from './planAggregator';
 import { createComparison } from '../models/comparisons';
 import type {
   ComparisonBillSummary,
@@ -191,8 +192,11 @@ export async function runComparison(
     fixed_term_expiry: latestBill.fixedTermExpiry ?? undefined,
   };
 
-  // 5. Derive region from bill data — look up the user's retailer to find region
-  let region: string | null = 'National';
+  // 5. Derive region from bill data — no users.region column exists in the
+  // schema (#73 owns migration 0014; a users.region column would collide).
+  // Region is derived from the user's latest bill's retailer/network, falling
+  // back to 'National'. The re-compare path (#75) may revisit region separately.
+  let region: string = 'National';
   if (latestBill.retailerId) {
     const retailerPlans = await getPlansByRetailer(env.DB, latestBill.retailerId);
     if (retailerPlans.length > 0) {
@@ -203,8 +207,10 @@ export async function runComparison(
     }
   }
 
-  // Fetch available plans for comparison
-  const availablePlans = await getPlansByRegion(env.DB, region);
+  // Fetch available plans for comparison via the canonical-plan aggregator
+  // (Issue #70): de-duplicates across manual/eiep14a/powerswitch sources by
+  // precedence (manual > eiep14a > powerswitch) and drops incomplete rows.
+  const availablePlans = await getCanonicalPlans(env.DB, region, { kwhPerMonth: avgDailyKwh * 30 });
 
   // Populate currentPlan id from available plans so Python can detect stay_where_you_are
   if (latestBill.retailerId && latestBill.planName) {
