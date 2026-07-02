@@ -23,7 +23,11 @@ applied directly via the Wrangler CLI.
 | 0006 | `0006_add_web_source.sql` | Add `'web'` to bills.source CHECK enum | PENDING — to be applied via separate issue |
 | 0007 | `0007_seed_missing_retailers.sql` | Backfill additional NZ retailers | PENDING — to be applied via separate issue |
 | 0008 | `0008_seed_additional_plans.sql` | Backfill additional plan rows | PENDING — to be applied via separate issue |
-| 0009 | `0009_plan_data_provenance.sql` | Plan data provenance tracking | PENDING — to be applied via separate issue |
+| 0009 | `0009_llm_audit.sql` | `llm_audit` table (metadata-only LLM request log, 30-day retention) + `idx_llm_audit_created_at` | PENDING — to be applied via separate issue |
+| 0010 | `0010_bill_source_message_id.sql` | `bills.source_message_id` + unique index (idempotent webhook dispatch) | PENDING — to be applied via separate issue |
+| 0011 | `0011_bill_error_code.sql` | `bills.error_code` + `bills.parsed_at`; relaxes `status` CHECK to allow `'failed'` (bills table rebuilt) | PENDING — to be applied via separate issue |
+| 0012 | `0012_bill_compare_enqueued.sql` | `bills.compare_enqueued_at` (idempotent COMPARE_QUEUE enqueue on parse success) | PENDING — to be applied via separate issue |
+| 0013 | `0013_plan_data_provenance.sql` | `plan_data_provenance` audit table; `plans.provenance`/`source_url`/`ingested_at`/`content_hash`/`is_current` + `idx_plans_retailer_is_current`; widens `plans.source` CHECK to allow `'powerswitch'`; converts `bills.retailer_id` to FK (both tables rebuilt) | PENDING — to be applied via separate issue |
 
 ## Note on `plans.is_current`
 

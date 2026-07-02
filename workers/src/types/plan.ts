@@ -1,4 +1,4 @@
-export type PlanSource = 'eiep14a' | 'manual';
+export type PlanSource = 'eiep14a' | 'manual' | 'powerswitch';
 
 export interface Plan {
   readonly id: string;
@@ -15,4 +15,9 @@ export interface Plan {
   readonly eiep14aId: string | null;
   readonly effectiveFrom: string | null; // ISO 8601
   readonly effectiveTo: string | null; // ISO 8601
+  readonly provenance: PlanSource | null;
+  readonly sourceUrl: string | null;
+  readonly ingestedAt: string | null; // ISO 8601
+  readonly contentHash: string | null;
+  readonly isCurrent: boolean;
 }
