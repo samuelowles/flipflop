@@ -11,6 +11,7 @@ import { refreshPlans } from './services/planIngestion';
 import { handleParseJob } from './services/billParser';
 import { runComparison } from './services/planComparator';
 import { evaluateAndNotify } from './services/notificationEngine';
+import { purgeOldLLMAudit } from './services/llmAudit';
 
 const app = new Hono();
 
@@ -159,6 +160,8 @@ async function scheduled(
       PYTHON_SERVICE_URL?: string;
       EIEP14A_API_KEY?: string;
     });
+    // #36 — daily 30-day purge of LLM audit metadata.
+    await purgeOldLLMAudit(env.DB as D1Database, 30);
     return;
   }
 
