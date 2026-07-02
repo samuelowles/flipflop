@@ -57,6 +57,10 @@ F1_HINT_CONFIDENCE_THRESHOLD = "0.85"
 # Issue #64: EIEP14A ingestion worker. INERT until the EA feed lands in
 # October — flip to "true" to arm the 0 3 * * * cron. Defaults false.
 EIF_EIEP14A_ENABLED = "false"
+# Issue #66: Temporary Powerswitch scraper bridge (TEMPORARY — sunset when #64
+# EIEP14A feed covers retailers). INERT by default; fetching public plan-listing
+# pages only, zero PII. See docs/AI_RULES.md override block + module header.
+POWERSWITCH_SCRAPER_ENABLED = "false"
 
 # Durable Object used by src/middleware/rateLimit.ts for atomic per-key rate
 # limiting.  One DO instance per rate-limit key serialises read-modify-write
