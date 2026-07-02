@@ -1,0 +1,15 @@
+{
+  "retailer": "Nova Energy",
+  "plan_name": "Saver",
+  "meter_type": "low_user",
+  "icp_number": "000444555666XYZ",
+  "period_start": "2026-05-01",
+  "period_end": "2026-05-31",
+  "days": 31,
+  "usage_kwh": 210.0,
+  "total_cents": 9291,
+  "c_per_kwh": 22.1,
+  "c_per_day": 150.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

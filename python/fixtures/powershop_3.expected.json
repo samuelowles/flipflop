@@ -1,0 +1,15 @@
+{
+  "retailer": "Powershop",
+  "plan_name": "",
+  "meter_type": "standard",
+  "icp_number": "000123456789PS3",
+  "period_start": "2026-04-01",
+  "period_end": "2026-04-30",
+  "days": 30,
+  "usage_kwh": 540.0,
+  "total_cents": 17160,
+  "c_per_kwh": 24.0,
+  "c_per_day": 90.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

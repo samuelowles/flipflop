@@ -1,0 +1,15 @@
+{
+  "retailer": "Pulse Energy",
+  "plan_name": "",
+  "meter_type": "standard",
+  "icp_number": "000444555666PU2",
+  "period_start": "2026-06-01",
+  "period_end": "2026-06-30",
+  "days": 30,
+  "usage_kwh": 610.0,
+  "total_cents": 18855,
+  "c_per_kwh": 25.5,
+  "c_per_day": 90.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

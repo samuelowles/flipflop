@@ -1,0 +1,15 @@
+{
+  "retailer": "Nova Energy",
+  "plan_name": "Stay Ahead",
+  "meter_type": "day_night",
+  "icp_number": "000111222333ABC",
+  "period_start": "2026-05-14",
+  "period_end": "2026-06-13",
+  "days": 31,
+  "usage_kwh": 480.0,
+  "total_cents": 15570,
+  "c_per_kwh": 28.1,
+  "c_per_day": 95.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

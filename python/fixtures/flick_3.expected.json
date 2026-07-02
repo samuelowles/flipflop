@@ -1,0 +1,15 @@
+{
+  "retailer": "Flick Electric",
+  "plan_name": "",
+  "meter_type": "controlled",
+  "icp_number": "000123456789FL2",
+  "period_start": "2026-04-01",
+  "period_end": "2026-04-30",
+  "days": 30,
+  "usage_kwh": 520.0,
+  "total_cents": 16450,
+  "c_per_kwh": 25.0,
+  "c_per_day": 90.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

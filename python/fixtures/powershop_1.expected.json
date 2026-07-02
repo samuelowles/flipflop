@@ -1,0 +1,15 @@
+{
+  "retailer": "Powershop",
+  "plan_name": "Saver",
+  "meter_type": "standard",
+  "icp_number": "000444555666PS2",
+  "period_start": "2026-06-01",
+  "period_end": "2026-06-30",
+  "days": 30,
+  "usage_kwh": 410.0,
+  "total_cents": 11980,
+  "c_per_kwh": 23.0,
+  "c_per_day": 85.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

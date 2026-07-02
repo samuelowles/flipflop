@@ -1,0 +1,15 @@
+{
+  "retailer": "Genesis Energy",
+  "plan_name": "Everyday",
+  "meter_type": "standard",
+  "icp_number": "0005555666GST77",
+  "period_start": "2026-04-01",
+  "period_end": "2026-04-30",
+  "days": 30,
+  "usage_kwh": 320.0,
+  "total_cents": 10104,
+  "c_per_kwh": 28.45,
+  "c_per_day": 33.33,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

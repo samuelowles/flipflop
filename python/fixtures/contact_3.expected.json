@@ -1,0 +1,15 @@
+{
+  "retailer": "Contact Energy",
+  "plan_name": "Low User",
+  "meter_type": "low_user",
+  "icp_number": "2225550001ABC12",
+  "period_start": "2026-05-01",
+  "period_end": "2026-05-31",
+  "days": 31,
+  "usage_kwh": 180.0,
+  "total_cents": 6294,
+  "c_per_kwh": 32.9,
+  "c_per_day": 12.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

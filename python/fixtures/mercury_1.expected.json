@@ -1,0 +1,15 @@
+{
+  "retailer": "Mercury",
+  "plan_name": "Online",
+  "meter_type": "standard",
+  "icp_number": "0009876543DEF99",
+  "period_start": "2026-05-14",
+  "period_end": "2026-06-13",
+  "days": 31,
+  "usage_kwh": 520.0,
+  "total_cents": 15596,
+  "c_per_kwh": 24.8,
+  "c_per_day": 90.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

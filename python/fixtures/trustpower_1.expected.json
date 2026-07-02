@@ -1,0 +1,15 @@
+{
+  "retailer": "Trustpower",
+  "plan_name": "Trustpower Energy",
+  "meter_type": "day_night",
+  "icp_number": "000123456789ABC",
+  "period_start": "2026-05-14",
+  "period_end": "2026-06-13",
+  "days": 31,
+  "usage_kwh": 610.0,
+  "total_cents": 19110,
+  "c_per_kwh": 26.5,
+  "c_per_day": 95.0,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}

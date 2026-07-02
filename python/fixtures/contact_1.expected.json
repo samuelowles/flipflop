@@ -1,0 +1,15 @@
+{
+  "retailer": "Contact Energy",
+  "plan_name": "Standard",
+  "meter_type": "standard",
+  "icp_number": "0001234567ABC99",
+  "period_start": "2026-04-01",
+  "period_end": "2026-04-30",
+  "days": 30,
+  "usage_kwh": 450.0,
+  "total_cents": 12475,
+  "c_per_kwh": 25.5,
+  "c_per_day": 33.33,
+  "fixed_term_expiry": null,
+  "break_fee_cents": 0
+}
