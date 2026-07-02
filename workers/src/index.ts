@@ -19,6 +19,7 @@ import { runComparison } from './services/planComparator';
 import { consumePlanDiffs, type PlanDiffConsumerEnv } from './services/planDiffConsumer';
 import { evaluateAndNotify } from './services/notificationEngine';
 import { purgeOldLLMAudit } from './services/llmAudit';
+import { runFreeTierCheckin, type FreeTierCheckinEnv } from './services/freeTierCheckin';
 
 const app = new Hono();
 
@@ -353,6 +354,15 @@ async function scheduled(
   // no-op when no diff keys are present. 7-day per-user dedup via KV.
   if (cron.includes('8')) {
     await consumePlanDiffs(env as unknown as PlanDiffConsumerEnv);
+
+    // Issue #78 — free-tier monthly check-in. Runs in the same 08:00 UTC slot
+    // with a day-of-month guard (1st of each month) so no new wrangler cron
+    // slot is consumed (ponytail: daily slot + guard beats a monthly cron that
+    // would collide with the `cron.includes('3')` matcher). Per-user KV dedup
+    // (`free_tier_checkin:{userId}`, 28d) is the backstop if this fires twice.
+    if (new Date().getUTCDate() === 1) {
+      await runFreeTierCheckin(env as unknown as FreeTierCheckinEnv);
+    }
     return;
   }
 

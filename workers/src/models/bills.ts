@@ -202,3 +202,25 @@ export async function markBillCompareEnqueued(
   const result = await stmt.bind(now, id).run();
   return (result.meta?.changes ?? 0) > 0;
 }
+
+/**
+ * Issue #78 — return the most recent fixed-term expiry (ISO date) for a user,
+ * or null when the user has no fixed-term bill on file. The free-tier check-in
+ * uses this to decide the `wait_until_date` variant: if the user is locked into
+ * a contract that has not yet expired, switching now is not advised.
+ *
+ * ponytail: one targeted query beats reusing getBillsByUserId + filter — the
+ * check-in only needs the single latest expiry, not the full bill history.
+ */
+export async function getLatestFixedTermForUser(
+  db: D1Database,
+  userId: string
+): Promise<string | null> {
+  const stmt = db.prepare(
+    `SELECT fixed_term_expiry FROM bills
+     WHERE user_id = ?1 AND fixed_term_expiry IS NOT NULL
+     ORDER BY fixed_term_expiry DESC LIMIT 1`
+  );
+  const result = await stmt.bind(userId).first<{ fixed_term_expiry: string | null }>();
+  return result?.fixed_term_expiry ?? null;
+}

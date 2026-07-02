@@ -308,3 +308,18 @@ export async function getUsersByRetailer(
     .all<{ id: string }>();
   return (result.results ?? []).map(r => r.id);
 }
+
+/**
+ * Issue #78 — return the IDs of all free-tier users. Used by the monthly
+ * free-tier check-in cron to iterate the population that receives the
+ * `free_tier_checkin` status notification. Returns IDs only (no PII
+ * decryption needed; the caller re-fetches per-user context when sending).
+ * ponytail: same shape as getUsersByRetailer — IDs only, single column.
+ */
+export async function getFreeTierUsers(db: D1Database): Promise<string[]> {
+  const result = await db
+    .prepare('SELECT id FROM users WHERE subscription_tier = ?1')
+    .bind('free')
+    .all<{ id: string }>();
+  return (result.results ?? []).map(r => r.id);
+}
