@@ -32,6 +32,34 @@ NZ_REGIONS = frozenset({
     "North Island", "South Island", "National",
 })
 
+# EIEP14A distribution network codes -> region names (#65).
+# Sourced from the EA/EMI retailer-plan mapping. Consulted in _extract_region
+# BEFORE name matching, so the feed may carry either a code ("NRC") or a
+# human-readable region name ("Northland"). Keys upper-cased on lookup.
+NETWORK_CODE_TO_REGION = {
+    "NRC": "Northland",            # Northpower
+    "APE": "Auckland",             # Vector (Auckland)
+    "VEC": "Auckland",             # Vector (alternate code)
+    "WEL": "Wellington",           # Wellington Electricity
+    "ORION": "Canterbury",         # Orion New Zealand
+    "UNI": "Manawatu-Whanganui",   # Powerco (Universal)
+    "POA": "Manawatu-Whanganui",   # Powerco (alternate)
+    "TCK": "Taranaki",             # Powerco (Taranaki)
+    "TKK": "Waikato",              # The Lines Company
+    "WAC": "Waikato",              # Waipa Networks
+    "EAS": "Bay of Plenty",        # Eastland Network
+    "SCN": "West Coast",           # Westpower
+    "NTL": "Tasman",               # Network Tasman
+    "MBC": "Marlborough",          # Marlborough Lines
+    "AUR": "Otago",                # Aurora Energy
+    "POW": "Otago",                # PowerNet
+    "SLD": "Southland",            # Electricity Invercargill / PowerNet
+    "BOP": "Bay of Plenty",        # Bay of Plenty distributor
+    "GIS": "Gisborne",             # Eastland (Gisborne area)
+    "HBR": "Hawke's Bay",          # Unison Networks (Hawke's Bay)
+    "WGN": "Wellington",           # Alternate Wellington code
+}
+
 # Known retailer name normalisations
 RETAILER_MAP = {
     "contact": "Contact Energy",
@@ -65,16 +93,22 @@ RETAILER_MAP = {
 # ---------------------------------------------------------------------------
 
 
-def parse_eiep14a_records(raw_records: list[dict]) -> list[dict]:
+def parse_eiep14a_records(
+    raw_records: list[dict],
+    source_url: Optional[str] = None,
+) -> list[dict]:
     """Transform raw EIEP14A records into Flip plan schema dicts.
 
     Each output dict has the columns matching the ``plans`` D1 table:
     - id, retailer_id, name, region, c_per_kwh, c_per_day,
       tier_thresholds_json, prompt_payment_discount, conditions_json,
-      low_user_eligible, source, eiep14a_id
+      low_user_eligible, source, eiep14a_id, source_url
 
     Args:
         raw_records: List of raw dicts from the EIEP14A feed.
+        source_url: Optional origin URL for this batch (#65). When provided,
+            attached to each plan row as ``source_url``. Per-record
+            ``source_url``/``SourceURL`` keys take precedence.
 
     Returns:
         List of transformed plan dicts ready for database insertion.
@@ -84,7 +118,7 @@ def parse_eiep14a_records(raw_records: list[dict]) -> list[dict]:
 
     for record in raw_records:
         try:
-            plan = _transform_record(record)
+            plan = _transform_record(record, source_url=source_url)
             if plan["eiep14a_id"] in seen_ids:
                 continue
             seen_ids.add(plan["eiep14a_id"])
@@ -96,7 +130,7 @@ def parse_eiep14a_records(raw_records: list[dict]) -> list[dict]:
     return plans
 
 
-def _transform_record(rec: dict) -> dict:
+def _transform_record(rec: dict, source_url: Optional[str] = None) -> dict:
     """Transform a single raw EIEP14A record."""
     now = datetime.now(timezone.utc).isoformat()
 
@@ -131,6 +165,10 @@ def _transform_record(rec: dict) -> dict:
     # EIEP14A identifier
     eiep14a_id = str(rec.get("PlanId", rec.get("plan_id", rec.get("id", str(uuid.uuid4())))))
 
+    # Source URL - per-record key wins, else batch-level value (#65)
+    rec_source_url = rec.get("SourceURL", rec.get("source_url"))
+    final_source_url = str(rec_source_url) if rec_source_url else source_url
+
     return {
         "id": str(uuid.uuid4()),
         "retailer_id": retailer_id,
@@ -144,6 +182,7 @@ def _transform_record(rec: dict) -> dict:
         "low_user_eligible": low_user_eligible,
         "source": "eiep14a",
         "eiep14a_id": eiep14a_id,
+        "source_url": final_source_url,
         "effective_from": now,
         "effective_to": None,
     }
@@ -176,16 +215,30 @@ def _retailer_name_to_id(name: str) -> str:
 
 
 def _extract_region(rec: dict) -> str:
-    """Extract and normalise the region from a record."""
+    """Extract and normalise the region from a record.
+
+    Order of resolution (#65):
+      1. EIEP14A network code (e.g. "NRC") via NETWORK_CODE_TO_REGION.
+      2. Human-readable region name in NZ_REGIONS (case-insensitive).
+      3. Fall back to the raw value, or "National" if empty.
+    """
     raw = rec.get("Region", rec.get("region", rec.get("Area", rec.get("area", ""))))
     cleaned = raw.strip()
+
+    # 1. Network-code lookup (upper-cased).
+    code = NETWORK_CODE_TO_REGION.get(cleaned.upper())
+    if code is not None:
+        return code
+
+    # 2. Direct / case-insensitive name match.
     if cleaned in NZ_REGIONS:
         return cleaned
-    # Try case-insensitive match
     lower = cleaned.lower()
     for region in NZ_REGIONS:
         if region.lower() == lower:
             return region
+
+    # 3. Fall back.
     return cleaned if cleaned else "National"
 
 
@@ -226,7 +279,11 @@ def _extract_tiers(rec: dict) -> list[dict]:
 
 
 def _extract_conditions(rec: dict) -> dict:
-    """Extract plan conditions (fixed term, payment type, etc.)."""
+    """Extract plan conditions (fixed term, payment type, etc.).
+
+    #65: ``rate_type`` and ``gst_inclusive`` are folded in here rather than
+    added as top-level ``plans`` columns (column additions were #63 job).
+    """
     conditions: dict = {}
 
     fixed_term = rec.get("FixedTermMonths", rec.get("fixed_term_months"))
@@ -245,7 +302,29 @@ def _extract_conditions(rec: dict) -> dict:
     if exit_fee is not None:
         conditions["exit_fee_cents"] = _safe_int(exit_fee)
 
+    # #65: rate_type - e.g. "ANYTIME", "CONTROLLED", "UNCONTROLLED".
+    rate_type = rec.get("RateType", rec.get("rate_type"))
+    if rate_type:
+        conditions["rate_type"] = str(rate_type).upper()
+
+    # #65: gst_inclusive - boolean, default per EIEP14A feed spec (True).
+    gst_raw = rec.get("GSTInclusive", rec.get("gst_inclusive"))
+    if gst_raw is None:
+        conditions["gst_inclusive"] = True
+    else:
+        conditions["gst_inclusive"] = _to_bool(gst_raw)
+
     return conditions
+
+
+def _to_bool(value) -> bool:
+    """Coerce common truthy feed values to a Python bool."""
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    text = str(value).strip().lower()
+    return text in {"true", "1", "yes", "y", "t"}
 
 
 def _safe_float(value) -> float:

@@ -54,6 +54,12 @@ interface EIEP14ARecord {
   contract_type?: string;
   ExitFee?: number;
   exit_fee?: number;
+  RateType?: string;
+  rate_type?: string;
+  GSTInclusive?: boolean | string | number;
+  gst_inclusive?: boolean | string | number;
+  SourceURL?: string;
+  source_url?: string;
   [key: `Tier${number}Rate` | `Tier${number}Threshold`]: number | undefined;
 }
 
@@ -112,7 +118,7 @@ export async function refreshPlans(env: EnvWithPlans): Promise<number> {
         effectiveFrom: plan.effective_from,
         effectiveTo: null,
         provenance: 'eiep14a',
-        sourceUrl: fileUrl,
+        sourceUrl: plan.source_url ?? fileUrl,
         ingestedAt: now,
         contentHash,
         isCurrent: true,
@@ -348,6 +354,7 @@ interface TransformedPlan {
   low_user_eligible: number;
   source: string;
   eiep14a_id: string;
+  source_url: string | null;
   effective_from: string;
 }
 
@@ -402,6 +409,13 @@ function safeInt(value: unknown): number {
   return Number.isFinite(n) ? Math.floor(n) : 0;
 }
 
+/** #65: coerce common truthy feed values to a boolean (mirrors python _to_bool). */
+function toBool(value: unknown): boolean {
+  if (typeof value === 'boolean') return value;
+  if (typeof value === 'number') return value !== 0;
+  return ['true', '1', 'yes', 'y', 't'].includes(String(value).trim().toLowerCase());
+}
+
 function extractTiers(rec: EIEP14ARecord): Array<{ threshold_kwh: number; c_per_kwh: number }> {
   const tiers: Array<{ threshold_kwh: number; c_per_kwh: number }> = [];
 
@@ -436,7 +450,7 @@ function extractTiers(rec: EIEP14ARecord): Array<{ threshold_kwh: number; c_per_
   return tiers;
 }
 
-function transformRecords(rawRecords: readonly EIEP14ARecord[]): TransformedPlan[] {
+export function transformRecords(rawRecords: readonly EIEP14ARecord[]): TransformedPlan[] {
   const now = new Date().toISOString();
   const seen = new Set<string>();
   const plans: TransformedPlan[] = [];
@@ -466,6 +480,15 @@ function transformRecords(rawRecords: readonly EIEP14ARecord[]): TransformedPlan
     if (contractType) conditions.contract_type = String(contractType);
     const exitFee = rec.ExitFee ?? rec.exit_fee;
     if (exitFee !== undefined) conditions.exit_fee_cents = safeInt(exitFee);
+    // #65: rate_type + gst_inclusive live in conditions_json (no new column).
+    const rateType = rec.RateType ?? rec.rate_type;
+    if (rateType) conditions.rate_type = String(rateType).toUpperCase();
+    const gstRaw = rec.GSTInclusive ?? rec.gst_inclusive;
+    conditions.gst_inclusive = gstRaw === undefined ? true : toBool(gstRaw);
+
+    // #65: per-record source_url overrides the run-level fileUrl.
+    const recSourceUrl = rec.SourceURL ?? rec.source_url;
+    const sourceUrl = recSourceUrl ? String(recSourceUrl) : null;
 
     plans.push({
       retailer_id: retailerNameToId(retailerName),
@@ -475,10 +498,11 @@ function transformRecords(rawRecords: readonly EIEP14ARecord[]): TransformedPlan
       c_per_day: cPerDay,
       tier_thresholds_json: tiers.length > 0 ? JSON.stringify(tiers) : '[]',
       prompt_payment_discount: ppd,
-      conditions_json: Object.keys(conditions).length > 0 ? JSON.stringify(conditions) : '{}',
+      conditions_json: JSON.stringify(conditions),
       low_user_eligible: lowUser,
       source: 'eiep14a',
       eiep14a_id: eiep14aId,
+      source_url: sourceUrl,
       effective_from: now,
     });
   }
