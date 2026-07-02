@@ -40,6 +40,30 @@ const NOTIFY_COOLDOWN_DAYS = 30;
 const NOTIFY_COOLDOWN_KEY_PREFIX = 'notify_cooldown:';
 const MATERIAL_CHANGE_THRESHOLD_PCT = 20; // notify if saving changes by >20%
 
+// Issue #128 — send-side dedup. A THIRD guard, distinct from the enqueue-side
+// `notified:{comparisonId}` (#74, 30d) and the per-user `notify_cooldown:`
+// (#74, 30d). This one fires at the dispatch moment and drops a second send
+// of the SAME plan recommendation to the SAME user within 1h.
+const SEND_DEDUP_KEY_PREFIX = 'dedup:';
+const SEND_DEDUP_TTL_SECONDS = 60 * 60; // 1 hour
+
+/**
+ * Issue #128 — build the send-side dedup KV key for a (user, plan) pair.
+ * Pure helper; tested directly. planId may be empty for stay_put verdicts
+ * (no best plan), in which case the key still partitions per-user.
+ */
+export function buildSendDedupKey(userId: string, planId: string): string {
+  return `${SEND_DEDUP_KEY_PREFIX}${userId}:${planId}`;
+}
+
+/**
+ * Issue #128 — pure predicate: given the KV-exists result, decide whether
+ * the send falls inside the 1h dedup window and must be skipped.
+ */
+export function isWithinSendDedupWindow(dedupKeyExists: boolean): boolean {
+  return dedupKeyExists;
+}
+
 function savingToDollars(cents: number): number {
   return Math.round(Math.abs(cents) / 100);
 }
@@ -184,6 +208,23 @@ export async function evaluateAndNotify(
     message = await generateSavingMessage(ctx, env.DEEPSEEK_API_KEY);
   }
 
+  // Issue #128 — send-side dedup. Checked immediately before dispatch so a
+  // second evaluation of the SAME (user, plan) within 1h is dropped even if
+  // it slipped past the enqueue-side `notified:` guard (e.g. distinct
+  // comparisonId, same recommendation). The key never contains PII — only
+  // opaque ids.
+  const sendDedupKey = buildSendDedupKey(userId, comparison.planId ?? '');
+  if (isWithinSendDedupWindow((await env.KV.get(sendDedupKey)) !== null)) {
+    console.log(JSON.stringify({
+      type: 'notify_skip',
+      userId,
+      reason: 'send dedup window active (1h, same user+plan)',
+      planId: comparison.planId ?? null,
+      timestamp: new Date().toISOString(),
+    }));
+    return;
+  }
+
   try {
     await sendText(env.SENT_API_KEY, phone, message);
   } catch (error) {
@@ -195,6 +236,12 @@ export async function evaluateAndNotify(
     }));
     return; // don't update cooldown if send failed
   }
+
+  // Issue #128 — mark this (user, plan) as sent for the 1h window. Set only
+  // after a successful dispatch so a failed send can be retried immediately.
+  await env.KV.put(sendDedupKey, new Date().toISOString(), {
+    expirationTtl: SEND_DEDUP_TTL_SECONDS,
+  });
 
   // 6. Update cooldown
   await env.KV.put(cooldownKey, new Date().toISOString(), {
