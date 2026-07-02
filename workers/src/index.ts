@@ -20,6 +20,7 @@ import { consumePlanDiffs, type PlanDiffConsumerEnv } from './services/planDiffC
 import { evaluateAndNotify } from './services/notificationEngine';
 import { purgeOldLLMAudit } from './services/llmAudit';
 import { runFreeTierCheckin, type FreeTierCheckinEnv } from './services/freeTierCheckin';
+import { runFixedTermExpiryScan, type FixedTermExpiryEnv } from './services/fixedTermExpiry';
 
 const app = new Hono();
 
@@ -363,6 +364,13 @@ async function scheduled(
     if (new Date().getUTCDate() === 1) {
       await runFreeTierCheckin(env as unknown as FreeTierCheckinEnv);
     }
+
+    // Issue #79 — fixed-term expiry notifications (60/30/7-day windows). Daily
+    // in the same 08:00 UTC slot. No collision: planDiffConsumer is inert
+    // without KV diff keys, #78 is day-1 guarded, and this scan's KV dedup
+    // (`fixed_term_expiry:{userId}:{expiry}:{window}`, 30d) caps each window
+    // to one notification per expiry. No new wrangler cron slot consumed.
+    await runFixedTermExpiryScan(env as unknown as FixedTermExpiryEnv);
     return;
   }
 

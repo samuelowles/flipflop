@@ -224,3 +224,61 @@ export async function getLatestFixedTermForUser(
   const result = await stmt.bind(userId).first<{ fixed_term_expiry: string | null }>();
   return result?.fixed_term_expiry ?? null;
 }
+
+/**
+ * Row shape for getUpcomingFixedTermExpiries (joined bills→users). Carries the
+ * minimum fields the expiry notifier (#79) needs to render + send.
+ */
+export interface UpcomingFixedTermExpiryRow {
+  readonly billId: string;
+  readonly userId: string;
+  readonly phone: string | null;
+  /** Date-only YYYY-MM-DD (NZ convention) or full ISO; compared as a date. */
+  readonly fixedTermExpiry: string;
+  readonly breakFeeCents: number | null;
+  /** Retailer display name for the template's {{1}} variable. */
+  readonly retailerName: string | null;
+}
+
+/**
+ * Issue #79 — return bills whose `fixed_term_expiry` falls within `withinDays`
+ * days of now, joined to their user. One row per bill (a user with two expiring
+ * contracts appears twice — KV dedup is per (user, expiry, window)).
+ *
+ * `fixed_term_expiry` is stored as YYYY-MM-DD (NZ date-only). SQLite's
+ * `julianday` lets us compare date strings without parsing in TS; the bounds
+ * are inclusive on both ends so a 7-day-window tick catches expiry == today+7.
+ *
+ * ponytail: a single bounded query replaces per-user scans; the cron joins all
+ * users in one trip instead of N+1 round-trips to D1.
+ */
+export async function getUpcomingFixedTermExpiries(
+  db: D1Database,
+  withinDays: number
+): Promise<readonly UpcomingFixedTermExpiryRow[]> {
+  const stmt = db.prepare(
+    `SELECT
+       b.id AS bill_id,
+       b.user_id,
+       u.phone,
+       b.fixed_term_expiry,
+       b.break_fee_cents,
+       r.name AS retailer_name
+     FROM bills b
+     LEFT JOIN users u ON u.id = b.user_id
+     LEFT JOIN retailers r ON r.id = b.retailer_id
+     WHERE b.fixed_term_expiry IS NOT NULL
+       AND date(b.fixed_term_expiry) >= date('now')
+       AND date(b.fixed_term_expiry) <= date('now', '+' || ?1 || ' days')
+     ORDER BY b.fixed_term_expiry ASC`
+  );
+  const result = await stmt.bind(withinDays).all<Record<string, unknown>>();
+  return (result.results ?? []).map((row) => ({
+    billId: row.bill_id as string,
+    userId: row.user_id as string,
+    phone: row.phone as string | null,
+    fixedTermExpiry: row.fixed_term_expiry as string,
+    breakFeeCents: row.break_fee_cents as number | null,
+    retailerName: row.retailer_name as string | null,
+  }));
+}
