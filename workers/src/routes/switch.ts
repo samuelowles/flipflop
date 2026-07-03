@@ -16,8 +16,10 @@
 
 import type { Context } from 'hono';
 import { createSwitch, DuplicateActiveSwitchError } from '../services/switchService';
+import { requestRetailerSwitch } from '../services/switch/retailerAdapter';
 import { getPlanById } from '../models/plans';
 import { getUserById } from '../models/users';
+import { getRetailerById } from '../models/retailers';
 import type { EncryptionEnv } from '../models/encryption';
 
 interface SwitchRequestBody {
@@ -96,10 +98,29 @@ export async function createSwitchRoute(c: Context): Promise<Response> {
       actor: 'user',
     });
 
-    // ponytail: minimal response shape — #131 extends with switchUrl (retailer
-    // deep-link). Returning the whole Switch row here would be speculative.
+    // Issue #131 — resolve the TARGET retailer (the plan's retailer) and build
+    // the signed deep-link the user follows to action the switch on their site.
+    const targetRetailer = await getRetailerById(db, plan.retailerId);
+    let switchUrl: string | null = null;
+    let switchMethod: 'deep_link' | 'api' = 'deep_link';
+    if (targetRetailer) {
+      const result = await requestRetailerSwitch(env, {
+        switch: switchRecord,
+        retailer: targetRetailer,
+        planCode: plan.name,
+      });
+      switchUrl = result.deepLink;
+      switchMethod = result.method;
+    }
+
+    // ponytail: keep the existing 201 shape, just add switch_url + method.
     return c.json(
-      { switch_id: switchRecord.id, status: switchRecord.status },
+      {
+        switch_id: switchRecord.id,
+        status: switchRecord.status,
+        switch_url: switchUrl,
+        method: switchMethod,
+      },
       201
     );
   } catch (error) {
