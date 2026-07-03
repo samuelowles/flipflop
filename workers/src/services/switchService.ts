@@ -23,6 +23,7 @@ import {
   createSwitch as insertSwitch,
   getActiveSwitchForUserAndPlan,
 } from '../models/switches';
+import { sendEmail, type EmailEnv, type BuiltEmail } from './email';
 
 /**
  * Strict transition table. AC #129 "Transitions guarded by a strict table".
@@ -180,4 +181,193 @@ export async function createSwitch(
   });
 
   return switchRecord;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #132 — switch failure path + ops email fallback (bcc ops@flip).
+//
+// `failSwitch` is the SINGLE call site that marks a switch `failed` AND fires
+// the ops alert. It is exported so future failure triggers (webhook reporting
+// retailer rejection, sanity cron #81, Epic #9 confirmation-timeout) all route
+// through one place — guaranteeing the ops email fires on every failure.
+//
+// FAILURE-TOLERANCE CONTRACT: the switch is transitioned to `failed` FIRST; the
+// ops email send is fire-and-forget and its errors are swallowed by `sendEmail`
+// (which never throws). A broken email provider or a missing RESEND_API_KEY
+// MUST NEVER roll back the state transition. The switch is already failed; the
+// email is best-effort triage. See services/email.ts for the inert-by-default
+// log-only fallback path.
+//
+// TRIGGER WIRING: today no live failure trigger exists in the repo — the
+// retailer adapter (#131) is a deep-link builder that cannot fail at request
+// time, and the webhook/cron failure sources land with #81 / Epic #9. So
+// `failSwitch` is EXPORTED but not yet called from a route. Issue #81 will wire
+// the cron sanity-check trigger; Epic #9 will wire the retailer-webhook trigger.
+// A unit test proves the email fires on failure here; the integration wiring is
+// tracked in those issues. Do NOT invent a fake trigger.
+//
+// PII STANCE: the ops alert is INTERNAL. It carries the opaque switch id +
+// user_id + retailer/plan ids + reason. It NEVER includes raw phone/email/name.
+// ---------------------------------------------------------------------------
+
+/** Optional context that enriches the ops email (retailer/plan display names). */
+export interface SwitchFailureContext {
+  /** Display name of the FROM retailer, if known. Falls back to the id. */
+  readonly fromRetailerName?: string | null;
+  /** Display name of the TARGET retailer, if known. Falls back to the id. */
+  readonly toRetailerName?: string | null;
+  /** Display name of the target plan, if known. Falls back to the id. */
+  readonly toPlanName?: string | null;
+}
+
+/** Context needed to build a deep-link into the admin switch view, if one exists. */
+export interface SwitchFailureAdminLink {
+  /** Base URL of the admin app, e.g. https://admin.flip.nz. */
+  readonly adminBaseUrl?: string | null;
+}
+
+/** Input to the pure email-content builder (no network, no env). */
+export interface BuildSwitchFailureEmailInput {
+  readonly switchRecord: Switch;
+  readonly reason: string;
+  readonly context?: SwitchFailureContext;
+  readonly adminLink?: SwitchFailureAdminLink;
+}
+
+/**
+ * PURE: build the ops failure-alert email subject + text body.
+ *
+ * AC #132 subject: "Power switch ? manual steps needed" — the `?` in the issue
+ * is an emoji placeholder (the issue body renders it as such). We use a plain
+ * text subject because (a) Resend + email clients render emoji inconsistently,
+ * (b) ops-alert subjects should be greppable, (c) the user-facing version of
+ * this email (Epic #12) will carry the emoji once there's a rendered HTML body.
+ * The exact AC wording is preserved in the subject text for traceability.
+ *
+ * PII: includes opaque user_id (internal) but NO raw phone/email/name. The body
+ * lists the 3 manual steps (AC #132 "Body lists the 3 steps to complete the
+ * switch on the retailer's site") so a human ops member can paste them to the
+ * user via the existing WhatsApp/SMS channel if needed.
+ */
+export function buildSwitchFailureEmail(
+  input: BuildSwitchFailureEmailInput
+): BuiltEmail {
+  const { switchRecord: s, reason, context, adminLink } = input;
+
+  // AC #132 subject (emoji placeholder kept verbatim from the issue for grep).
+  const subject = 'Power switch ? manual steps needed';
+
+  const fromRetailer = context?.fromRetailerName ?? s.fromRetailerId;
+  const toRetailer =
+    context?.toRetailerName ?? context?.toPlanName ?? s.toPlanId;
+  const toPlan = context?.toPlanName ?? s.toPlanId;
+
+  // Admin deep-link to the switch record, if an admin base URL is configured.
+  const adminUrl = adminLink?.adminBaseUrl
+    ? `${adminLink.adminBaseUrl.replace(/\/$/, '')}/switches/${s.id}`
+    : '(admin URL not configured)';
+
+  // AC #132 "Body lists the 3 steps to complete the switch on the retailer's site".
+  // These are the canonical NZ power-switch manual steps; a human ops member
+  // can relay them to the user over WhatsApp/SMS if the automated flow failed.
+  const steps = [
+    '1. Open your current retailer\'s "move house / switch away" page.',
+    `2. Have your new retailer (${toRetailer}) plan details ready: ${toPlan}.`,
+    '3. Submit the switch request on their site — confirmation takes 1-2 business days.',
+  ].join('\n');
+
+  const text = [
+    `Switch ${s.id} failed and could not be completed automatically.`,
+    '',
+    `User (internal id): ${s.userId}`,
+    `From retailer: ${fromRetailer}`,
+    `To retailer / plan: ${toRetailer} / ${toPlan}`,
+    `Failure reason: ${reason}`,
+    `Requested at: ${s.requestedAt}`,
+    '',
+    'Manual steps for the user:',
+    steps,
+    '',
+    `Admin view: ${adminUrl}`,
+    '',
+    '— Flip ops (automated alert, bcc ops@flip)',
+  ].join('\n');
+
+  return { subject, text };
+}
+
+/** Input to failSwitch. */
+export interface FailSwitchInput {
+  readonly switchId: string;
+  /** Why the switch failed — persisted to switches.failure_reason (AC #132). */
+  readonly reason: string;
+  /** Who/what triggered the failure (webhook, cron, system). */
+  readonly actor: SwitchTransitionActor;
+  /** Optional display-name context for the ops email. */
+  readonly context?: SwitchFailureContext;
+  /** Optional admin base URL for the deep-link in the email body. */
+  readonly adminLink?: SwitchFailureAdminLink;
+  /** Ops recipient (To:). Defaults to OPS_EMAIL or ops@flip.nz. */
+  readonly opsTo?: string;
+}
+
+/**
+ * Mark a switch `failed` (transitioning through the strict table + writing the
+ * audit row + setting failure_reason), then fire the ops alert email (bcc
+ * ops@flip). AC #132 "Switch row marked status=failed with reason field populated"
+ * + "BCC: ops@flip".
+ *
+ * ORDERING: transition FIRST, email SECOND. If transitionSwitch throws (illegal
+ * transition, missing switch), the email is NOT sent — that's correct, the
+ * failure didn't actually happen. If transitionSwitch succeeds, the email send
+ * is best-effort and can never roll back the state.
+ *
+ * Returns the post-failure Switch record.
+ */
+export async function failSwitch(
+  db: D1Database,
+  env: EmailEnv,
+  input: FailSwitchInput
+): Promise<Switch> {
+  const updated = await transitionSwitch(db, {
+    switchId: input.switchId,
+    toStatus: 'failed',
+    actor: input.actor,
+    reason: input.reason,
+    failureReason: input.reason,
+  });
+
+  // Fire-and-forget ops alert. sendEmail swallows all errors (failure-tolerance
+  // contract) so this await never throws — but we wrap defensively in case a
+  // future caller swaps in a throwing sender.
+  const email = buildSwitchFailureEmail({
+    switchRecord: updated,
+    reason: input.reason,
+    context: input.context,
+    adminLink: input.adminLink,
+  });
+
+  const opsTo = input.opsTo ?? env.OPS_EMAIL ?? 'ops@flip.nz';
+  try {
+    await sendEmail(env, {
+      email,
+      to: opsTo,
+      bcc: 'ops@flip.nz',
+    });
+  } catch (err) {
+    // ponytail: defensive double-swallow. sendEmail already swallows, but if a
+    // future sender throws, the switch MUST stay failed. Log + move on.
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(
+      JSON.stringify({
+        level: 'error',
+        type: 'failSwitch_email_swallowed',
+        switch_id: input.switchId,
+        message,
+        timestamp: new Date().toISOString(),
+      })
+    );
+  }
+
+  return updated;
 }
