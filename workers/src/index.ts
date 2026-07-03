@@ -22,6 +22,7 @@ import { evaluateAndNotify } from './services/notificationEngine';
 import { purgeOldLLMAudit } from './services/llmAudit';
 import { runFreeTierCheckin, type FreeTierCheckinEnv } from './services/freeTierCheckin';
 import { runFixedTermExpiryScan, type FixedTermExpiryEnv } from './services/fixedTermExpiry';
+import { runSwitchSanityCheck, type SwitchSanityEnv } from './services/switchTracker';
 
 const app = new Hono();
 
@@ -381,6 +382,15 @@ async function scheduled(
     // (`fixed_term_expiry:{userId}:{expiry}:{window}`, 30d) caps each window
     // to one notification per expiry. No new wrangler cron slot consumed.
     await runFixedTermExpiryScan(env as unknown as FixedTermExpiryEnv);
+
+    // Issue #81 — switch sanity cron. Daily in the same 08:00 UTC slot. Scans
+    // for switches stuck `in_progress` >7 days (no retailer webhook
+    // confirmation) and fails them via failSwitch (which fires the #132 ops
+    // email) + notifies the user. No collision with the other 08:00 jobs:
+    // planDiffConsumer is inert without KV keys, #78 is day-1 guarded, #79 is
+    // KV-deduped, and this scan is gated by the stuck-age threshold. No new
+    // wrangler cron slot consumed.
+    await runSwitchSanityCheck(env as unknown as SwitchSanityEnv);
     return;
   }
 

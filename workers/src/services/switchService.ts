@@ -24,6 +24,7 @@ import {
   getActiveSwitchForUserAndPlan,
 } from '../models/switches';
 import { sendEmail, type EmailEnv, type BuiltEmail } from './email';
+import { notifySwitchUpdate } from './switchTracker';
 
 /**
  * Strict transition table. AC #129 "Transitions guarded by a strict table".
@@ -369,5 +370,84 @@ export async function failSwitch(
     );
   }
 
+  return updated;
+}
+
+// ---------------------------------------------------------------------------
+// Issue #81 (Epic #8) — switch_update user notification at each milestone.
+//
+// The transition boundary (#129 transitionSwitch) is the single source of truth
+// for state changes; this WRAPPER composes that boundary with the user-facing
+// `switch_update` notification, WITHOUT modifying transitionSwitch's signature
+// or logic (keeps #129's tests green — they call transitionSwitch directly).
+//
+// NOTIFIABLE MILESTONES (AC #81 "SUBMITTED, ACCEPTED, ACTIVE, FAILED"):
+// Mapped to the enum (requested-rooted, NOT the issue's initiated wording):
+//   - SUBMITTED → requested   (initial creation)
+//   - ACCEPTED  → confirmed
+//   - ACTIVE    → completed
+//   - FAILED    → failed
+// `in_progress` (retailer is processing) is intentionally NOT notifiable — it
+// is a noisy intermediate state with no meaningful user action, and the AC
+// does not name it. The notify helper's predicate enforces this set.
+//
+// RESILIENCE: transitionSwitch runs FIRST. If it throws, no notification fires
+// (correct — the state didn't change). If it succeeds, notifySwitchUpdate runs
+// fire-and-forget and swallows its own errors (send failure logs + does NOT
+// throw) so the committed transition is never rolled back by a messaging fault.
+// ---------------------------------------------------------------------------
+
+/** Env needed to send a switch_update notification (dedicated-sender path). */
+export interface SwitchNotifyEnv {
+  readonly DB: D1Database;
+  readonly SENT_API_KEY: string;
+  readonly ENCRYPTION_KEY: string;
+}
+
+/** Extended transition input with an optional notify flag (defaults true). */
+export interface TransitionAndNotifyInput extends TransitionSwitchInput {
+  /** When true (default), fire switch_update after a notifiable transition. */
+  readonly notify?: boolean;
+  /** Env required to send; if omitted, notify is skipped silently. */
+  readonly notifyEnv?: SwitchNotifyEnv;
+}
+
+/**
+ * Transition a switch AND fire the user-facing switch_update notification when
+ * the target status is a notifiable milestone (requested/confirmed/completed/
+ * failed). Composes transitionSwitch + notifySwitchUpdate without touching the
+ * #129 boundary's signature or logic.
+ *
+ * Callers that already invoke transitionSwitch directly can stay as-is; this
+ * wrapper is the convenience for call sites that want notify-on-transition.
+ */
+export async function transitionSwitchAndNotify(
+  db: D1Database,
+  input: TransitionAndNotifyInput
+): Promise<Switch> {
+  const updated = await transitionSwitch(db, input);
+  if (input.notify === false || !input.notifyEnv) return updated;
+  // Fire-and-forget; notifySwitchUpdate swallows its own errors so a messaging
+  // fault never rolls back the committed transition.
+  try {
+    await notifySwitchUpdate(input.notifyEnv, {
+      switchRecord: updated,
+      toStatus: input.toStatus,
+      reason: input.reason ?? null,
+    });
+  } catch (err) {
+    // Defensive double-swallow (mirrors failSwitch's pattern).
+    const message = err instanceof Error ? err.message : String(err);
+    console.log(
+      JSON.stringify({
+        level: 'error',
+        type: 'transitionSwitchAndNotify_swallowed',
+        switch_id: input.switchId,
+        to_status: input.toStatus,
+        message,
+        timestamp: new Date().toISOString(),
+      })
+    );
+  }
   return updated;
 }

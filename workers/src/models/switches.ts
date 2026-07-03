@@ -226,6 +226,61 @@ export async function createSwitchTransition(
   return id;
 }
 
+// ---------------------------------------------------------------------------
+// Issue #81 (Epic #8) — sanity-cron support.
+//
+// `getStuckSwitches` finds switches that have been `in_progress` longer than a
+// threshold without reaching `completed`. The daily sanity cron uses this to
+// fail dead-in-the-water switches via failSwitch (which fires the #132 ops
+// email). A switch is "stuck" iff status='in_progress' AND requested_at is
+// older than the cutoff (confirmed_at is also checked when present so a switch
+// that sat in `requested`/`confirmed` for a long time before being confirmed
+// is judged from when it actually entered in_progress — but confirmed_at may
+// be null on legacy rows, so requested_at is the reliable bound).
+// ---------------------------------------------------------------------------
+
+/** Row returned by getStuckSwitches — bare minimum the cron needs. */
+export interface StuckSwitchRow {
+  readonly id: string;
+  readonly userId: string;
+  readonly fromRetailerId: string;
+  readonly toPlanId: string;
+  readonly requestedAt: string;
+}
+
+/**
+ * Find switches stuck `in_progress` past the given age threshold. Used by the
+ * daily sanity cron (issue #81). `olderThanDays` is the staleness bound; rows
+ * are returned oldest-first so the cron processes the most-stale first.
+ */
+export async function getStuckSwitches(
+  db: D1Database,
+  opts: { readonly olderThanDays: number; readonly now?: Date }
+): Promise<readonly StuckSwitchRow[]> {
+  const cutoff = new Date(
+    (opts.now ?? new Date()).getTime() - opts.olderThanDays * 24 * 60 * 60 * 1000
+  ).toISOString();
+
+  const result = await db
+    .prepare(
+      `SELECT id, user_id, from_retailer_id, to_plan_id, requested_at
+       FROM switches
+       WHERE status = 'in_progress'
+         AND requested_at < ?1
+       ORDER BY requested_at ASC`
+    )
+    .bind(cutoff)
+    .all<Record<string, unknown>>();
+
+  return (result.results ?? []).map((row) => ({
+    id: row.id as string,
+    userId: row.user_id as string,
+    fromRetailerId: row.from_retailer_id as string,
+    toPlanId: row.to_plan_id as string,
+    requestedAt: row.requested_at as string,
+  }));
+}
+
 /**
  * List the transition history for one switch, oldest-first. Used by ops/admin
  * to reconstruct a switch lifecycle. AC #129 "All transitions logged".
