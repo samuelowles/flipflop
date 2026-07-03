@@ -26,10 +26,20 @@ vi.mock('../models/users', () => ({
   getUserById: vi.fn(),
 }));
 
+vi.mock('../models/retailers', () => ({
+  getRetailerById: vi.fn(),
+}));
+
+vi.mock('../services/switch/retailerAdapter', () => ({
+  requestRetailerSwitch: vi.fn(),
+}));
+
 // Imported after vi.mock so the mocks apply.
 import { createSwitch } from '../services/switchService';
 import { getPlanById } from '../models/plans';
 import { getUserById } from '../models/users';
+import { getRetailerById } from '../models/retailers';
+import { requestRetailerSwitch } from '../services/switch/retailerAdapter';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -108,6 +118,17 @@ describe('POST /api/switch (issue #130)', () => {
       confirmedAt: null,
       completedAt: null,
     } as never);
+    vi.mocked(getRetailerById).mockResolvedValue({
+      id: 'ret-b',
+      name: 'Better Retailer',
+      domain: 'better.co.nz',
+      parserId: null,
+      isActive: true,
+    } as never);
+    vi.mocked(requestRetailerSwitch).mockResolvedValue({
+      deepLink: 'https://better.co.nz/join?s=sw-new.token',
+      method: 'deep_link',
+    });
 
     const res = await buildApp().fetch(
       postBody({ user_id: 'u-1', to_plan_id: 'plan-b' }),
@@ -115,8 +136,16 @@ describe('POST /api/switch (issue #130)', () => {
     );
 
     expect(res.status).toBe(201);
-    const json = (await res.json()) as { switch_id: string; status: string };
-    expect(json).toEqual({ switch_id: 'sw-new', status: 'requested' });
+    const json = (await res.json()) as {
+      switch_id: string;
+      status: string;
+      switch_url: string | null;
+      method: string;
+    };
+    expect(json.switch_id).toBe('sw-new');
+    expect(json.status).toBe('requested');
+    expect(json.switch_url).toBe('https://better.co.nz/join?s=sw-new.token');
+    expect(json.method).toBe('deep_link');
 
     // createSwitch called with derived from_retailer_id + actor=user.
     expect(createSwitch).toHaveBeenCalledWith(expect.anything(), {
@@ -125,6 +154,14 @@ describe('POST /api/switch (issue #130)', () => {
       toPlanId: 'plan-b',
       actor: 'user',
     });
+    // requestRetailerSwitch called with the created switch + target retailer.
+    expect(requestRetailerSwitch).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        switch: expect.objectContaining({ id: 'sw-new' }),
+        retailer: expect.objectContaining({ id: 'ret-b' }),
+      })
+    );
   });
 
   it('409 when a duplicate active switch exists for the same user+plan', async () => {
