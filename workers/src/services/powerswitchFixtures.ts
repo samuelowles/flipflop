@@ -26,3 +26,97 @@ export const powershop_auckland = '<!DOCTYPE html>\n<html lang="en-NZ">\n<head>\
 export const pulse_auckland_full = '<!DOCTYPE html>\n<html lang="en-NZ">\n<head>\n  <meta charset="utf-8">\n  <title>Pulse Energy — Variable Saver — Powerswitch</title>\n  <meta name="retailer" content="Pulse Energy">\n  <meta name="plan-name" content="Variable Saver">\n  <meta name="region" content="Auckland">\n</head>\n<body>\n  <h1>Pulse Energy</h1>\n  <h2 class="plan-name">Variable Saver</h2>\n  <div class="plan-card"\n       data-retailer="Pulse Energy"\n       data-plan-name="Variable Saver"\n       data-region="Auckland"\n       data-variable-rate="28.1"\n       data-daily-charge="2.0" data-prompt-payment-discount="11">\n    <span class="rate c-per-kwh">28.1c/kWh</span>\n    <span class="rate c-per-day">2.0c/day</span>\n  </div>\n</body>\n</html>\n';
 
 export const trustpower_wellington = '<!DOCTYPE html>\n<html lang="en-NZ">\n<head>\n  <meta charset="utf-8">\n  <title>Trustpower — Stay Ahead — Powerswitch</title>\n  <meta name="retailer" content="Trustpower">\n  <meta name="plan-name" content="Stay Ahead">\n  <meta name="region" content="Wellington">\n</head>\n<body>\n  <h1>Trustpower</h1>\n  <h2 class="plan-name">Stay Ahead</h2>\n  <div class="plan-card"\n       data-retailer="Trustpower"\n       data-plan-name="Stay Ahead"\n       data-region="Wellington"\n       data-variable-rate="31.5"\n       data-daily-charge="2.6" data-prompt-payment-discount="8" data-tou="true">\n    <span class="rate c-per-kwh">31.5c/kWh</span>\n    <span class="rate c-per-day">2.6c/day</span>\n  </div>\n</body>\n</html>\n';
+
+// ---------------------------------------------------------------------------
+// Issue #220 — Powerswitch per-user address resolution fixtures.
+// Captured SHAPES from the 2026-07-15 live walkthrough (issue #218). Tests mock
+// `fetch` against these strings; no live calls ever run in CI. The shapes here
+// are the authoritative contract powerswitchSession.ts validates against; if
+// Powerswitch redeploys and these drift, the session resolver emits a
+// `powerswitch_drift` structured error and returns a typed failure rather than
+// persisting a partial/garbage guess.
+// ---------------------------------------------------------------------------
+
+/**
+ * Autocomplete server-action response shape. Addressfinder-backed. The POST to
+ * `https://www.powerswitch.org.nz/` returns a JSON array under `completions`,
+ * each entry carrying the full address string (`a`), the Powerswitch address id
+ * (`pxid`), and a version marker (`v`). `paid`/`success` are wrapper fields.
+ */
+export interface PowerswitchAutocompleteResponse {
+  readonly completions: ReadonlyArray<{
+    readonly a: string;
+    readonly pxid: string;
+    readonly v: number;
+  }>;
+  readonly paid: boolean;
+  readonly success: boolean;
+}
+
+/**
+ * Single, exact completion: "1 Queen Street, Auckland Central, Auckland 1010".
+ * Used by the clean-address → auto-accept resolution path.
+ */
+export const autocomplete_single_match: PowerswitchAutocompleteResponse = {
+  completions: [
+    { a: '1 Queen Street, Auckland Central, Auckland 1010', pxid: '2-.1.6.6.1aoR.', v: 1 },
+  ],
+  paid: true,
+  success: true,
+};
+
+/**
+ * Ambiguous: the user gave a base address with no unit, but Powerswitch returns
+ * multiple unit-level completions. The resolver picks the base (non-unit)
+ * address when the user supplied no unit, else flags for manual review.
+ */
+export const autocomplete_ambiguous_units: PowerswitchAutocompleteResponse = {
+  completions: [
+    { a: '12 Birkdale Road, Birkdale, Auckland 0626', pxid: '2-.1.3.5.birkA.', v: 1 },
+    { a: '12A Birkdale Road, Birkdale, Auckland 0626', pxid: '2-.1.3.5.birkB.', v: 1 },
+    { a: '12B Birkdale Road, Birkdale, Auckland 0626', pxid: '2-.1.3.5.birkC.', v: 1 },
+  ],
+  paid: true,
+  success: true,
+};
+
+/**
+ * Zero completions — the address could not be matched. Must NOT persist a guess.
+ */
+export const autocomplete_zero_match: PowerswitchAutocompleteResponse = {
+  completions: [],
+  paid: false,
+  success: true,
+};
+
+/**
+ * Drift: Powerswitch redeploys and the response shape changes (e.g. the
+ * `completions` key is renamed or restructured). The resolver detects this and
+ * emits a `powerswitch_drift` error rather than silently persisting garbage.
+ */
+export const autocomplete_drift_response = {
+  results: [{ full_address: '1 Queen Street, Auckland Central', id: 'abc' }],
+  status: 'ok',
+};
+
+/**
+ * Questionnaire redirect: GET /questionnaire/household?address_id={pxid}
+ * resolves the pxid to an internal location id. The redirect target carries
+ * the location id as a path segment (e.g. /questionnaire/266/...). The session
+ * resolver extracts the first integer path segment as the location id.
+ *
+ * Captured shape (2026-07-15): a 303/307 redirect to a location-scoped URL, or
+ * a 200 whose body contains a `<meta>` / link with the location id. We model
+ * the redirect Location header here; the resolver reads `response.headers.get('Location')`.
+ */
+export const questionnaire_redirect_location_for_pxid =
+  (pxid: string, locationId: number): Record<string, string> => ({
+    Location: `/questionnaire/${locationId}/household?address_id=${encodeURIComponent(pxid)}`,
+  });
+
+/**
+ * The resolved internal location id for the single-match fixture (Auckland
+ * Central). 266 was observed in the 2026-07-15 walkthrough.
+ */
+export const SINGLE_MATCH_LOCATION_ID = '266';
+

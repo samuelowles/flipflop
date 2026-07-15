@@ -1,0 +1,54 @@
+-- 0018_powerswitch_user_location.sql
+-- Issue #220 (E13.2): Powerswitch per-user address resolution.
+--
+-- Adds two nullable columns to `users` that cache the result of resolving a
+-- user's NZ address against the Powerswitch address autocomplete flow:
+--   * powerswitch_pxid        — the Addressfinder-backed address id returned by
+--                               the autocomplete server-action (e.g. "2-.1.6.6.1aoR.").
+--                               Used as `address_id` to seed the questionnaire.
+--   * powerswitch_location_id — Powerswitch's internal location id (e.g. 266 for
+--                               Auckland Central), resolved from the pxid via
+--                               GET /questionnaire/household?address_id={pxid}.
+--                               Used for GET /api/locations/{id}/retailers.
+--
+-- Both are nullable so pre-existing rows and users whose address could not be
+-- auto-resolved (ambiguous / zero-match → manual review) are unaffected. They
+-- are populated lazily by services/powerswitchSession.ts once an address has
+-- been resolved with sufficient confidence (single/exact completion), and never
+-- populated by a guess.
+--
+-- COMPLIANCE (docs/POWERSWITCH_COMPLIANCE.md, issue #219):
+--   * These columns are populated ONLY when POWERSWITCH_LIVE=true (operator
+--     gate). With the flag unset/false the bridge is INERT and these stay NULL.
+--   * ICP is NEVER submitted; the pxid/location pair are the only identifiers
+--     persisted, and the address itself is already held on the user row.
+--   * Per #103 (Privacy Act 2020), both columns are cleared on user deletion
+--     and included in the admin data-export. They persist for the lifetime of
+--     the account so the questionnaire can be re-run without re-resolving.
+
+ALTER TABLE users ADD COLUMN powerswitch_pxid TEXT;
+ALTER TABLE users ADD COLUMN powerswitch_location_id TEXT;
+
+-- ===========================================================================
+-- Down
+-- ===========================================================================
+-- SQLite cannot easily drop a column without a temp-table rebuild, so the
+-- ALTERs are intentionally one-way within this migration's lifetime (0006 /
+-- 0011 / 0016 precedent). Both columns are nullable and safe to leave in place
+-- if the feature is rolled back.
+
+-- ===========================================================================
+-- Adversarial self-verification
+-- ===========================================================================
+-- * Both ALTERs add nullable columns — pre-existing rows are unaffected (NULL).
+-- * No CHECK / NOT NULL constraint: ambiguous or unresolved addresses simply
+--   remain NULL rather than forcing a bad guess to be persisted (AC #220).
+-- * No default value: NULL is the correct "not yet resolved" sentinel and
+--   matches the "never persist a bad guess" rule in the compliance gate.
+-- * Column names mirror the field names in types/user.ts and models/users.ts
+--   (rowToUser / updateUser map snake_case → camelCase) for consistency with
+--   the existing installation_address / current_retailer_id pattern.
+-- * powerswitch_location_id is TEXT (not INTEGER) to match how Powerswitch
+--   returns it in the questionnaire redirect and to remain tolerant of any
+--   future shape change; it is opaque to every consumer except as a path
+--   parameter to /api/locations/{id}/retailers.
