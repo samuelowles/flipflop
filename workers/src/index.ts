@@ -23,6 +23,7 @@ import { purgeOldLLMAudit } from './services/llmAudit';
 import { runFreeTierCheckin, type FreeTierCheckinEnv } from './services/freeTierCheckin';
 import { runFixedTermExpiryScan, type FixedTermExpiryEnv } from './services/fixedTermExpiry';
 import { runSwitchSanityCheck, type SwitchSanityEnv } from './services/switchTracker';
+import { runPowerswitchCanary, type CanaryEnv } from './services/powerswitchReplay';
 
 const app = new Hono();
 
@@ -357,6 +358,18 @@ async function scheduled(
       GMAIL_CLIENT_SECRET: string;
       ENCRYPTION_KEY: string;
     });
+    return;
+  }
+
+  // 0 10 * * * — Issue #221: daily Powerswitch drift canary. Runs the full
+  // replay flow for ONE fixture address and compares the response shape against
+  // the stored schema. LIVE calls ONLY when POWERSWITCH_LIVE==='true' (Gate 2,
+  // docs/POWERSWITCH_COMPLIANCE.md); otherwise logs canary_skipped_live_disabled
+  // and runs a fixture-based schema self-test. On drift → structured alert;
+  // user-facing replays should be skipped by callers while drift is reported.
+  // Distinct slot (10:00 UTC) — no matcher collision with the other crons.
+  if (cron.includes('10')) {
+    await runPowerswitchCanary(env as unknown as CanaryEnv);
     return;
   }
 
