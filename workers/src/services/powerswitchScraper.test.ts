@@ -215,3 +215,126 @@ describe('scrapePowerswitchPlans (issue #66 INERT gate)', () => {
     expect(counts.failed).toBe(0);
   });
 });
+
+/**
+ * #223 — Powerswitch scraper must write plans:diff:{retailer_id} KV keys for
+ * each retailer whose plan data changed during a run, so the daily re-compare
+ * cron (#75, planDiffConsumer.ts) can pick up Powerswitch-sourced changes.
+ * Mirrors eiep14a.ts writePlanDiffs: same prefix, same value shape.
+ */
+
+/** Records every KV.put(key, value) call in insertion order. */
+function mockKV() {
+  const puts: Record<string, string> = {};
+  const deletes: string[] = [];
+  const kv = {
+    put: async (key: string, value: string) => {
+      puts[key] = value;
+    },
+    delete: async (key: string) => {
+      deletes.push(key);
+    },
+    get: async (_key: string) => null,
+    list: async () => ({ keys: [] as Array<{ name: string }> }),
+  };
+  return { kv: kv as unknown as KVNamespace, puts, deletes };
+}
+
+/** Mock D1 where every upsert resolves to INSERT (changed=true, no manual row). */
+function mockD1AlwaysChanged() {
+  const handler: ProxyHandler<Record<string, unknown>> = {
+    get: (_t, prop) => {
+      if (prop === 'prepare') {
+        return (_sql: string) => {
+          const bind = (..._args: unknown[]) => ({
+            run: async () => undefined,
+            first: async () => null, // no existing row -> upsert INSERTs -> changed=true
+          });
+          return { bind };
+        };
+      }
+      return undefined;
+    },
+  };
+  return new Proxy({} as Record<string, unknown>, handler) as unknown as D1Database;
+}
+
+/** Stub global fetch to return the provided HTML per URL, no real network. */
+function stubFetch(htmlByUrl: Record<string, string>) {
+  const original = globalThis.fetch;
+  globalThis.fetch = (async (input: RequestInfo | URL) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+    const body = htmlByUrl[url] ?? '<html></html>';
+    return new Response(body, { status: 200, headers: { 'content-type': 'text/html' } });
+  }) as typeof globalThis.fetch;
+  return () => { globalThis.fetch = original; };
+}
+
+describe('scrapePowerswitchPlans (issue #223 diff-key writes)', () => {
+  it('writes plans:diff:{retailer} for each changed retailer, value shape matches eiep14a', async () => {
+    // Two pages: one Contact (changed), one Mercury (changed).
+    const restore = stubFetch({
+      'https://www.powerswitch.org.nz/plans/auckland': contact_auckland_standard,
+      'https://www.powerswitch.org.nz/plans/wellington': mercury_auckland_standard.replace(
+        /Auckland/g,
+        'Wellington'
+      ),
+      'https://www.powerswitch.org.nz/plans/christchurch': '<html></html>',
+    });
+    const { kv, puts } = mockKV();
+    const env: EnvWithPowerswitch = {
+      DB: mockD1AlwaysChanged(),
+      KV: kv,
+      POWERSWITCH_SCRAPER_ENABLED: 'true',
+    };
+
+    try {
+      await scrapePowerswitchPlans(env);
+    } finally {
+      restore();
+    }
+
+    // Both retailers changed -> both get a diff key.
+    expect(puts['plans:diff:contact']).toBeDefined();
+    expect(puts['plans:diff:mercury']).toBeDefined();
+
+    // Value shape matches eiep14a.ts writePlanDiffs (planDiffConsumer contract).
+    const raw = puts['plans:diff:contact'];
+    expect(raw).toBeDefined();
+    const payload = JSON.parse(raw as string) as {
+      retailer_id: string;
+      changed_fields: string[];
+      detected_at: string;
+    };
+    expect(payload.retailer_id).toBe('contact');
+    expect(Array.isArray(payload.changed_fields)).toBe(true);
+    expect(payload.changed_fields.length).toBeGreaterThan(0);
+    // detected_at is an ISO timestamp (T separates date and time).
+    expect(payload.detected_at).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+  });
+
+  it('does not write diff keys when no plans change (all skipped)', async () => {
+    // Empty HTML -> parsePlanPage returns null -> nothing upserted -> no diffs.
+    const restore = stubFetch({
+      'https://www.powerswitch.org.nz/plans/auckland': '<html></html>',
+      'https://www.powerswitch.org.nz/plans/wellington': '<html></html>',
+      'https://www.powerswitch.org.nz/plans/christchurch': '<html></html>',
+    });
+    const { kv, puts } = mockKV();
+    const env: EnvWithPowerswitch = {
+      DB: mockD1AlwaysChanged(),
+      KV: kv,
+      POWERSWITCH_SCRAPER_ENABLED: 'true',
+    };
+
+    try {
+      await scrapePowerswitchPlans(env);
+    } finally {
+      restore();
+    }
+
+    // No retailer diff keys written.
+    const diffKeys = Object.keys(puts).filter((k) => k.startsWith('plans:diff:'));
+    expect(diffKeys).toHaveLength(0);
+  });
+});

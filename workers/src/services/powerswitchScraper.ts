@@ -31,6 +31,13 @@ import { upsertPowerswitchPlan } from '../models/plans';
 export const POWERSWITCH_BASE_URL = 'https://www.powerswitch.org.nz';
 
 /**
+ * #223 — KV prefix for per-retailer plan-data diffs. Mirrors eiep14a.ts
+ * DIFF_KEY_PREFIX exactly so planDiffConsumer (#75) consumes both sources
+ * identically. Value shape: { retailer_id, changed_fields, detected_at }.
+ */
+const DIFF_KEY_PREFIX = 'plans:diff:';
+
+/**
  * Documented user agent. Identifies the service, the issue governing the
  * override, and a contact address so Powerswitch can reach us if needed.
  * Operators must set POWERSWITCH_CONTACT_EMAIL in the deployed env.
@@ -104,6 +111,12 @@ export async function scrapePowerswitchPlans(
     return counts;
   }
 
+  // #223 — accumulate retailers whose plan data changed during this run so we
+  // can emit one plans:diff:{retailer_id} KV key per changed retailer, matching
+  // eiep14a.ts writePlanDiffs. upsertPowerswitchPlan returns no field-level
+  // diff, so the sentinel lists the tracked fields the scraper owns.
+  const changedRetailers = new Set<string>();
+
   const pageUrls = listPlanPageUrls();
   const rawPages: Array<{ url: string; html: string }> = [];
 
@@ -143,6 +156,7 @@ export async function scrapePowerswitchPlans(
         counts.skipped++;
       } else if (changed) {
         counts.parsed++;
+        changedRetailers.add(parsed.retailerId);
       } else {
         counts.skipped++;
       }
@@ -156,6 +170,12 @@ export async function scrapePowerswitchPlans(
       }));
     }
   }
+
+  // #223 — write per-retailer diff keys so the daily re-compare cron (#75,
+  // planDiffConsumer.ts) can pick up Powerswitch-sourced changes. Mirrors
+  // eiep14a.ts: same prefix, same { retailer_id, changed_fields, detected_at }
+  // value shape. Retailers with zero changes get no key (parity behaviour).
+  await writePlanDiffs(env.KV, changedRetailers, now);
 
   const rawHash = await sha256Hex(rawHashInput);
   await insertProvenanceAudit(env.DB, {
@@ -365,6 +385,47 @@ function retailerNameToId(name: string): string {
     if (value.toLowerCase() === lower) return key.split(' ')[0]!;
   }
   return lower.replace(/[^a-z0-9]+/g, '_').replace(/^_|_$/g, '');
+}
+
+/**
+ * #223 — the tracked plan fields the Powerswitch scraper owns. Recorded as the
+ * changed_fields sentinel in the diff payload: upsertPowerswitchPlan returns no
+ * field-level diff, so the consumer (planDiffConsumer.ts) only uses this for
+ * observability/logging. Listed to keep parity with eiep14a's field-level diffs.
+ */
+const TRACKED_PLAN_FIELDS = [
+  'c_per_kwh',
+  'c_per_day',
+  'prompt_payment_discount',
+  'conditions_json',
+  'low_user_eligible',
+];
+
+/**
+ * #223 — write one per-retailer KV diff for each retailer with ≥1 changed plan.
+ * Mirrors eiep14a.ts writePlanDiffs: format
+ * `{ retailer_id, changed_fields: [...], detected_at: <iso> }` at key
+ * `plans:diff:{retailer_id}`. Retailers with zero changes are NOT written.
+ */
+async function writePlanDiffs(
+  kv: KVNamespace,
+  changedRetailers: Set<string>,
+  detectedAt: string
+): Promise<void> {
+  for (const retailerId of changedRetailers) {
+    try {
+      await kv.put(
+        `${DIFF_KEY_PREFIX}${retailerId}`,
+        JSON.stringify({
+          retailer_id: retailerId,
+          changed_fields: TRACKED_PLAN_FIELDS,
+          detected_at: detectedAt,
+        })
+      );
+    } catch {
+      // KV may not be available in all environments; non-fatal.
+    }
+  }
 }
 
 async function sha256Hex(text: string): Promise<string> {
