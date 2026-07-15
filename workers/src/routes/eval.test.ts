@@ -383,6 +383,28 @@ describe('POST /eval/upload', () => {
     expect(parsed.parsedData.retailer_id).toBe('contact-energy');
     expect(parsed.comparisons).toHaveLength(2);
     expect(parsed.isAnonymous).toBe(false);
+
+    // #226 — eval writes ONE summary row (not per-plan), matching the live
+    // COMPARE_QUEUE shape. The verdict is derived from stay_where_you_are:
+    // the first comparison is switchable (saving_cents 1000 > 0, not stay),
+    // so recommendation === 'switch' and the recommended plan is plan-1.
+    const comp = await import('../models/comparisons');
+    expect(comp.createComparison).toHaveBeenCalledTimes(1);
+    const persisted = (comp.createComparison as ReturnType<typeof vi.fn>).mock.calls[0]![1];
+    expect(persisted).toMatchObject({
+      recommendation: 'switch',
+      recommendedPlanId: 'plan-1',
+      currentPlanId: 'plan-1',
+      billId: 'bill-123',
+      projectedAnnualCost: 24000,
+      savings: 1000,
+      currentCostCents: 25000,
+      confidence: 0.85,
+    });
+    // Legacy per-plan input fields are gone from the input shape.
+    expect(persisted).not.toHaveProperty('planId');
+    expect(persisted).not.toHaveProperty('projectedCostCents');
+    expect(persisted).not.toHaveProperty('savingCents');
   });
 
   // -----------------------------------------------------------------------

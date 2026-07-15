@@ -302,7 +302,7 @@ describe('runComparison — stay_put recommendation surfacing (#72)', () => {
     const persisted = vi.mocked(createComparison).mock.calls[0]![1];
     expect(persisted).toMatchObject({
       recommendation: 'switch',
-      savingCents: 20000,
+      savings: 20000,
     });
 
     // Notify fired exactly once for the switch-recommended plan.
