@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { detectRetailerBySender, nameToSearchKeywords } from './retailers';
+import { detectRetailerBySender, nameToSearchKeywords, getAllRetailersForSearch } from './retailers';
 
 describe('detectRetailerBySender (issue #40)', () => {
   // Each NZ retailer in migration 0002_seed_retailers.sql must resolve to its
@@ -67,5 +67,65 @@ describe('nameToSearchKeywords', () => {
 
   it('leaves single-word names as-is', () => {
     expect(nameToSearchKeywords('Mercury')).toEqual(['Mercury']);
+  });
+});
+
+// Minimal D1 mock for getAllRetailersForSearch — returns the rows we seed.
+function makeDb(rows: Array<Record<string, unknown>>): D1Database {
+  return {
+    prepare: () => ({
+      bind: function () {
+        return this;
+      },
+      all: <T>() =>
+        Promise.resolve({ results: rows as T[] }),
+    }),
+  } as unknown as D1Database;
+}
+
+// Issue #227 — email_domains JSON parsing (migration 0017).
+describe('getAllRetailersForSearch (issue #227 email_domains)', () => {
+  it('parses a single-domain JSON array', async () => {
+    const db = makeDb([
+      { id: 'r1', name: 'Contact Energy', email_domains: '["contactenergy.co.nz"]' },
+    ]);
+    const retailers = await getAllRetailersForSearch(db);
+    expect(retailers).toHaveLength(1);
+    expect(retailers[0]!.emailDomains).toEqual(['contactenergy.co.nz']);
+  });
+
+  it('parses a multi-domain JSON array (Meridian/Powershop)', async () => {
+    const db = makeDb([
+      {
+        id: 'r1',
+        name: 'Meridian Energy',
+        email_domains: '["meridianenergy.co.nz","meridian.co.nz"]',
+      },
+    ]);
+    const retailers = await getAllRetailersForSearch(db);
+    expect(retailers[0]!.emailDomains).toEqual([
+      'meridianenergy.co.nz',
+      'meridian.co.nz',
+    ]);
+  });
+
+  it('returns an empty array for NULL email_domains (pre-migration rows)', async () => {
+    const db = makeDb([{ id: 'r1', name: 'Unknown', email_domains: null }]);
+    const retailers = await getAllRetailersForSearch(db);
+    expect(retailers[0]!.emailDomains).toEqual([]);
+  });
+
+  it('returns an empty array for invalid JSON without throwing', async () => {
+    const db = makeDb([{ id: 'r1', name: 'Broken', email_domains: 'not-json' }]);
+    const retailers = await getAllRetailersForSearch(db);
+    expect(retailers[0]!.emailDomains).toEqual([]);
+  });
+
+  it('filters non-string entries from the JSON array', async () => {
+    const db = makeDb([
+      { id: 'r1', name: 'Messy', email_domains: '["good.co.nz", 42, null, "also-good.co.nz"]' },
+    ]);
+    const retailers = await getAllRetailersForSearch(db);
+    expect(retailers[0]!.emailDomains).toEqual(['good.co.nz', 'also-good.co.nz']);
   });
 });

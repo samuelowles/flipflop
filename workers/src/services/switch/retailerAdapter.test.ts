@@ -31,6 +31,7 @@ function buildRetailer(overrides: Partial<Retailer> = {}): Retailer {
     id: CONTACT_ID,
     name: 'Contact Energy',
     domain: 'contact.co.nz',
+    emailDomains: ['contactenergy.co.nz'],
     parserId: 'contact',
     isActive: true,
     ...overrides,

@@ -53,11 +53,29 @@ function generateId(): string {
   return crypto.randomUUID();
 }
 
+/**
+ * Parse the `email_domains` JSON column (migration 0017) into a string array.
+ * Returns an empty array for NULL / unparseable rows so downstream matching
+ * is safe without null checks.
+ */
+function parseEmailDomains(raw: unknown): readonly string[] {
+  if (typeof raw !== 'string' || raw.length === 0) return [];
+  try {
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed)
+      ? parsed.filter((d): d is string => typeof d === 'string')
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function rowToRetailer(row: Record<string, unknown>): Retailer {
   return {
     id: row.id as string,
     name: row.name as string,
     domain: row.domain as string | null,
+    emailDomains: parseEmailDomains(row.email_domains),
     parserId: row.parser_id as string | null,
     isActive: (row.is_active as number) === 1,
   };
@@ -139,6 +157,29 @@ export async function getAllRetailerNames(
   );
   const result = await stmt.all<{ id: string; name: string }>();
   return result.results ?? [];
+}
+
+/**
+ * Issue #227 — get all active retailers with id, name, and email_domains for
+ * Gmail search-query construction and From-header matching. The emailPoller
+ * uses both name keywords AND sender domains in a union `from:` query so that
+ * nothing that matched before stops matching while newly-reliable domain
+ * matches are added.
+ */
+export async function getAllRetailersForSearch(
+  db: D1Database
+): Promise<
+  readonly { id: string; name: string; emailDomains: readonly string[] }[]
+> {
+  const stmt = db.prepare(
+    'SELECT id, name, email_domains FROM retailers WHERE is_active = 1 ORDER BY name'
+  );
+  const result = await stmt.all<Record<string, unknown>>();
+  return (result.results ?? []).map((row) => ({
+    id: row.id as string,
+    name: row.name as string,
+    emailDomains: parseEmailDomains(row.email_domains),
+  }));
 }
 
 /**

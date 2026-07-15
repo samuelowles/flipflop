@@ -30,6 +30,21 @@ export interface GmailMessageList {
   readonly resultSizeEstimate: number;
 }
 
+/** A single MIME part. Recursive: a multipart/* part nests child `parts`. */
+export interface GmailMessagePart {
+  readonly mimeType: string;
+  readonly filename: string;
+  readonly body: { readonly attachmentId?: string; readonly size: number };
+  readonly partId: string;
+  /** Child parts for multipart/* containers (Issue #227 fix 2 — recursive walk). */
+  readonly parts?: ReadonlyArray<GmailMessagePart>;
+  /** Headers may appear on nested parts as well as the top-level payload. */
+  readonly headers?: ReadonlyArray<{
+    readonly name: string;
+    readonly value: string;
+  }>;
+}
+
 /** Gmail API message detail with attachment metadata */
 export interface GmailMessage {
   readonly id: string;
@@ -39,12 +54,7 @@ export interface GmailMessage {
       readonly name: string;
       readonly value: string;
     }>;
-    readonly parts?: ReadonlyArray<{
-      readonly mimeType: string;
-      readonly filename: string;
-      readonly body: { readonly attachmentId?: string; readonly size: number };
-      readonly partId: string;
-    }>;
+    readonly parts?: ReadonlyArray<GmailMessagePart>;
     readonly mimeType: string;
   };
   readonly internalDate: string;
