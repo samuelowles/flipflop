@@ -160,6 +160,35 @@ Flip is NOT a comparison website. It is a passive monitoring agent. Its most imp
      bridge module (workers/src/services/powerswitchScraper.ts) + its cron
      branch once #64 is live AND EIEP14A coverage is sufficient.
      The original no-scraping rules above REMAIN IN FORCE for all other sources. -->
+
+<!-- #219 CONDITIONAL OVERRIDE: Powerswitch PER-USER address submission.
+     Scope: submitting a user's address + coarse household answers to the
+     Powerswitch questionnaire flow (https://www.powerswitch.org.nz) to
+     retrieve live, address-specific plan data (#218/#220-#222).
+     Authority: docs/POWERSWITCH_COMPLIANCE.md (decision record, CONDITIONAL GO).
+     This is DISTINCT from the #66 public-page override above — that one is
+     untouched and remains in force for public plan-listing pages.
+
+     PERMITTED ONLY when ALL of the following are true:
+       1. POWERSWITCH_LIVE env var is explicitly "true" in the deployed Worker
+          (ships INERT — defaults false/unset; fixture-only path otherwise).
+       2. Written partner sign-off from Consumer NZ / Powerswitch is recorded
+          in the Partner sign-off log in docs/POWERSWITCH_COMPLIANCE.md.
+       3. ICP is NEVER submitted (results are complete without it — verified
+          2026-07-15). Current retailer is optional, never required.
+       4. Per-day request budget + sequential requests with delay/backoff
+          + identified POWERSWITCH_USER_AGENT (shared not-for-profit resource
+          etiquette).
+       5. Daily drift canary (#221) guards the schema; on mismatch, user-facing
+          runs are skipped (no partial-garbage writes).
+
+     Implementation against fixtures / operator-owned test data is UNBLOCKED
+     regardless of gates 1-2 (no user PII leaves the system). LIVE per-user
+     activation (real user addresses) requires BOTH gates 1 and 2.
+
+     Fallback if gate 1 is not met: #157 manual plan import path.
+     Full decision, data-retention treatment (Privacy Act 2020, #103), and
+     consent copy: docs/POWERSWITCH_COMPLIANCE.md. -->
 - No discount code repository or promotional deals
 - No marketing messages or promotional content via WhatsApp/SMS
 - No "recommended" or "sponsored" plan rankings
