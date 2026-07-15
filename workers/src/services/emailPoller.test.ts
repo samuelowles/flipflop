@@ -18,7 +18,7 @@ vi.mock('./gmailAuth', () => ({
   downloadAttachment: vi.fn(),
 }));
 
-// Mock retailers model — mock getAllRetailerNames but keep real nameToSearchKeywords
+// Mock retailers model — mock getAllRetailersForSearch but keep real nameToSearchKeywords
 vi.mock('../models/retailers', async () => {
   const actual = await vi.importActual<typeof import('../models/retailers')>(
     '../models/retailers'
@@ -26,12 +26,14 @@ vi.mock('../models/retailers', async () => {
   return {
     ...actual,
     getAllRetailerNames: vi.fn(),
+    getAllRetailersForSearch: vi.fn(),
   };
 });
 
 // Mock bills model
 vi.mock('../models/bills', () => ({
   createBill: vi.fn(),
+  getBillBySourceMessageId: vi.fn(),
 }));
 
 // Mock oauth model
@@ -46,8 +48,8 @@ import {
   getMessage,
   downloadAttachment,
 } from './gmailAuth';
-import { getAllRetailerNames, nameToSearchKeywords } from '../models/retailers';
-import { createBill } from '../models/bills';
+import { getAllRetailerNames, getAllRetailersForSearch, nameToSearchKeywords } from '../models/retailers';
+import { createBill, getBillBySourceMessageId } from '../models/bills';
 import { storeOAuthTokens } from '../models/oauth';
 
 function makeMockKV(): KVNamespace {
@@ -226,7 +228,7 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([]);
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([]);
 
     const results = await pollAllUsers(env);
     expect(results).toEqual([]);
@@ -244,8 +246,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [],
@@ -279,8 +281,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(refreshAccessToken).mockResolvedValue({
       accessToken: 'new-access-token',
@@ -323,8 +325,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
 
     const results = await pollAllUsers(env);
@@ -347,8 +349,8 @@ describe('pollAllUsers', () => {
       retailerId: 'ret-001',
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'ret-001', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'ret-001', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [{ id: 'msg_001' }],
@@ -420,8 +422,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [{ id: 'msg_001' }],
@@ -459,8 +461,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [{ id: 'msg_001' }],
@@ -505,9 +507,9 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
-      { id: 'r2', name: 'Mercury' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+      { id: 'r2', name: 'Mercury', emailDomains: ['mercury.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [],
@@ -538,8 +540,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [],
@@ -577,8 +579,8 @@ describe('pollAllUsers', () => {
       '2026-05-10T08:00:00Z'
     );
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [],
@@ -604,8 +606,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [{ id: 'msg_bad' }],
@@ -633,8 +635,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [],
@@ -667,8 +669,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [],
@@ -699,8 +701,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [],
@@ -742,8 +744,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
 
     // First page has nextPageToken, second page does not
@@ -802,8 +804,8 @@ describe('pollAllUsers', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [{ id: 'msg_001' }],
@@ -865,8 +867,8 @@ describe('pollSingleUser', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [],
@@ -905,8 +907,8 @@ describe('pollSingleUser', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
 
     // 6 messages to trigger at least one periodic write at messagesScanned % 5 === 0
@@ -959,8 +961,8 @@ describe('pollSingleUser', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'r1', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
 
     const result = await pollSingleUser(env, 'user-1');
@@ -990,8 +992,8 @@ describe('pollSingleUser', () => {
       ],
     });
 
-    vi.mocked(getAllRetailerNames).mockResolvedValue([
-      { id: 'ret-001', name: 'Contact Energy' },
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'ret-001', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
     ]);
     vi.mocked(searchMessages).mockResolvedValue({
       messages: [{ id: 'msg_001' }],
@@ -1054,5 +1056,421 @@ describe('pollSingleUser', () => {
       'Contact Energy <bills@contact.co.nz>'
     );
     expect(result.billsFound).toBe(1);
+  });
+});
+
+// ---------- Issue #227 — Gmail bill discovery overhaul ----------
+//
+// Seven mandatory test cases from the issue spec. Each maps to a numbered fix:
+//   1. dedup via sourceMessageId
+//   2. recursive MIME walk (nested multipart/mixed)
+//   2. octet-stream + .pdf filename
+//   3+4. domain-match + demoted subject → bill found with subjectMatched:false
+//   4. unknown-sender + PDF still skipped (subject hard gate intact)
+//   3. buildSearchQuery union property (every domain AND every name keyword)
+//   6. cursor safety (failed run → not advanced; clean run → advanced)
+
+describe('Issue #227 — Gmail bill discovery overhaul', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockReset();
+    // Default: no existing bill (dedup returns null).
+    vi.mocked(getBillBySourceMessageId).mockResolvedValue(null);
+  });
+
+  // Standard bill mock returned by createBill for these tests.
+  const billMock = {
+    id: 'bill-001',
+    userId: 'user-1',
+    retailerId: 'ret-001',
+    planName: null,
+    meterType: null,
+    periodStart: null,
+    periodEnd: null,
+    days: null,
+    usageKwh: null,
+    totalCents: null,
+    cPerKwh: null,
+    cPerDay: null,
+    fixedTermExpiry: null,
+    breakFeeCents: null,
+    status: 'pending_parse' as const,
+    confidence: null,
+    rawR2Key: 'bills/user-1/gmail_msg_001_0.pdf',
+    parsedJson: null,
+    source: 'gmail' as const,
+    sourceMessageId: 'gmail_msg_001_0',
+    errorCode: null,
+    parsedAt: null,
+    createdAt: new Date().toISOString(),
+  };
+
+  function userRow(): Array<Record<string, unknown>> {
+    return [
+      {
+        user_id: 'user-1',
+        access_token_encrypted: 'enc-access',
+        refresh_token_encrypted: 'enc-refresh',
+        expiry: new Date(Date.now() + 3600000).toISOString(),
+      },
+    ];
+  }
+
+  // FIX 1 — dedup: processing the same message twice yields exactly one
+  // bills row and the second run logs skipped_duplicate.
+  it('skips a duplicate message on re-process (dedup via sourceMessageId)', async () => {
+    const env = makeEnv({ oauthRows: userRow() });
+
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'ret-001', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+    ]);
+    vi.mocked(searchMessages).mockResolvedValue({
+      messages: [{ id: 'msg_001' }],
+      resultSizeEstimate: 1,
+    });
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_001',
+      threadId: 'thread_1',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'Contact Energy <bills@contactenergy.co.nz>' },
+          { name: 'Subject', value: 'Your monthly bill is ready' },
+        ],
+        parts: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'bill.pdf',
+            body: { attachmentId: 'att_001', size: 50000 },
+            partId: '0',
+          },
+        ],
+        mimeType: 'multipart/mixed',
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+    vi.mocked(createBill).mockResolvedValue(billMock);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    // First run: no existing bill → createBill called once.
+    await pollAllUsers(env);
+    expect(createBill).toHaveBeenCalledTimes(1);
+    expect(createBill).toHaveBeenCalledWith(
+      env.DB,
+      expect.objectContaining({ sourceMessageId: 'gmail_msg_001_0' })
+    );
+
+    // Second run: dedup returns the existing bill → createBill NOT called again.
+    vi.mocked(getBillBySourceMessageId).mockResolvedValue(billMock);
+    vi.mocked(createBill).mockClear();
+    await pollAllUsers(env);
+    expect(createBill).not.toHaveBeenCalled();
+
+    // The skipped_duplicate log line was emitted.
+    const skipLog = logSpy.mock.calls
+      .map((c) => {
+        try {
+          return JSON.parse(c[0] as string);
+        } catch {
+          return null;
+        }
+      })
+      .find((l) => l !== null && l.reason === 'skipped_duplicate');
+    expect(skipLog).toBeDefined();
+    expect(skipLog.billId).toBe('bill-001');
+
+    logSpy.mockRestore();
+  });
+
+  // FIX 2 — recursive MIME walk: a PDF nested two levels deep under
+  // multipart/mixed → multipart/alternative is found.
+  it('finds a PDF nested two levels deep in multipart/mixed', async () => {
+    const env = makeEnv({ oauthRows: userRow() });
+
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'ret-001', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+    ]);
+    vi.mocked(searchMessages).mockResolvedValue({
+      messages: [{ id: 'msg_001' }],
+      resultSizeEstimate: 1,
+    });
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_001',
+      threadId: 'thread_1',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'Contact Energy <bills@contactenergy.co.nz>' },
+          { name: 'Subject', value: 'Your invoice' },
+        ],
+        mimeType: 'multipart/mixed',
+        parts: [
+          {
+            mimeType: 'multipart/alternative',
+            filename: '',
+            body: { size: 0 },
+            partId: '0',
+            parts: [
+              {
+                mimeType: 'text/plain',
+                filename: '',
+                body: { size: 1234 },
+                partId: '0.0',
+              },
+              {
+                mimeType: 'application/pdf',
+                filename: 'invoice.pdf',
+                body: { attachmentId: 'att_nested', size: 90000 },
+                partId: '0.1',
+              },
+            ],
+          },
+        ],
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+    vi.mocked(createBill).mockResolvedValue(billMock);
+
+    const results = await pollAllUsers(env);
+
+    expect(results[0]!.billsFound).toBe(1);
+    expect(downloadAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({ attachmentId: 'att_nested' })
+    );
+  });
+
+  // FIX 2 — octet-stream + .pdf filename is accepted as a bill PDF.
+  it('accepts application/octet-stream with a .pdf filename as a bill PDF', async () => {
+    const env = makeEnv({ oauthRows: userRow() });
+
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'ret-001', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+    ]);
+    vi.mocked(searchMessages).mockResolvedValue({
+      messages: [{ id: 'msg_001' }],
+      resultSizeEstimate: 1,
+    });
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_001',
+      threadId: 'thread_1',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'Contact Energy <bills@contactenergy.co.nz>' },
+          { name: 'Subject', value: 'Your statement' },
+        ],
+        parts: [
+          {
+            mimeType: 'application/octet-stream',
+            filename: 'invoice.pdf',
+            body: { attachmentId: 'att_octet', size: 80000 },
+            partId: '1',
+          },
+        ],
+        mimeType: 'multipart/mixed',
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+    vi.mocked(createBill).mockResolvedValue(billMock);
+
+    const results = await pollAllUsers(env);
+
+    expect(results[0]!.billsFound).toBe(1);
+    expect(downloadAttachment).toHaveBeenCalledWith(
+      expect.objectContaining({ attachmentId: 'att_octet' })
+    );
+  });
+
+  // FIX 3 + 4 — domain match + demoted subject: a message whose From domain
+  // matches a retailer but whose subject has NO bill keyword is still parsed,
+  // and subjectMatched:false is logged.
+  it('finds a bill from a matching domain with a non-keyword subject (subjectMatched:false)', async () => {
+    const env = makeEnv({ oauthRows: userRow() });
+
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'ret-001', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+    ]);
+    vi.mocked(searchMessages).mockResolvedValue({
+      messages: [{ id: 'msg_001' }],
+      resultSizeEstimate: 1,
+    });
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_001',
+      threadId: 'thread_1',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'Contact Energy <bills@contactenergy.co.nz>' },
+          // No bill/invoice/statement/account keyword.
+          { name: 'Subject', value: 'Your monthly energy summary' },
+        ],
+        parts: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'bill.pdf',
+            body: { attachmentId: 'att_001', size: 50000 },
+            partId: '0',
+          },
+        ],
+        mimeType: 'multipart/mixed',
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+    vi.mocked(createBill).mockResolvedValue(billMock);
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const results = await pollAllUsers(env);
+
+    // Bill was found despite the non-keyword subject.
+    expect(results[0]!.billsFound).toBe(1);
+    expect(createBill).toHaveBeenCalledTimes(1);
+
+    // subjectMatched:false recorded in the processed log line.
+    const processedLog = logSpy.mock.calls
+      .map((c) => {
+        try {
+          return JSON.parse(c[0] as string);
+        } catch {
+          return null;
+        }
+      })
+      .find((l) => l !== null && l.type === 'gmail_message_processed');
+    expect(processedLog).toBeDefined();
+    expect(processedLog.subjectMatched).toBe(false);
+    expect(processedLog.retailerMatched).toBe(true);
+
+    logSpy.mockRestore();
+  });
+
+  // FIX 4 — unknown-sender protection: an unknown sender with a PDF and a
+  // non-keyword subject is still skipped (subject remains a hard gate when
+  // retailer match failed).
+  it('skips an unknown sender with a PDF and non-keyword subject (hard gate intact)', async () => {
+    const env = makeEnv({ oauthRows: userRow() });
+
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'ret-001', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+    ]);
+    vi.mocked(searchMessages).mockResolvedValue({
+      messages: [{ id: 'msg_001' }],
+      resultSizeEstimate: 1,
+    });
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_001',
+      threadId: 'thread_1',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          // Unknown sender — no retailer domain or name.
+          { name: 'From', value: 'Spammer <deals@totally-unrelated.example>' },
+          { name: 'Subject', value: 'Special offer just for you' },
+        ],
+        parts: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'coupon.pdf',
+            body: { attachmentId: 'att_001', size: 5000 },
+            partId: '0',
+          },
+        ],
+        mimeType: 'multipart/mixed',
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+    const results = await pollAllUsers(env);
+
+    expect(results[0]!.billsFound).toBe(0);
+    expect(createBill).not.toHaveBeenCalled();
+    expect(downloadAttachment).not.toHaveBeenCalled();
+
+    const skipLog = logSpy.mock.calls
+      .map((c) => {
+        try {
+          return JSON.parse(c[0] as string);
+        } catch {
+          return null;
+        }
+      })
+      .find((l) => l !== null && l.reason === 'skipped_no_retailer_match');
+    expect(skipLog).toBeDefined();
+
+    logSpy.mockRestore();
+  });
+
+  // FIX 3 — buildSearchQuery union property: the query contains every seeded
+  // domain AND every existing name keyword (union, not replacement).
+  it('buildSearchQuery contains every domain AND every name keyword (union)', async () => {
+    const env = makeEnv({ oauthRows: userRow() });
+
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+      { id: 'r2', name: 'Mercury', emailDomains: ['mercury.co.nz'] },
+    ]);
+    vi.mocked(searchMessages).mockResolvedValue({
+      messages: [],
+      resultSizeEstimate: 0,
+    });
+
+    await pollAllUsers(env);
+
+    const query = vi.mocked(searchMessages).mock.calls[0]![0].query;
+    // Every domain present.
+    expect(query).toContain('from:contactenergy.co.nz');
+    expect(query).toContain('from:mercury.co.nz');
+    // Every name keyword present (union, not replacement).
+    expect(query).toContain('from:"Contact Energy"');
+    expect(query).toContain('from:Mercury');
+    expect(query).toContain('has:attachment');
+  });
+
+  // FIX 6 — cursor safety: a failed run (processMessage error) does NOT
+  // advance the cursor; a clean run DOES.
+  it('does not advance the poll cursor on a failed run, but does on a clean run', async () => {
+    const env = makeEnv({ oauthRows: userRow() });
+
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+    ]);
+    vi.mocked(searchMessages).mockResolvedValue({
+      messages: [{ id: 'msg_001' }],
+      resultSizeEstimate: 1,
+    });
+
+    // === FAILED RUN: getMessage throws → processMessage returns an error. ===
+    vi.mocked(getMessage).mockRejectedValueOnce(new Error('Gmail API down'));
+
+    // Pre-seed a cursor so we can detect whether it changed.
+    await env.KV.put('gmail:lastPoll:user-1', '2026-01-01T00:00:00Z');
+    const cursorBefore = await env.KV.get('gmail:lastPoll:user-1');
+
+    await pollAllUsers(env);
+
+    const cursorAfterFailed = await env.KV.get('gmail:lastPoll:user-1');
+    expect(cursorAfterFailed).toBe(cursorBefore); // NOT advanced
+
+    // === CLEAN RUN: getMessage succeeds, no messages error. ===
+    vi.mocked(getMessage).mockResolvedValueOnce({
+      id: 'msg_001',
+      threadId: 'thread_1',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'noreply@example.com' },
+          { name: 'Subject', value: 'Hello' },
+        ],
+        mimeType: 'text/plain',
+      },
+    });
+
+    await pollAllUsers(env);
+
+    const cursorAfterClean = await env.KV.get('gmail:lastPoll:user-1');
+    expect(cursorAfterClean).not.toBe(cursorBefore); // advanced
+    expect(cursorAfterClean).toMatch(new RegExp(`^${new Date().getFullYear()}-`));
   });
 });
