@@ -43,6 +43,10 @@ async function rowToUser(
     installationAddress: installationAddress
       ? await decrypt(installationAddress, env.ENCRYPTION_KEY)
       : null,
+    // Issue #220 — Powerswitch address-resolution cache. Not PII-derived beyond
+    // the address already held on the row; stored as opaque ids, never a guess.
+    powerswitchPxid: (row.powerswitch_pxid as string | null) ?? null,
+    powerswitchLocationId: (row.powerswitch_location_id as string | null) ?? null,
     notificationThresholdCents: row.notification_threshold_cents as number,
     state: row.state as ConversationState,
     createdAt: row.created_at as string,
@@ -220,6 +224,16 @@ export async function updateUser(
     setClauses.push(`notification_threshold_cents = ?${paramIndex++}`);
     params.push(input.notificationThresholdCents);
   }
+  // Issue #220 — Powerswitch pxid + location id. Null is a valid write (clears
+  // the cache); undefined means "leave unchanged" (default partial-update rule).
+  if (input.powerswitchPxid !== undefined) {
+    setClauses.push(`powerswitch_pxid = ?${paramIndex++}`);
+    params.push(input.powerswitchPxid);
+  }
+  if (input.powerswitchLocationId !== undefined) {
+    setClauses.push(`powerswitch_location_id = ?${paramIndex++}`);
+    params.push(input.powerswitchLocationId);
+  }
   if (input.state !== undefined) {
     setClauses.push(`state = ?${paramIndex++}`);
     params.push(input.state);
@@ -253,6 +267,35 @@ export async function updateUserState(
     'UPDATE users SET state = ?1, updated_at = ?2 WHERE id = ?3'
   );
   await stmt.bind(state, now, id).run();
+}
+
+/**
+ * Issue #220 — persist a resolved Powerswitch address (pxid + location id) on
+ * the user row. Called by services/powerswitchSession.ts only after a
+ * high-confidence resolution (single/exact completion). Either field may be
+ * null (e.g. clearing the cache); pass undefined to leave a field unchanged.
+ * Does NOT decrypt/re-encrypt PII — these are opaque ids, not PII.
+ */
+export async function updatePowerswitchLocation(
+  db: D1Database,
+  id: string,
+  input: { pxid?: string | null; locationId?: string | null }
+): Promise<void> {
+  const now = new Date().toISOString();
+  const setClauses: string[] = ['updated_at = ?1'];
+  const params: unknown[] = [now];
+  let paramIndex = 2;
+  if (input.pxid !== undefined) {
+    setClauses.push(`powerswitch_pxid = ?${paramIndex++}`);
+    params.push(input.pxid);
+  }
+  if (input.locationId !== undefined) {
+    setClauses.push(`powerswitch_location_id = ?${paramIndex++}`);
+    params.push(input.locationId);
+  }
+  params.push(id);
+  const sql = `UPDATE users SET ${setClauses.join(', ')} WHERE id = ?${paramIndex}`;
+  await db.prepare(sql).bind(...params).run();
 }
 
 /**

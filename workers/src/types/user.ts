@@ -12,6 +12,8 @@ export interface User {
   readonly currentPlanName: string | null;
   readonly icpNumber: string | null; // encrypted at rest
   readonly installationAddress: string | null; // encrypted at rest
+  readonly powerswitchPxid: string | null; // issue #220 — Powerswitch address id
+  readonly powerswitchLocationId: string | null; // issue #220 — Powerswitch location id
   readonly notificationThresholdCents: number; // integer cents NZD
   readonly state: ConversationState;
   readonly createdAt: string; // ISO 8601
