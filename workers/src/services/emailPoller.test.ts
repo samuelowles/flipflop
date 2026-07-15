@@ -48,7 +48,7 @@ import {
   getMessage,
   downloadAttachment,
 } from './gmailAuth';
-import { getAllRetailerNames, getAllRetailersForSearch, nameToSearchKeywords } from '../models/retailers';
+import { getAllRetailersForSearch, nameToSearchKeywords } from '../models/retailers';
 import { createBill, getBillBySourceMessageId } from '../models/bills';
 import { storeOAuthTokens } from '../models/oauth';
 
