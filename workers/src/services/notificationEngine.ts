@@ -16,6 +16,7 @@ import { renderTemplate } from './sentTemplates';
 import { explainComparison as _explainComparison, generateStayPutMessage, generateSavingMessage } from './comparisonIntelligence';
 import { persistLLMCall } from './llmAudit';
 import { createNotificationAudit } from '../models/notificationAudit';
+import { startStage, finishStage, failStage, skipStage, readFlowTrace } from './flowTrace';
 import type { Recommendation } from '../types/comparison';
 import type { NotificationType } from '../types/notification';
 
@@ -25,6 +26,13 @@ interface NotifyEnv {
   readonly SENT_API_KEY: string;
   readonly ENCRYPTION_KEY: string;
   readonly DEEPSEEK_API_KEY?: string;
+  /**
+   * Issue #228 — test-mode toggle. When 'true' AND a flow trace is active for
+   * this user, the threshold + cooldown guards are bypassed for THIS user only
+   * so repeat test runs reach the notify stage (otherwise they silently skip
+   * and read as failure on the trace page). NEVER bypasses switch dedup.
+   */
+  readonly FLOW_TEST_MODE?: string;
 }
 
 /**
@@ -92,6 +100,21 @@ export function isWithinCooldownWindow(cooldownKeyExists: boolean): boolean {
   return cooldownKeyExists;
 }
 
+/**
+ * Issue #228 — test-mode bypass predicate. Returns true ONLY when FLOW_TEST_MODE
+ * is enabled AND an active flow trace exists for this user. Scoped per-user via
+ * the trace key so a global flag can never bypass guards for untraced users.
+ * Pure + async-safe: a KV read failure returns false (fail-closed).
+ */
+export async function isFlowTestBypassActive(
+  env: { readonly KV: KVNamespace; readonly FLOW_TEST_MODE?: string },
+  userId: string
+): Promise<boolean> {
+  if (env.FLOW_TEST_MODE !== 'true') return false;
+  const trace = await readFlowTrace(env.KV, userId);
+  return trace !== null;
+}
+
 function savingToDollars(cents: number): number {
   return Math.round(Math.abs(cents) / 100);
 }
@@ -136,6 +159,21 @@ export async function evaluateAndNotify(
     recommendation: recommendation ?? null,
     timestamp: new Date().toISOString(),
   }));
+  // Issue #228 — notify stage start (additive trace; no-op on KV failure).
+  await startStage(env.KV, userId, 'notify');
+  // Issue #228 — test-mode bypass: when FLOW_TEST_MODE is on AND a trace is
+  // active for this user, skip the threshold + cooldown guards so repeat test
+  // runs reach the dispatch (otherwise they read as a silent failure on the
+  // trace page). Scoped per-user; never bypasses switch dedup.
+  const testBypass = await isFlowTestBypassActive(env, userId);
+  if (testBypass) {
+    console.log(JSON.stringify({
+      type: 'notify_test_mode_bypass',
+      userId,
+      detail: 'FLOW_TEST_MODE + active trace — threshold/cooldown guards bypassed for this user',
+      timestamp: new Date().toISOString(),
+    }));
+  }
   // 1. Fetch the comparison result
   const comparison = await getLatestComparisonForUser(env.DB, userId);
   if (!comparison || comparison.id !== comparisonId) {
@@ -155,7 +193,7 @@ export async function evaluateAndNotify(
     { ENCRYPTION_KEY: env.ENCRYPTION_KEY },
     userId
   );
-  if (!meetsThreshold(comparison.savingCents, thresholdCents)) {
+  if (!testBypass && !meetsThreshold(comparison.savingCents, thresholdCents)) {
     console.log(JSON.stringify({
       type: 'notify_skip',
       userId,
@@ -164,12 +202,13 @@ export async function evaluateAndNotify(
       thresholdCents,
       timestamp: new Date().toISOString(),
     }));
+    await skipStage(env.KV, userId, 'notify', `saving ${comparison.savingCents}c below threshold ${thresholdCents}c`);
     return;
   }
 
   // 3. Check frequency cooldown
   const cooldownKey = `${NOTIFY_COOLDOWN_KEY_PREFIX}${userId}`;
-  const lastNotified = await env.KV.get(cooldownKey);
+  const lastNotified = testBypass ? null : await env.KV.get(cooldownKey);
   if (lastNotified) {
     const lastDate = new Date(lastNotified);
     const daysSince = (Date.now() - lastDate.getTime()) / (1000 * 60 * 60 * 24);
@@ -269,7 +308,8 @@ export async function evaluateAndNotify(
   // comparisonId, same recommendation). The key never contains PII — only
   // opaque ids.
   const sendDedupKey = buildSendDedupKey(userId, comparison.planId ?? '');
-  if (isWithinSendDedupWindow((await env.KV.get(sendDedupKey)) !== null)) {
+  const inSendDedup = testBypass ? false : isWithinSendDedupWindow((await env.KV.get(sendDedupKey)) !== null);
+  if (inSendDedup) {
     console.log(JSON.stringify({
       type: 'notify_skip',
       userId,
@@ -277,6 +317,7 @@ export async function evaluateAndNotify(
       planId: comparison.planId ?? null,
       timestamp: new Date().toISOString(),
     }));
+    await skipStage(env.KV, userId, 'notify', 'send dedup window active (1h)');
     return;
   }
 
@@ -287,7 +328,8 @@ export async function evaluateAndNotify(
   // change"). Weekends and NZ public holidays are included — it is a flat 7d
   // TTL, not a business-day calc.
   const planCooldownKey = buildCooldownKey(userId, comparison.planId ?? '');
-  if (isWithinCooldownWindow((await env.KV.get(planCooldownKey)) !== null)) {
+  const inCooldown = testBypass ? false : isWithinCooldownWindow((await env.KV.get(planCooldownKey)) !== null);
+  if (inCooldown) {
     console.log(JSON.stringify({
       type: 'notify_skip',
       userId,
@@ -295,6 +337,7 @@ export async function evaluateAndNotify(
       planId: comparison.planId ?? null,
       timestamp: new Date().toISOString(),
     }));
+    await skipStage(env.KV, userId, 'notify', 'cooldown window active (7d)');
     return;
   }
 
@@ -331,8 +374,20 @@ export async function evaluateAndNotify(
       status: 'failed',
       reason,
     });
+    // Issue #228 — notify stage failed (verbatim error on the trace page).
+    await failStage(env.KV, userId, 'notify', reason);
     return; // don't update cooldown if send failed
   }
+
+  // Issue #228 — notify stage ok (additive trace; no-op on KV failure).
+  await finishStage(env.KV, userId, 'notify', {
+    detail: `${templateName} sent via WhatsApp`,
+    artifacts: {
+      notificationId: sentMessageId ?? '',
+      template: templateName,
+      channel: 'whatsapp',
+    },
+  });
 
   // Issue #128 — mark this (user, plan) as sent for the 1h window. Set only
   // after a successful dispatch so a failed send can be retried immediately.

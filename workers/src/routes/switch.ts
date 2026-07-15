@@ -20,6 +20,7 @@ import { requestRetailerSwitch } from '../services/switch/retailerAdapter';
 import { getPlanById } from '../models/plans';
 import { getUserById } from '../models/users';
 import { getRetailerById } from '../models/retailers';
+import { finishStage, skipStage, failStage } from '../services/flowTrace';
 import type { EncryptionEnv } from '../models/encryption';
 
 interface SwitchRequestBody {
@@ -114,6 +115,11 @@ export async function createSwitchRoute(c: Context): Promise<Response> {
     }
 
     // ponytail: keep the existing 201 shape, just add switch_url + method.
+    // Issue #228 — switch stage ok (additive trace; no-op on KV failure).
+    await finishStage(c.env.KV as KVNamespace, userId, 'switch', {
+      detail: `Switch ${switchRecord.status} for plan ${toPlanId}`,
+      artifacts: { switchId: switchRecord.id, method: switchMethod },
+    });
     return c.json(
       {
         switch_id: switchRecord.id,
@@ -125,6 +131,8 @@ export async function createSwitchRoute(c: Context): Promise<Response> {
     );
   } catch (error) {
     if (error instanceof DuplicateActiveSwitchError) {
+      // Issue #228 — switch stage skipped (duplicate — switch dedup intact).
+      await skipStage(c.env.KV as KVNamespace, userId, 'switch', 'duplicate active switch');
       return c.json(
         {
           error: 'An active switch already exists for this user + plan',
@@ -134,6 +142,9 @@ export async function createSwitchRoute(c: Context): Promise<Response> {
         409
       );
     }
+    // Issue #228 — switch stage failed (verbatim error). Switch dedup is never
+    // bypassed — this only records the failure on the trace.
+    await failStage(c.env.KV as KVNamespace, userId, 'switch', error instanceof Error ? error.message : 'unknown');
     throw error;
   }
 }
