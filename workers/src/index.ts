@@ -10,19 +10,23 @@ import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates
 import { adminRateLimitStatus } from './routes/adminRateLimit';
 import { adminListNotifications } from './routes/adminNotifications';
 import { createSwitchRoute } from './routes/switch';
+import { flowStatusPage, flowStatusJson } from './routes/flow';
 import { purgeNotificationAudit } from './models/notificationAudit';
 import { pollAllUsers } from './services/emailPoller';
 import { refreshPlans, isEiep14aEnabled, type EnvWithPlans } from './services/eiep14a';
 import { scrapePowerswitchPlans, isPowerswitchEnabled, type EnvWithPowerswitch } from './services/powerswitchScraper';
 import { handleParseJob, ParseError } from './services/billParser';
-import { updateBillFailed } from './models/bills';
+import { updateBillFailed, getBillById } from './models/bills';
 import { runComparison } from './services/planComparator';
+import { compareUserWithPowerswitch } from './services/compareUserWithPowerswitch';
+import { readCachedResults } from './services/powerswitchReplay';
 import { consumePlanDiffs, type PlanDiffConsumerEnv } from './services/planDiffConsumer';
 import { evaluateAndNotify } from './services/notificationEngine';
 import { purgeOldLLMAudit } from './services/llmAudit';
 import { runFreeTierCheckin, type FreeTierCheckinEnv } from './services/freeTierCheckin';
 import { runFixedTermExpiryScan, type FixedTermExpiryEnv } from './services/fixedTermExpiry';
 import { runSwitchSanityCheck, type SwitchSanityEnv } from './services/switchTracker';
+import { startStage, finishStage, failStage, skipStage } from './services/flowTrace';
 import { runPowerswitchCanary, type CanaryEnv } from './services/powerswitchReplay';
 
 const app = new Hono();
@@ -99,6 +103,12 @@ app.get('/admin/rate-limit/:userKey', adminRateLimitStatus);
 // the /admin/* catch-all. Auth-gated via ADMIN_API_KEY (adminAuth middleware).
 app.get('/admin/notifications', adminListNotifications);
 
+// Issue #228 (Epic 13 DoD): FlowTrace observation routes. Admin-auth'd via the
+// same ADMIN_API_KEY Bearer middleware as /admin/* (applied per-route since the
+// paths live under /flow/, outside the /admin/* matcher).
+app.get('/flow/status', adminAuth, flowStatusPage);
+app.get('/flow/status.json', adminAuth, flowStatusJson);
+
 // Epic 1 issue #17 — 501 stubs for unimplemented webhook + admin surfaces.
 // Placed after specific routes so Hono's first-match routing resolves
 // /webhook/messaging, /admin/plans/*, /admin/scrape-powerswitch before falling
@@ -133,6 +143,10 @@ async function queue(
     try {
       if (queueName === 'flip-parse-queue') {
         const body = message.body as { billId: string; r2Key: string; userId?: string };
+        // Issue #228 — parse stage (additive trace; no-op on KV failure). Only
+        // start when the message carries a userId; the finish uses the bill's
+        // resolved userId regardless.
+        if (body.userId) await startStage(env.KV as KVNamespace, body.userId, 'parse');
         await handleParseJob(body.billId, body.r2Key, {
           DB: env.DB as D1Database,
           BILLS: env.BILLS as R2Bucket,
@@ -142,17 +156,85 @@ async function queue(
           PYTHON_SERVICE_URL: env.PYTHON_SERVICE_URL as string | undefined,
           PYTHON_SERVICE_AUTH_TOKEN: env.PYTHON_SERVICE_AUTH_TOKEN as string | undefined,
         });
+        // FlowTrace: record the parsed bill (confidence from the bill row).
+        try {
+          const parsedBill = await getBillById(env.DB as D1Database, body.billId);
+          if (parsedBill) {
+            await finishStage(env.KV as KVNamespace, parsedBill.userId, 'parse', {
+              detail: `Bill ${body.billId} parsed (status: ${parsedBill.status})`,
+              artifacts: {
+                billId: body.billId,
+                confidence: parsedBill.confidence != null ? String(parsedBill.confidence) : '',
+              },
+            });
+          }
+        } catch { /* trace is best-effort */ }
         message.ack();
       } else if (queueName === 'flip-compare-queue') {
         // Issue #43: message shape is { user_id, bill_id, parsed_at } (snake_case).
         const body = message.body as { user_id: string; bill_id: string; parsed_at?: string };
-        await runComparison(body.user_id, {
+        const kv = env.KV as KVNamespace;
+        // Issue #228 — powerswitch stage (additive). The per-user Powerswitch
+        // fetch (#221) is GATED behind POWERSWITCH_LIVE; when disabled the stage
+        // is `skipped` with the documented interim detail. When enabled AND a
+        // cached result exists, the compare path uses compareUserWithPowerswitch.
+        let usedPowerswitchPath = false;
+        const psEnv = {
           DB: env.DB as D1Database,
+          KV: kv,
           NOTIFY_QUEUE: env.NOTIFY_QUEUE as Queue<{ userId: string; comparisonId: string }>,
-          SENT_API_KEY: env.SENT_API_KEY as string,
           PYTHON_SERVICE_URL: env.PYTHON_SERVICE_URL as string | undefined,
           PYTHON_SERVICE_AUTH_TOKEN: env.PYTHON_SERVICE_AUTH_TOKEN as string | undefined,
-        });
+        };
+        if (env.POWERSWITCH_LIVE === 'true') {
+          await startStage(kv, body.user_id, 'powerswitch');
+          try {
+            const cached = await readCachedResults({ KV: kv, POWERSWITCH_LIVE: env.POWERSWITCH_LIVE as string }, body.user_id);
+            if (cached) {
+              const outcome = await compareUserWithPowerswitch(body.user_id, psEnv);
+              if (outcome.status === 'ok') {
+                usedPowerswitchPath = true;
+                await finishStage(kv, body.user_id, 'powerswitch', {
+                  detail: `${cached.plans.length} plans fetched from cache`,
+                  artifacts: { plansFetched: String(cached.plans.length) },
+                });
+                await finishStage(kv, body.user_id, 'compare', {
+                  detail: `Powerswitch comparison: ${outcome.recommendation}`,
+                  artifacts: { comparisonId: outcome.comparisonId, recommendation: outcome.recommendation },
+                });
+              } else {
+                await finishStage(kv, body.user_id, 'powerswitch', { detail: `outcome: ${outcome.status}` });
+              }
+            } else {
+              await skipStage(kv, body.user_id, 'powerswitch', 'live enabled but no cached result — seeded plans');
+            }
+          } catch (psErr) {
+            await failStage(kv, body.user_id, 'powerswitch', (psErr as Error).message);
+          }
+        } else {
+          await skipStage(kv, body.user_id, 'powerswitch', 'live disabled — compare against seeded plans');
+        }
+        // Seeded-plan compare path runs unless the powerswitch path already
+        // produced a comparison row for this user.
+        if (!usedPowerswitchPath) {
+          await startStage(kv, body.user_id, 'compare');
+          const comparisonId = await runComparison(body.user_id, {
+            DB: env.DB as D1Database,
+            KV: kv,
+            NOTIFY_QUEUE: env.NOTIFY_QUEUE as Queue<{ userId: string; comparisonId: string }>,
+            SENT_API_KEY: env.SENT_API_KEY as string,
+            PYTHON_SERVICE_URL: env.PYTHON_SERVICE_URL as string | undefined,
+            PYTHON_SERVICE_AUTH_TOKEN: env.PYTHON_SERVICE_AUTH_TOKEN as string | undefined,
+          });
+          if (comparisonId) {
+            await finishStage(kv, body.user_id, 'compare', {
+              detail: comparisonId ? `Seeded-plan comparison ${comparisonId}` : 'no comparison produced',
+              artifacts: comparisonId ? { comparisonId } : {},
+            });
+          } else {
+            await skipStage(kv, body.user_id, 'compare', 'no parsed bills or no plans available');
+          }
+        }
         message.ack();
       } else if (queueName === 'flip-notify-queue') {
         const body = message.body as { userId: string; comparisonId: string };
@@ -162,6 +244,7 @@ async function queue(
           SENT_API_KEY: env.SENT_API_KEY as string,
           ENCRYPTION_KEY: env.ENCRYPTION_KEY as string,
           DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY as string | undefined,
+          FLOW_TEST_MODE: env.FLOW_TEST_MODE as string | undefined,
         });
         message.ack();
       } else {

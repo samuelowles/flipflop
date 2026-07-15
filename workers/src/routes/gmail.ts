@@ -6,6 +6,7 @@ import { pollSingleUser, readScanProgress } from '../services/emailPoller';
 import type { GmailPollingEnv } from '../services/emailPoller';
 import { sendText } from '../services/messaging';
 import { runEvalComparison } from './eval';
+import { startStage, finishStage, failStage } from '../services/flowTrace';
 
 const NONCE_KV_PREFIX = 'oauth:nonce:';
 const NONCE_TTL = 600; // 10 minutes
@@ -270,6 +271,10 @@ export async function gmailCallback(c: Context): Promise<Response> {
   // Build redirect URI
   const redirectUri = `${url.protocol}//${url.host}/auth/gmail/callback`;
 
+  // Issue #228 — seed the FlowTrace at the connect stage so the trace page can
+  // poll from the moment the callback lands. Additive; no-ops on KV failure.
+  await startStage(kv, stored.userId, 'connect');
+
   // Collect setup log entries for the progress page
   const setupLog: string[] = [];
   const log = (msg: string) => { setupLog.push(msg); };
@@ -298,6 +303,13 @@ export async function gmailCallback(c: Context): Promise<Response> {
       expiry,
     });
     log('Gmail connected. Starting inbox scan...');
+
+    // Issue #228 — connect stage ok (OAuth tokens stored). Additive trace call;
+    // no-ops if KV is unavailable (see services/flowTrace.ts invariant).
+    await finishStage(kv, stored.userId, 'connect', {
+      detail: 'OAuth tokens stored',
+      artifacts: { provider: 'gmail' },
+    });
 
     // Post-connect: confirmation message + immediate scan (runs async, progress in KV)
     const sentApiKey = c.env.SENT_API_KEY as string | undefined;
@@ -389,12 +401,18 @@ async function doPostConnectFlow(
   }
 
   // 2. Scan the user's Gmail inbox (always runs — progress written to KV by pollSingleUser)
+  await startStage(pollingEnv.KV, userId, 'scan');
   let billsFound = 0;
   let scanErrors: readonly string[] = [];
   try {
     const result = await pollSingleUser(pollingEnv, userId);
     billsFound = result.billsFound;
     scanErrors = result.errors;
+    // Issue #228 — scan stage ok (additive trace; no-op on KV failure).
+    await finishStage(pollingEnv.KV, userId, 'scan', {
+      detail: `${billsFound} bill(s) found, ${scanErrors.length} error(s)`,
+      artifacts: { billsFound: String(billsFound) },
+    });
     console.log(JSON.stringify({
       type: 'post_connect_scan_complete',
       userId,
@@ -404,6 +422,7 @@ async function doPostConnectFlow(
     }));
   } catch (scanErr) {
     scanErrors = [(scanErr as Error).message];
+    await failStage(pollingEnv.KV, userId, 'scan', (scanErr as Error).message);
     console.log(JSON.stringify({
       level: 'error',
       type: 'post_connect_scan_failed',
