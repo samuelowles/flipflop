@@ -380,10 +380,15 @@ async function scheduled(
 ): Promise<void> {
   const cron = controller.cron;
 
+  // Dispatch on exact cron-string equality rather than substring matching, so
+  // adding a new slot can never trip a sibling branch (e.g. a future
+  // "0 13 * * *" must not fire the 03:00 branch that "0 3 * * *" owns). Each
+  // branch returns; the five slots are mutually exclusive and are defined in
+  // wrangler.toml [triggers] crons.
   // 0 3 * * * — Plan ingestion from EIEP14A feed (daily at 03:00 UTC).
   // #64: ships INERT behind EIF_EIEP14A_ENABLED (defaults false); flips live
   // in October when the EA EIEP14A feed becomes available.
-  if (cron.includes('3')) {
+  if (cron === '0 3 * * *') {
     const plansEnv = env as unknown as EnvWithPlans;
     if (isEiep14aEnabled(plansEnv)) {
       await refreshPlans(plansEnv);
@@ -417,7 +422,7 @@ async function scheduled(
   }
 
   // 0 6 * * * — First daily Gmail email polling (06:00 UTC)
-  if (cron.includes('6')) {
+  if (cron === '0 6 * * *') {
     await pollAllUsers(env as {
       DB: D1Database;
       KV: KVNamespace;
@@ -431,7 +436,7 @@ async function scheduled(
   }
 
   // 0 14 * * * — Second daily Gmail email polling (14:00 UTC)
-  if (cron.includes('14')) {
+  if (cron === '0 14 * * *') {
     await pollAllUsers(env as {
       DB: D1Database;
       KV: KVNamespace;
@@ -451,7 +456,7 @@ async function scheduled(
   // and runs a fixture-based schema self-test. On drift → structured alert;
   // user-facing replays should be skipped by callers while drift is reported.
   // Distinct slot (10:00 UTC) — no matcher collision with the other crons.
-  if (cron.includes('10')) {
+  if (cron === '0 10 * * *') {
     await runPowerswitchCanary(env as unknown as CanaryEnv);
     return;
   }
@@ -460,13 +465,13 @@ async function scheduled(
   // `plans:diff:{retailer_id}` KV keys written by plan ingestion (EIEP14A/
   // powerswitch) and enqueues affected users to COMPARE_QUEUE. INERT-by-nature:
   // no-op when no diff keys are present. 7-day per-user dedup via KV.
-  if (cron.includes('8')) {
+  if (cron === '0 8 * * *') {
     await consumePlanDiffs(env as unknown as PlanDiffConsumerEnv);
 
     // Issue #78 — free-tier monthly check-in. Runs in the same 08:00 UTC slot
     // with a day-of-month guard (1st of each month) so no new wrangler cron
     // slot is consumed (ponytail: daily slot + guard beats a monthly cron that
-    // would collide with the `cron.includes('3')` matcher). Per-user KV dedup
+    // would need its own wrangler cron slot). Per-user KV dedup
     // (`free_tier_checkin:{userId}`, 28d) is the backstop if this fires twice.
     if (new Date().getUTCDate() === 1) {
       await runFreeTierCheckin(env as unknown as FreeTierCheckinEnv);
