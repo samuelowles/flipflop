@@ -28,18 +28,20 @@ function rowToComparison(row: Record<string, unknown>): PlanComparison {
 }
 
 /**
- * Input shape for createComparison. The legacy per-plan fields are kept (they
- * still get populated by the post-#73 single-row write so old readers keep
- * working), and the AC #73 summary fields carry the verdict. Either set is
- * acceptable; the #73 write path supplies both.
+ * Input shape for createComparison — the single summary-row write shape.
+ *
+ * Post-#226 the per-plan legacy input fields (planId / projectedCostCents /
+ * savingCents) are gone from the input type: the NOT NULL legacy DB columns
+ * (plan_id, projected_cost_cents, saving_cents) are derived from the AC #73
+ * summary fields (recommendedPlanId / projectedAnnualCost / savings) inside
+ * createComparison, since the live path passes identical values for both.
+ * currentCostCents and confidence have no summary-field equivalent and stay
+ * as required inputs; billIdsJson is run-level audit data (nullable column).
  */
 export interface CreateComparisonInput {
   userId: string;
-  planId: string;
   billIdsJson?: string | null;
-  projectedCostCents: number;
   currentCostCents: number;
-  savingCents: number;
   confidence: number;
   // AC #73 summary fields:
   billId?: string | null;
@@ -53,11 +55,13 @@ export interface CreateComparisonInput {
 }
 
 /**
- * Create a new plan comparison result.
+ * Create a new plan comparison summary row.
  *
- * Post-#73 this is called once per comparison run with the summary verdict
- * (recommendation/reason/recommended_plan_id). The legacy per-plan fields are
- * populated from the recommended plan so existing readers keep working.
+ * Called once per comparison run with the verdict
+ * (recommendation/reason/recommended_plan_id). The legacy NOT NULL columns
+ * (plan_id, projected_cost_cents, saving_cents) are populated from the
+ * summary fields so the DB constraint is satisfied and any reader still
+ * relying on those columns keeps working.
  */
 export async function createComparison(
   db: D1Database,
@@ -86,11 +90,14 @@ export async function createComparison(
     .bind(
       id,
       input.userId,
-      input.planId,
+      // plan_id (NOT NULL) — derived from the recommended plan.
+      input.recommendedPlanId ?? '',
       input.billIdsJson ?? null,
-      input.projectedCostCents,
+      // projected_cost_cents (NOT NULL) — derived from the summary verdict.
+      input.projectedAnnualCost ?? 0,
       input.currentCostCents,
-      input.savingCents,
+      // saving_cents (NOT NULL) — derived from the summary verdict.
+      input.savings ?? 0,
       input.confidence,
       now,
       input.billId ?? null,

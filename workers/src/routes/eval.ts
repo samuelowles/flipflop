@@ -482,25 +482,46 @@ export async function runEvalComparison(
     comparisons: ComparisonResultItem[];
   };
 
-  // Store comparison results and build the parsed data snapshot
+  // Store ONE summary row per run (AC #73 / #226), matching the live
+  // COMPARE_QUEUE write shape. The per-plan items are still carried in the
+  // returned `storedComparisons` for the result-page render, but only the
+  // verdict row is persisted to plan_comparisons.
   const storedComparisons: Record<string, unknown>[] = [];
   for (const item of compareResult.comparisons) {
-    const matchedPlan = availablePlans.find(
-      p => p.retailerId === item.retailer_id && p.name === item.plan_name
-    );
-    if (!matchedPlan) continue;
+    storedComparisons.push({ ...item });
+  }
 
+  // Derive the user-level verdict. Eval's Python response uses
+  // stay_where_you_are (inverse of switchable); the live path uses an explicit
+  // recommendation field, but eval does not receive one, so derive it here.
+  const switchable = compareResult.comparisons.filter(
+    item => !item.stay_where_you_are && item.saving_cents > 0
+  );
+  const topSwitch = switchable.length > 0 ? switchable[0] : null;
+  const recommendation = topSwitch ? 'switch' : 'stay_put';
+
+  const verdictItem = topSwitch
+    ?? compareResult.comparisons.find(item => item.stay_where_you_are)
+    ?? compareResult.comparisons[0]!;
+
+  const matchedRecommended = availablePlans.find(
+    p => p.retailerId === verdictItem.retailer_id && p.name === verdictItem.plan_name
+  );
+
+  if (matchedRecommended) {
     await createComparison(env.DB, {
       userId,
-      planId: matchedPlan.id,
       billIdsJson: JSON.stringify(billSummaries.map(b => b.id)),
-      projectedCostCents: item.projected_cost_cents,
-      currentCostCents: item.current_cost_cents,
-      savingCents: item.saving_cents,
-      confidence: item.confidence,
+      currentCostCents: verdictItem.current_cost_cents,
+      confidence: verdictItem.confidence,
+      billId: latestBill.id,
+      currentPlanId: typeof currentPlan.id === 'string' ? currentPlan.id : null,
+      recommendedPlanId: matchedRecommended.id,
+      projectedAnnualCost: verdictItem.projected_cost_cents,
+      savings: verdictItem.saving_cents,
+      recommendation,
+      reason: null,
     });
-
-    storedComparisons.push({ ...item });
   }
 
   // Build parsed data snapshot from latest bill

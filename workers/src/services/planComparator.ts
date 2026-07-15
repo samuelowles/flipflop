@@ -348,14 +348,12 @@ export async function runComparison(
 
   const comparison = await createComparison(env.DB, {
     userId,
-    // Legacy per-plan columns populated from the recommended plan.
-    planId: matchedRecommended.id,
     billIdsJson: JSON.stringify(billSummaries.map(b => b.id)),
-    projectedCostCents: verdictItem.projected_cost_cents,
     currentCostCents: verdictItem.current_cost_cents,
-    savingCents: verdictItem.saving_cents,
     confidence: verdictItem.confidence,
-    // AC #73 summary columns.
+    // AC #73 summary columns. The NOT NULL legacy columns (plan_id /
+    // projected_cost_cents / saving_cents) are derived from these inside
+    // createComparison.
     billId: latestBill.id,
     currentPlanId: currentPlan.id ?? null,
     recommendedPlanId: matchedRecommended.id,
