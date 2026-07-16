@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import { gmailConnectPage, gmailLogin, gmailCallback, gmailScanStatus } from './gmail';
+import { gmailConnectPage, gmailLogin, gmailCallback, gmailScanStatus, gmailEvalStatus } from './gmail';
+import { runEvalComparison } from './eval';
 
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
@@ -32,6 +33,10 @@ vi.mock('../services/emailPoller', () => ({
 
 vi.mock('../services/messaging', () => ({
   sendText: vi.fn(async () => {}),
+}));
+
+vi.mock('./eval', () => ({
+  runEvalComparison: vi.fn(),
 }));
 
 function makeMockKV(): KVNamespace {
@@ -636,5 +641,77 @@ describe('GET /auth/gmail/scan-status', () => {
     expect(Array.isArray(body.errors)).toBe(true);
     expect((body.errors as string[]).length).toBe(1);
     expect((body.errors as string[])[0]).toContain('Token expired');
+  });
+});
+
+// #242 deployed-run fix — the Plan Comparison box must live-update: eval-status
+// is PENDING (never cached) while bills are still queue-parsing, caches only
+// real results, and self-heals poisoned empty cache entries.
+describe('GET /auth/gmail/eval-status (pending semantics + cache)', () => {
+  function evalApp() {
+    const app = new Hono();
+    app.get('/auth/gmail/eval-status', gmailEvalStatus);
+    return app;
+  }
+
+  beforeEach(() => {
+    vi.mocked(runEvalComparison).mockReset();
+  });
+
+  it('returns pending with parse counts while no comparisons exist, and caches nothing', async () => {
+    vi.mocked(runEvalComparison).mockResolvedValueOnce({
+      parsedData: null, comparisons: [], billsTotal: 12, billsParsed: 3,
+    });
+    const app = evalApp();
+    const env = makeEnv();
+
+    const res = await app.request('/auth/gmail/eval-status?userId=u1', {}, env);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.found).toBe(false);
+    expect(body.pending).toBe(true);
+    expect(body.billsParsed).toBe(3);
+    expect(body.billsTotal).toBe(12);
+
+    const kv = env.KV as KVNamespace;
+    expect(await kv.get('gmail:eval:u1')).toBeNull();
+  });
+
+  it('ignores and deletes a poisoned empty cache entry, then recomputes', async () => {
+    const app = evalApp();
+    const env = makeEnv();
+    const kv = env.KV as KVNamespace;
+    // The pre-fix bug: an empty found:true result cached for 24h.
+    await kv.put('gmail:eval:u1', JSON.stringify({ found: true, parsedData: null, comparisons: [] }));
+
+    vi.mocked(runEvalComparison).mockResolvedValueOnce({
+      parsedData: null, comparisons: [], billsTotal: 12, billsParsed: 12,
+    });
+    const res = await app.request('/auth/gmail/eval-status?userId=u1', {}, env);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.pending).toBe(true);
+    expect(await kv.get('gmail:eval:u1')).toBeNull(); // poison purged
+    expect(runEvalComparison).toHaveBeenCalledTimes(1); // recomputed, not served from cache
+  });
+
+  it('returns and caches real results', async () => {
+    const comparisons = [{ plan_id: 'p1', plan_name: 'Plan A', saving_cents: 12000 }];
+    vi.mocked(runEvalComparison).mockResolvedValueOnce({
+      parsedData: { retailer: 'Meridian Energy' }, comparisons, billsTotal: 12, billsParsed: 12,
+    });
+    const app = evalApp();
+    const env = makeEnv();
+
+    const res = await app.request('/auth/gmail/eval-status?userId=u1', {}, env);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.found).toBe(true);
+    expect((body.comparisons as unknown[]).length).toBe(1);
+
+    const kv = env.KV as KVNamespace;
+    const cached = JSON.parse((await kv.get('gmail:eval:u1'))!) as Record<string, unknown>;
+    expect(cached.found).toBe(true);
+
+    // Second request serves the cache — no recompute.
+    await app.request('/auth/gmail/eval-status?userId=u1', {}, env);
+    expect(runEvalComparison).toHaveBeenCalledTimes(1);
   });
 });

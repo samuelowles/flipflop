@@ -157,14 +157,22 @@ export async function gmailEvalStatus(c: Context): Promise<Response> {
   const kv = c.env.KV as KVNamespace;
   const cacheKey = `gmail:eval:${userId}`;
 
-  // Return cached results if available
+  // Return cached results if available — but only REAL results. Earlier code
+  // cached empty found:true responses computed while bills were still queue-
+  // parsing (found in the #242 deployed run: the callback page rendered
+  // "no comparisons" seconds after scan and the empty answer stuck for 24h).
+  // Empty/invalid cache entries are deleted so poisoned users self-heal.
   const cached = await kv.get(cacheKey);
   if (cached) {
     try {
-      return c.json(JSON.parse(cached));
+      const parsed = JSON.parse(cached) as { found?: boolean; comparisons?: unknown[] };
+      if (parsed.found && Array.isArray(parsed.comparisons) && parsed.comparisons.length > 0) {
+        return c.json(parsed);
+      }
     } catch {
       // fall through to recompute
     }
+    await kv.delete(cacheKey);
   }
 
   const db = c.env.DB as D1Database;
@@ -189,13 +197,26 @@ export async function gmailEvalStatus(c: Context): Promise<Response> {
       userId
     );
 
+    // Bills still parsing (or none parsed/comparable yet) → PENDING, never
+    // cached, with parse progress so the page can narrate ("Parsing 3/12…").
+    if (!result.parsedData || result.comparisons.length === 0) {
+      return c.json({
+        found: false,
+        pending: true,
+        billsTotal: result.billsTotal,
+        billsParsed: result.billsParsed,
+      });
+    }
+
     const body = {
       found: true,
       parsedData: result.parsedData,
       comparisons: result.comparisons,
+      billsTotal: result.billsTotal,
+      billsParsed: result.billsParsed,
     };
 
-    // Cache for 24 hours
+    // Cache REAL results for 24 hours
     await kv.put(cacheKey, JSON.stringify(body), { expirationTtl: 86400 });
 
     return c.json(body);
@@ -662,13 +683,34 @@ function renderProgressPage(userId: string, setupLog: string[], _isError = false
       document.getElementById('eval-results').style.display = '';
     }
 
+    // Comparison polling runs until real results land (bills parse through the
+    // queue for a minute or two after the scan), narrating parse progress, and
+    // only gives up after ~5 minutes — the earlier code rendered its terminal
+    // "no comparisons" message on the FIRST empty response (#242 live run).
+    var evalAttempts = 0;
+    var EVAL_MAX_ATTEMPTS = 150; // x 2s = 5 minutes
     function pollEvalStatus() {
+      evalAttempts++;
       fetch('/auth/gmail/eval-status?userId=' + encodeURIComponent(userId))
         .then(function(r) { return r.json(); })
         .then(function(data) {
-          if (data.error && !data.pending) return;
-          if (data.found || !data.pending) {
+          if (data && data.found) {
             renderComparison(data);
+            return;
+          }
+          if (evalAttempts >= EVAL_MAX_ATTEMPTS) {
+            evalDone = true;
+            clearInterval(evalTimer);
+            document.getElementById('eval-status-line').textContent =
+              "Still working on your comparison. We'll text you when your results are ready.";
+            return;
+          }
+          // Pending — narrate parse progress while the queue works.
+          var line = document.getElementById('eval-status-line');
+          if (data && data.pending && typeof data.billsParsed === 'number' && data.billsTotal > 0) {
+            line.innerHTML = '<span class="spinner"></span>Parsing your bills (' + data.billsParsed + '/' + data.billsTotal + ')… comparison runs as soon as one is ready.';
+          } else {
+            line.innerHTML = '<span class="spinner"></span>Analysing your bills…';
           }
         })
         .catch(function() { /* retry */ });
