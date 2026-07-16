@@ -10,7 +10,7 @@ import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates
 import { adminRateLimitStatus } from './routes/adminRateLimit';
 import { adminListNotifications } from './routes/adminNotifications';
 import { createSwitchRoute } from './routes/switch';
-import { flowStatusPage, flowStatusJson } from './routes/flow';
+import { flowStatusPage, flowStatusJson, adminFlowLink } from './routes/flow';
 import { purgeNotificationAudit } from './models/notificationAudit';
 import { pollAllUsers } from './services/emailPoller';
 import { refreshPlans, isEiep14aEnabled, type EnvWithPlans } from './services/eiep14a';
@@ -108,11 +108,16 @@ app.get('/admin/rate-limit/:userKey', adminRateLimitStatus);
 // the /admin/* catch-all. Auth-gated via ADMIN_API_KEY (adminAuth middleware).
 app.get('/admin/notifications', adminListNotifications);
 
-// Issue #228 (Epic 13 DoD): FlowTrace observation routes. Admin-auth'd via the
-// same ADMIN_API_KEY Bearer middleware as /admin/* (applied per-route since the
-// paths live under /flow/, outside the /admin/* matcher).
-app.get('/flow/status', adminAuth, flowStatusPage);
-app.get('/flow/status.json', adminAuth, flowStatusJson);
+// Issue #241: admin-only signed-link minter. Resolves phone → userId and
+// returns a /flow/status signed link. Inherits the /admin/* adminAuth.
+app.get('/admin/flow-link', adminFlowLink);
+
+// Issue #228 / #241 (Epic 13 DoD): FlowTrace observation routes. Auth happens
+// INSIDE the handlers (signed-link triple OR admin Bearer) so a browser can
+// load the page without a manual Authorization header. The phone param was
+// removed (#241); admins mint signed links via GET /admin/flow-link.
+app.get('/flow/status', flowStatusPage);
+app.get('/flow/status.json', flowStatusJson);
 
 // Epic 1 issue #17 — 501 stubs for unimplemented webhook + admin surfaces.
 // Placed after specific routes so Hono's first-match routing resolves
@@ -148,6 +153,9 @@ async function queue(
     try {
       if (queueName === 'flip-parse-queue') {
         const body = message.body as { billId: string; r2Key: string; userId?: string };
+        // #241: emailPipeline now sends userId on Gmail-sourced parse jobs so
+        // the parse stage enters `running` (records a duration). The optional
+        // keeps legacy WhatsApp-sourced messages (no userId) working.
         // Issue #228 — parse stage (additive trace; no-op on KV failure). Only
         // start when the message carries a userId; the finish uses the bill's
         // resolved userId regardless.
