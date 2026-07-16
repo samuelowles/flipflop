@@ -1,0 +1,28 @@
+HTTP 200
+x-action-revalidated: [[],0,0]
+content-encoding: br
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=%2FrCOIvBBOXRci%2F4nKvH0PE0bIM94v7yT5K65NmNB8g4%2Bwk%2F708m2KJf%2FLfKJCMsnGkdHlJfm%2BDFnDHu729gC4WuUwRKjcTFuclEemVddf%2FepcW%2BVbTh6OuxQwdqHuzpL99E%2F11KliGE%3D"}]}
+x-content-type-options: nosniff
+x-matched-path: /results
+date: Thu, 16 Jul 2026 03:41:30 GMT
+content-type: text/x-component
+vary: RSC, Next-Router-State-Tree, Next-Router-Prefetch, accept-encoding
+x-frame-options: SAMEORIGIN
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+content-security-policy: default-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' *.marker.io bat.bing.com connect.facebook.net *.marketo.net *.marketo.com *.consumer.org.nz *.googletagmanager.com *.googleadservices.com *.googlesyndication.com e.infogram.com *.raygun.io;connect-src 'self' *.marker.io *.googletagmanager.com *.google-analytics.com *.doubleclick.net bat.bing.com *.mktoresp.com *.marketo.net *.mktoutil.com www.facebook.com *.raygun.io;style-src 'self' 'unsafe-inline' *.marker.io *.consumer.org.nz;frame-src 'self' *.marker.io e.infogram.com *.googletagmanager.com *.doubleclick.net *.googlesyndication.com *.consumer.org.nz *.youtube.com www.canva.com flo.uri.sh;img-src * data:;font-src * data:;
+cache-control: no-cache, no-store, max-age=0, must-revalidate
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-vercel-cache: MISS
+referrer-policy: strict-origin-when-cross-origin
+cf-ray: a1bdfdd828e2d9ba-AKL
+permissions-policy: microphone=(), camera=(), geolocation=(self), fullscreen=(self), payment=(), screen-wake-lock=(), publickey-credentials-get=(), display-capture=(self)
+x-xss-protection: 1; mode=block
+x-powered-by: Next.js
+server: cloudflare
+x-vercel-id: syd1::syd1::xxvjx-1784173290281-8f3b27022e46
+
+---- body ----
+0:["$@1",["s1ZR-o3QVA3MqdSoqlf2o",null]]
+1:{"profile":{"anonymous":true,"authorised":true,"electricityLocation":{"id":267,"name":"Auckland Central and Manukau","energy_type":"electricity","winter_zone":2,"weight":0.5,"default_plan_type_id":2,"default_plan_type_id_gas":1,"default_plan_type_id_ns":19,"default_plan_type_id_gas_ns":19},"gasLocation":{"id":266,"name":"Auckland Central (Gas)","energy_type":"gas","winter_zone":2,"weight":0.5,"default_plan_type_id":44,"default_plan_type_id_gas":44,"default_plan_type_id_ns":44,"default_plan_type_id_gas_ns":44},"electricityRetailer":{"id":"UNKNOWN-1","name":"I don't know"},"gasRetailer":null,"hasGas":false,"gasSource":"NONE","householdSize":"M","occupiedWeekdays":false,"heatpumpAircon":false,"initiatedAt":"2026-07-16T15:41:05.635+12:00","mainHeating":"HP","hotWater":["ECL","HP"],"electricityPlan":null,"gasPlan":null,"region":null,"electricityUsage":null,"gasUsage":null,"unknownPlanOverrides":{"unknown_plan_tariff_override_active":false,"unknown_plan_tariff_override_published_plan_id":null,"unknown_plan_tariff_overrides":{},"unknown_gas_plan_tariff_overrides":{},"unknown_gas_plan_tariff_override_active":false,"unknown_gas_plan_tariff_override_published_plan_id":null},"id":"vEVbyZKPEa","name":null,"address":{"id":"2-.1.6.6.1aoR.","a":"1 Queen Street, Auckland Central, Auckland 1010","x":"174.766421180063","y":"-36.843387358438","unit_number":null,"street_number":"1","alpha":null,"street_or_property_name":"Queen Street","suburb_or_town":"Auckland","suburb":"Auckland Central","source":"AddressFinder"},"icp":{},"area_id":null,"electricity_location_id":267,"gas_location_id":266,"electricity_retailer_id":null,"gas_retailer_id":null,"electricity_plan_id":null,"gas_plan_id":null,"heating":["HP"],"cooking":"EE","insulation":["CE"],"area":null}}
+

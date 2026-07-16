@@ -1,0 +1,10 @@
+GET /api/locations/267/retailers
+# captured-from: https://www.powerswitch.org.nz/api/locations/267/retailers
+sec-ch-ua-platform: "Windows"
+referer: https://www.powerswitch.org.nz/questionnaire/household?address_id=2-.1.6.6.1aoR.
+user-agent: FlipNZ-BillMonitor/1.0 (+https://flip.nz; issue #240 capture; contact: ops@flip.nz)
+sec-ch-ua: "HeadlessChrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"
+sec-ch-ua-mobile: ?0
+
+---- body ----
+

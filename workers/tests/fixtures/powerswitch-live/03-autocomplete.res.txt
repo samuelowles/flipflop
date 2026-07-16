@@ -1,0 +1,28 @@
+HTTP 200
+x-action-revalidated: [[],0,0]
+content-encoding: br
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=JxzTjsfJHaAiCz9rfLxm%2B0F7hBQtC3BaRb6SWrVmY9JApPU59R91G4ZH%2FNwsbcatQU8kY3Jq3DSD%2Bi6AA3OwjH2hn%2FhNIFIek9OkNDkn0FMsEv3q2oL2elySJu5UanrIryNeMaudcb4%3D"}]}
+x-content-type-options: nosniff
+x-matched-path: /
+date: Thu, 16 Jul 2026 03:41:06 GMT
+content-type: text/x-component
+vary: RSC, Next-Router-State-Tree, Next-Router-Prefetch, accept-encoding
+x-frame-options: SAMEORIGIN
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+content-security-policy: default-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' *.marker.io bat.bing.com connect.facebook.net *.marketo.net *.marketo.com *.consumer.org.nz *.googletagmanager.com *.googleadservices.com *.googlesyndication.com e.infogram.com *.raygun.io;connect-src 'self' *.marker.io *.googletagmanager.com *.google-analytics.com *.doubleclick.net bat.bing.com *.mktoresp.com *.marketo.net *.mktoutil.com www.facebook.com *.raygun.io;style-src 'self' 'unsafe-inline' *.marker.io *.consumer.org.nz;frame-src 'self' *.marker.io e.infogram.com *.googletagmanager.com *.doubleclick.net *.googlesyndication.com *.consumer.org.nz *.youtube.com www.canva.com flo.uri.sh;img-src * data:;font-src * data:;
+cache-control: no-cache, no-store, max-age=0, must-revalidate
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-vercel-cache: MISS
+referrer-policy: strict-origin-when-cross-origin
+cf-ray: a1bdfd414a61d9ba-AKL
+permissions-policy: microphone=(), camera=(), geolocation=(self), fullscreen=(self), payment=(), screen-wake-lock=(), publickey-credentials-get=(), display-capture=(self)
+x-xss-protection: 1; mode=block
+x-powered-by: Next.js
+server: cloudflare
+x-vercel-id: syd1::syd1::5fwsl-1784173266151-8af5349fd70b
+
+---- body ----
+0:["$@1",["s1ZR-o3QVA3MqdSoqlf2o",null]]
+1:{"completions":[{"a":"1 Queen Street, Auckland Central, Auckland 1010","pxid":"2-.1.6.6.1aoR.","v":1},{"a":"Floor 1, 1 Queen Street, Auckland Central, Auckland 1010","pxid":"3-1pRpO1p.Wr59d3sduRez8Q","v":1},{"a":"Unit 11, 1 Queen Street, Auckland Central, Auckland 1010","pxid":"3-dceutpjG8tXpscitROjZ3","v":0},{"a":"Unit 12, 1 Queen Street, Auckland Central, Auckland 1010","pxid":"3-jPllhhDrumS6Z2TpsBsuY","v":1},{"a":"Unit 13, 1 Queen Street, Auckland Central, Auckland 1010","pxid":"3-VCmdD3GtBEhA$wA2R35Dv","v":0},{"a":"Unit 14, 1 Queen Street, Auckland Central, Auckland 1010","pxid":"3-VCmpqOGncP8NGzIyKJccW","v":0},{"a":"Unit 15, 1 Queen Street, Auckland Central, Auckland 1010","pxid":"3-VCmyDcGjuW6r7klPllNjZ","v":0},{"a":"Unit 16, 1 Queen Street, Auckland Central, Auckland 1010","pxid":"3-VCn2gOggbF.vH$XJQ5CUK","v":0},{"a":"Unit 17, 1 Queen Street, Auckland Central, Auckland 1010","pxid":"3-VCnbUHgRA7nDrlfjGoV7r","v":0},{"a":"Unit 19, 1 Queen Street, Auckland Central, Auckland 1010","pxid":"3-VCnqcTtKTkKSawEDMNqsw","v":0}],"paid":true,"demo":false,"success":true}
+

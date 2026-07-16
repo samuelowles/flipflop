@@ -1,0 +1,25 @@
+HTTP 200
+content-encoding: br
+cf-cache-status: DYNAMIC
+age: 0
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=Ug6TgCBNY9PX7KKJ3vgJb4A7FqVf%2FnT%2BVgHyIN5XB%2FoN5L%2BF1aY3ZdEVKJ7MwATddf1Du2Jzv0e3Z4soiisk5dJTJcudfNLNtjmDJWxDg7VZYqjxhFvUOc3LUUicg%2BXBqQYp0PnmWAM%3D"}]}
+x-content-type-options: nosniff
+x-matched-path: /questionnaire/region.rsc
+date: Thu, 16 Jul 2026 03:41:03 GMT
+content-type: text/x-component
+vary: RSC, Next-Router-State-Tree, Next-Router-Prefetch, accept-encoding
+x-frame-options: SAMEORIGIN
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+content-security-policy: default-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' *.marker.io bat.bing.com connect.facebook.net *.marketo.net *.marketo.com *.consumer.org.nz *.googletagmanager.com *.googleadservices.com *.googlesyndication.com e.infogram.com *.raygun.io;connect-src 'self' *.marker.io *.googletagmanager.com *.google-analytics.com *.doubleclick.net bat.bing.com *.mktoresp.com *.marketo.net *.mktoutil.com www.facebook.com *.raygun.io;style-src 'self' 'unsafe-inline' *.marker.io *.consumer.org.nz;frame-src 'self' *.marker.io e.infogram.com *.googletagmanager.com *.doubleclick.net *.googlesyndication.com *.consumer.org.nz *.youtube.com www.canva.com flo.uri.sh;img-src * data:;font-src * data:;
+cache-control: private, no-cache, no-store, max-age=0, must-revalidate
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-vercel-cache: MISS
+referrer-policy: strict-origin-when-cross-origin
+cf-ray: a1bdfd3118bad9ba-AKL
+permissions-policy: microphone=(), camera=(), geolocation=(self), fullscreen=(self), payment=(), screen-wake-lock=(), publickey-credentials-get=(), display-capture=(self)
+x-xss-protection: 1; mode=block
+server: cloudflare
+x-vercel-id: syd1::syd1::lpxnt-1784173263546-e35e36e1ea19
+
+---- body ----
+<body-unavailable: response.text: Protocol error (Network.getResponseBody): No data found for resource with given identifier>

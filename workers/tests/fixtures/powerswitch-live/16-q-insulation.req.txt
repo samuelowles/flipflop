@@ -1,0 +1,15 @@
+POST /questionnaire/insulation
+# captured-from: https://www.powerswitch.org.nz/questionnaire/insulation
+sec-ch-ua-platform: "Windows"
+next-action: 95a1d5c6e2700a5cf6efd321d66b0dc867ac2b9c
+referer: https://www.powerswitch.org.nz/questionnaire/insulation
+sec-ch-ua: "HeadlessChrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"
+sec-ch-ua-mobile: ?0
+next-router-state-tree: %5B%22%22%2C%7B%22children%22%3A%5B%22questionnaire%22%2C%7B%22children%22%3A%5B%22insulation%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D%7D%2Cnull%2Cnull%2Ctrue%5D
+user-agent: FlipNZ-BillMonitor/1.0 (+https://flip.nz; issue #240 capture; contact: ops@flip.nz)
+accept: text/x-component
+content-type: text/plain;charset=UTF-8
+x-deployment-id: dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs
+
+---- body ----
+[{"profileId":"$undefined","clientProfileData":"{\"address\":{\"id\":\"2-.1.6.6.1aoR.\",\"a\":\"1 Queen Street, Auckland Central, Auckland 1010\",\"x\":\"174.766421180063\",\"y\":\"-36.843387358438\",\"unit_number\":null,\"street_number\":\"1\",\"alpha\":null,\"street_or_property_name\":\"Queen Street\",\"suburb_or_town\":\"Auckland\",\"suburb\":\"Auckland Central\",\"source\":\"AddressFinder\"},\"icp\":null,\"electricity_retailer_id\":null,\"gas_retailer_id\":null,\"electricity_location_id\":267,\"gas_location_id\":266,\"electricity_plan_id\":null,\"gas_plan_id\":null,\"household_size\":\"M\",\"main_heating\":\"HP\",\"heating\":[\"HP\"],\"hot_water\":[\"ECL\",\"HP\"],\"insulation\":[\"CE\"],\"occupied_weekdays\":false,\"cooking\":\"EE\",\"heatpump_airconditioning\":false,\"initiated_at\":\"2026-07-16T03:41:05.635Z\",\"has_gas\":false,\"gas_source\":\"NONE\",\"area_id\":null,\"region_geo_code\":null,\"has_bill\":false,\"electricity_usage\":null,\"gas_usage\":null,\"unknown_plan_tariff_overrides\":null,\"unknown_plan_tariff_override_active\":false,\"unknown_plan_tariff_override_published_plan_id\":null,\"unknown_gas_plan_tariff_overrides\":null,\"unknown_gas_plan_tariff_override_active\":false,\"unknown_gas_plan_tariff_override_published_plan_id\":null}"}]

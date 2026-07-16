@@ -30,6 +30,13 @@ ruvector.db
 *.tmp.*
 *~
 
+# Powerswitch live-capture tooling (#240). Playwright is used to capture the
+# real wire protocol; it is NEVER a project dependency (see scripts/capture-powerswitch.mjs).
+# scripts/.playwright/ holds the local Playwright JS install; probe-* are throwaway.
+scripts/.playwright/
+scripts/probe-powerswitch.mjs
+scripts/probe-out.txt
+
 # OS
 .DS_Store
 Thumbs.db
@@ -39,3 +46,13 @@ Thumbs.db
 .idea/
 *.swp
 *.swo
+
+# Powerswitch capture harness — local Playwright install + run log (issue #240)
+scripts/.playwright/
+scripts/capture-log.txt
+
+# GLM transient artifacts (not source)
+.claude/worktrees/
+.tmp-issues/
+scripts/probe*.mjs
+scripts/triage_digest.*

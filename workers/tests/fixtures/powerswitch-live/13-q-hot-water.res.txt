@@ -1,0 +1,32 @@
+HTTP 200
+content-encoding: br
+cf-cache-status: DYNAMIC
+age: 0
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=4LE2KY2sC2mUYzpQNktO2EZInqI%2BNnukXTJt4yI9vZOqEkxALuifzAapB8tlFtn8e311gaAV6kk4Oryckz%2F3%2BlNDpo6Y3mtj9nVCdQOMjiVzqGw8m%2BKfF3yJyN73Ttf483UIQBW%2FrB4%3D"}]}
+x-content-type-options: nosniff
+x-matched-path: /questionnaire/hot-water.rsc
+date: Thu, 16 Jul 2026 03:41:17 GMT
+content-type: text/x-component
+vary: RSC, Next-Router-State-Tree, Next-Router-Prefetch, accept-encoding
+x-frame-options: SAMEORIGIN
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+content-security-policy: default-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' *.marker.io bat.bing.com connect.facebook.net *.marketo.net *.marketo.com *.consumer.org.nz *.googletagmanager.com *.googleadservices.com *.googlesyndication.com e.infogram.com *.raygun.io;connect-src 'self' *.marker.io *.googletagmanager.com *.google-analytics.com *.doubleclick.net bat.bing.com *.mktoresp.com *.marketo.net *.mktoutil.com www.facebook.com *.raygun.io;style-src 'self' 'unsafe-inline' *.marker.io *.consumer.org.nz;frame-src 'self' *.marker.io e.infogram.com *.googletagmanager.com *.doubleclick.net *.googlesyndication.com *.consumer.org.nz *.youtube.com www.canva.com flo.uri.sh;img-src * data:;font-src * data:;
+cache-control: private, no-cache, no-store, max-age=0, must-revalidate
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-vercel-cache: MISS
+referrer-policy: strict-origin-when-cross-origin
+cf-ray: a1bdfd87ad6ed9ba-AKL
+permissions-policy: microphone=(), camera=(), geolocation=(self), fullscreen=(self), payment=(), screen-wake-lock=(), publickey-credentials-get=(), display-capture=(self)
+x-xss-protection: 1; mode=block
+server: cloudflare
+x-vercel-id: syd1::syd1::np9xz-1784173277403-056e010586f4
+
+---- body ----
+3:I[4707,[],""]
+4:I[36423,[],""]
+0:["s1ZR-o3QVA3MqdSoqlf2o",[["children","questionnaire","children","hot-water",["hot-water",{"children":["__PAGE__",{}]}],["hot-water",{"children":["__PAGE__",{},[["$L1","$L2",null],null],null]},[null,["$","$L3",null,{"parallelRouterKey":"children","segmentPath":["children","questionnaire","children","hot-water","children"],"error":"$undefined","errorStyles":"$undefined","errorScripts":"$undefined","template":["$","$L4",null,{}],"templateStyles":"$undefined","templateScripts":"$undefined","notFound":"$undefined","notFoundStyles":"$undefined"}]],null],["$L5",null]]]]
+6:I[74501,["7648","static/chunks/7648-fc39259a05e40d49.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","3145","static/chunks/3145-531a2e066eadaf48.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","4781","static/chunks/4781-21791c2355de77a5.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","8441","static/chunks/8441-323a1d712a65c58e.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","4422","static/chunks/4422-fe1a225e4e86403f.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","1563","static/chunks/1563-5586e609d9ed1a0c.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","3963","static/chunks/3963-f094148f3ac98125.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","264","static/chunks/264-9c273e0c9e1c8850.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","4172","static/chunks/4172-d2047a0bfcb7a24d.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","8674","static/chunks/8674-6613f3018c14ab38.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","7978","static/chunks/7978-8dcbcee9e7a9c54a.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","9021","static/chunks/9021-540a0949807b1617.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs","617","static/chunks/app/questionnaire/hot-water/page-3dba38658b4be93d.js?dpl=dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs"],"default"]
+2:["$","$L6",null,{"pagePanel":true}]
+5:[["$","meta","0",{"name":"viewport","content":"width=device-width, initial-scale=1"}],["$","meta","1",{"charSet":"utf-8"}],["$","title","2",{"children":"How much could you save? â€” Powerswitch NZ"}],["$","meta","3",{"name":"description","content":"Find the best electricity and gas plans from participating retailers with Powerswitch. Compare plans and prices with our free comparison service to find out how much you could save."}],["$","meta","4",{"property":"og:title","content":"How much could you save?"}],["$","meta","5",{"property":"og:description","content":"Find the best electricity and gas plans from participating retailers with Powerswitch. Compare plans and prices with our free comparison service to find out how much you could save."}],["$","meta","6",{"property":"og:site_name","content":"Powerswitch NZ"}],["$","meta","7",{"property":"og:image","content":"https://www.datocms-assets.com/106378/1694751484-powerswitch_logo_rgb_pos.svg?auto=format&fit=max&w=1200"}],["$","meta","8",{"property":"og:type","content":"website"}],["$","meta","9",{"name":"twitter:card","content":"summary_large_image"}],["$","meta","10",{"name":"twitter:site","content":"@consumernz"}],["$","meta","11",{"name":"twitter:title","content":"How much could you save?"}],["$","meta","12",{"name":"twitter:description","content":"Find the best electricity and gas plans from participating retailers with Powerswitch. Compare plans and prices with our free comparison service to find out how much you could save."}],["$","meta","13",{"name":"twitter:image","content":"https://www.datocms-assets.com/106378/1694751484-powerswitch_logo_rgb_pos.svg?auto=format&fit=max&w=1200"}],["$","link","14",{"rel":"icon","href":"https://www.datocms-assets.com/106378/1694750699-favicon.png?auto=format&h=16&w=16","sizes":"16x16","type":"image/png"}],["$","link","15",{"rel":"icon","href":"https://www.datocms-assets.com/106378/1694750699-favicon.png?auto=format&h=32&w=32","sizes":"32x32","type":"image/png"}],["$","link","16",{"rel":"icon","href":"https://www.datocms-assets.com/106378/1694750699-favicon.png?auto=format&h=96&w=96","sizes":"96x96","type":"image/png"}],["$","link","17",{"rel":"icon","href":"https://www.datocms-assets.com/106378/1694750699-favicon.png?auto=format&h=192&w=192","sizes":"192x192","type":"image/png"}],["$","meta","18",{"name":"next-size-adjust"}]]
+1:null
+
