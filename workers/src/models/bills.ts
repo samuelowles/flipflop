@@ -177,8 +177,12 @@ export async function updateBillFailed(
   id: string,
   errorCode: string
 ): Promise<void> {
+  // Never clobber a bill that already parsed: a post-parse failure (e.g. the
+  // courtesy WhatsApp send throwing after step 6) must not erase a successful
+  // parse result (#242 deployed run: 12 parsed bills flipped to failed).
   const stmt = db.prepare(
-    `UPDATE bills SET status = 'failed', error_code = ?1 WHERE id = ?2`
+    `UPDATE bills SET status = 'failed', error_code = ?1
+     WHERE id = ?2 AND status NOT IN ('parsed', 'needs_review')`
   );
   await stmt.bind(errorCode, id).run();
 }

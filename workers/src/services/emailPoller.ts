@@ -289,6 +289,7 @@ export async function pollSingleUser(
     messagesFound: 0,
     messagesScanned: 0,
     messagesSkippedNoSubject: 0,
+    billsAlreadyImported: 0,
     messagesSkippedNoPdf: 0,
     billsFound: 0,
     billSenders: [],
@@ -360,6 +361,7 @@ export async function pollSingleUser(
   const billSenders = new Set<string>();
   const filteredSenders = new Set<string>();
   let messagesSkippedNoSubject = 0;
+  let billsAlreadyImported = 0;
   let messagesSkippedNoPdf = 0;
 
   try {
@@ -391,11 +393,12 @@ export async function pollSingleUser(
         filteredSenders.add(result.sender);
         if (result.skipReason === 'skipped_no_pdf') {
           messagesSkippedNoPdf++;
+        } else if (result.skipReason === 'skipped_duplicate' || result.duplicatesSkipped > 0) {
+          // Already ingested on a previous scan — NOT a discovery failure.
+          // Counting these as "no bill subject" made re-connect scans read as
+          // "0 bills discovered" (found in the #242 deployed run).
+          billsAlreadyImported++;
         } else {
-          // skipped_no_retailer_match or skipped_duplicate both indicate the
-          // message lacked a bill-worthy subject+retailer combo (the dedup
-          // case is rare on the single-user initial scan). Count as no-subject
-          // for progress-display parity with the prior behaviour.
           messagesSkippedNoSubject++;
         }
       }
@@ -409,6 +412,7 @@ export async function pollSingleUser(
         progress.billsFound = billsFound;
         progress.messagesSkippedNoSubject = messagesSkippedNoSubject;
         progress.messagesSkippedNoPdf = messagesSkippedNoPdf;
+        progress.billsAlreadyImported = billsAlreadyImported;
         progress.billSenders = [...billSenders];
         progress.filteredSenders = [...filteredSenders];
         progress.errors = errors;
@@ -423,6 +427,7 @@ export async function pollSingleUser(
   progress.billsFound = billsFound;
   progress.messagesSkippedNoSubject = messagesSkippedNoSubject;
   progress.messagesSkippedNoPdf = messagesSkippedNoPdf;
+  progress.billsAlreadyImported = billsAlreadyImported;
   progress.billSenders = [...billSenders];
   progress.filteredSenders = [...filteredSenders];
   progress.errors = errors;
