@@ -204,10 +204,10 @@ describe('compareUserWithPowerswitch — E2E (#222)', () => {
     // The Python comparator was POSTed the mapped plans (snake_cased).
     const [, init] = mockFetch.mock.calls[0]!;
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.availablePlans).toHaveLength(15);
-    expect(body.availablePlans[0].retailer_id).toBe('Electric Kiwi');
+    expect(body.available_plans).toHaveLength(15);
+    expect(body.available_plans[0].retailer_id).toBe('Electric Kiwi');
     // Usage came from the real bill (600 kWh / 30 days = 20/day).
-    expect(body.usageProfile.avgDailyKwh).toBe(20);
+    expect(body.usage_profile.avg_daily_kwh).toBe(20);
   });
 
   it('carries caveats into the recommendation reason', async () => {
@@ -253,7 +253,7 @@ describe('compareUserWithPowerswitch — E2E (#222)', () => {
     // avgDailyKwh = annualKwh (7007.6875) / 365 ≈ 19.2.
     const [, init] = mockFetch.mock.calls[0]!;
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.usageProfile.avgDailyKwh).toBeCloseTo(7007.6875 / 365, 1);
+    expect(body.usage_profile.avg_daily_kwh).toBeCloseTo(7007.6875 / 365, 1);
     // billId is null (no bill), billIdsJson is null.
     const cmpInput = vi.mocked(createComparison).mock.calls[0]![1];
     expect(cmpInput.billId).toBeNull();

@@ -321,3 +321,74 @@ export async function upsertPowerswitchPlan(
     .run();
   return { changed: true, blockedByManual: false };
 }
+
+/**
+ * #242 live-run FK fix — persist Powerswitch-mapped per-user plans as real
+ * `plans` rows before a comparison row references one of their ids.
+ * `plan_comparisons.recommended_plan_id REFERENCES plans(id)`, so writing a
+ * comparison against an unpersisted Powerswitch plan id violates the FK
+ * (found live; the unit-test D1 didn't enforce FKs). Idempotent:
+ * INSERT OR IGNORE on the plan id. Unknown retailers (Powerswitch covers more
+ * than our 10 seeds, e.g. Octopus/Hanergy) are inserted INACTIVE so they
+ * never join active-retailer flows (Gmail search, sender matching).
+ */
+export async function ensurePowerswitchPlanRows(
+  db: D1Database,
+  plans: ReadonlyArray<{
+    readonly id?: string;
+    readonly retailer_id: string; // retailer NAME from the mapper
+    readonly name?: string;
+    readonly c_per_kwh?: number;
+    readonly c_per_day?: number;
+    readonly prompt_payment_discount?: number;
+    readonly conditions_json?: string;
+    readonly low_user_eligible?: number | boolean;
+  }>,
+  ingestedAt: string
+): Promise<void> {
+  // Resolve retailer NAME → id for every plan; insert missing retailers inactive.
+  const names = [...new Set(plans.map((p) => p.retailer_id).filter(Boolean))];
+  const idByName = new Map<string, string>();
+  for (const name of names) {
+    const existing = await db
+      .prepare('SELECT id FROM retailers WHERE name = ?1')
+      .bind(name)
+      .first<{ id: string }>();
+    if (existing) {
+      idByName.set(name, existing.id);
+    } else {
+      const id = generateId();
+      await db
+        .prepare('INSERT INTO retailers (id, name, is_active) VALUES (?1, ?2, 0)')
+        .bind(id, name)
+        .run();
+      idByName.set(name, id);
+    }
+  }
+
+  for (const p of plans) {
+    if (!p.id) continue;
+    const retailerId = idByName.get(p.retailer_id);
+    if (!retailerId) continue;
+    await db
+      .prepare(
+        `INSERT OR IGNORE INTO plans (
+           id, retailer_id, name, region, c_per_kwh, c_per_day,
+           prompt_payment_discount, conditions_json, low_user_eligible,
+           source, provenance, ingested_at, is_current
+         ) VALUES (?1, ?2, ?3, NULL, ?4, ?5, ?6, ?7, ?8, 'powerswitch', 'powerswitch', ?9, 1)`
+      )
+      .bind(
+        p.id,
+        retailerId,
+        p.name ?? 'Unknown plan',
+        p.c_per_kwh ?? null,
+        p.c_per_day ?? null,
+        p.prompt_payment_discount ?? null,
+        p.conditions_json ?? null,
+        p.low_user_eligible ? 1 : 0,
+        ingestedAt
+      )
+      .run();
+  }
+}

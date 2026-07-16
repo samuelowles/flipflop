@@ -29,6 +29,7 @@
 
 import { getBillsByUserId } from '../models/bills';
 import { createComparison } from '../models/comparisons';
+import { ensurePowerswitchPlanRows } from '../models/plans';
 import { comparePlans } from './planComparator';
 import { readCachedResults } from './powerswitchReplay';
 import { mapPowerswitchPlans, tariffContentHash } from './powerswitchPlanMapper';
@@ -60,8 +61,6 @@ export type PowerswitchCompareOutcome =
   | { readonly status: 'skip'; readonly reason: string }
   | { readonly status: 'error'; readonly reason: string };
 
-// $50 NZD minimum saving to notify — mirrors planComparator.SAVING_THRESHOLD_CENTS.
-const SAVING_THRESHOLD_CENTS = 5000;
 
 /**
  * Run a per-user comparison using Powerswitch-mapped tariffs + real bill kWh.
@@ -149,6 +148,10 @@ export async function compareUserWithPowerswitch(
   const reason = deriveReason(verdictItem.reason ?? null, caveats);
 
   // 7. Persist ONE summary row + ONE provenance audit row.
+  // FK integrity first: plan_comparisons.recommended_plan_id REFERENCES
+  // plans(id), so the mapped Powerswitch plans must exist as plans rows
+  // before the comparison row can reference one (#242 live-run fix).
+  await ensurePowerswitchPlanRows(env.DB, availablePlans, new Date().toISOString());
   const comparison = await createComparison(env.DB, {
     userId,
     billIdsJson: billSummaries.length > 0 ? JSON.stringify(billSummaries.map((b) => b.id)) : null,
@@ -165,13 +168,14 @@ export async function compareUserWithPowerswitch(
 
   await writePowerswitchProvenance(env.DB, userId, cached.plans.length, mapped.length);
 
-  // 8. Enqueue a notification on a switch verdict that clears the threshold
-  // (only when the notify queue is wired — this path is additive and may run
-  // from an admin/manual trigger without a queue binding).
+  // 8. Enqueue the comparison for the notification engine (only when the
+  // notify queue is wired — this path is additive and may run from an
+  // admin/manual trigger without a queue binding). Verdict filtering is NOT
+  // done here: the 4-guard notification engine (threshold/cooldown/dedup +
+  // FLOW_TEST_MODE bypass) owns that decision, and stay_put messaging is a
+  // first-class outcome (#77). Pre-filtering on switch+threshold here starved
+  // the engine — found in the #242 live run; mirrors the seeded path (#74).
   if (
-    recommendation === 'switch' &&
-    topSwitch &&
-    topSwitch.saving_cents > SAVING_THRESHOLD_CENTS &&
     env.NOTIFY_QUEUE &&
     latestBill
   ) {

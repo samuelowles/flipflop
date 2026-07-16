@@ -226,8 +226,8 @@ describe('runComparison — happy path (#70)', () => {
     expect(url).toBe('http://python.test/compare');
     const body = JSON.parse((init as RequestInit).body as string);
     // availablePlans came from the aggregator, not raw getPlansByRegion.
-    expect(body.availablePlans).toHaveLength(2);
-    expect(body.availablePlans[0].retailer_id).toBe('ret-a');
+    expect(body.available_plans).toHaveLength(2);
+    expect(body.available_plans[0].retailer_id).toBe('ret-a');
 
     // 5. AC #73 — exactly ONE summary row per run, not one per candidate.
     expect(createComparison).toHaveBeenCalledTimes(1);

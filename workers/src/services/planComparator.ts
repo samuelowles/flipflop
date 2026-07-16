@@ -84,10 +84,33 @@ export async function comparePlans(
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), 30000);
 
+  // Boundary serialization: the Python /compare contract is snake_case
+  // (usage_profile.avg_daily_kwh, bill_history[].usage_kwh, …) while the TS
+  // types are camelCase. Sending the input verbatim made Python 400 with
+  // "current_plan is required" — found live in the #242 test run (unit tests
+  // mock this fetch, so CI never exercised the real contract).
+  const wireBody = {
+    usage_profile: {
+      avg_daily_kwh: input.usageProfile.avgDailyKwh,
+      meter_type: input.usageProfile.meterType,
+      seasonal_weight: input.usageProfile.seasonalWeights,
+    },
+    current_plan: input.currentPlan,
+    available_plans: input.availablePlans,
+    bill_history: input.billHistory.map((b) => ({
+      id: b.id,
+      usage_kwh: b.usageKwh,
+      total_cents: b.totalCents,
+      period_start: b.periodStart,
+      period_end: b.periodEnd,
+      days: b.days,
+      break_fee_cents: b.breakFeeCents,
+    })),
+  };
   const response = await fetch(`${pythonUrl}/compare`, {
     method: 'POST',
     headers,
-    body: JSON.stringify(input),
+    body: JSON.stringify(wireBody),
     signal: controller.signal,
   }).finally(() => clearTimeout(timeoutId));
 
