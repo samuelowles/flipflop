@@ -381,13 +381,18 @@ export async function runEvalComparison(
 ): Promise<{
   parsedData: Record<string, unknown> | null;
   comparisons: readonly Record<string, unknown>[];
+  /** Parse-progress counts so callers can distinguish "still parsing" from
+   *  "nothing to compare" (the callback page pends on these — #242 live run). */
+  billsTotal: number;
+  billsParsed: number;
 }> {
   const pythonUrl = env.PYTHON_SERVICE_URL ?? 'http://localhost:8000';
   const allBills = await getBillsByUserId(env.DB, userId);
   const parsedBills = allBills.filter(b => b.status === 'parsed');
+  const counts = { billsTotal: allBills.length, billsParsed: parsedBills.length };
 
   if (parsedBills.length === 0) {
-    return { parsedData: null, comparisons: [] };
+    return { parsedData: null, comparisons: [], ...counts };
   }
 
   const billSummaries = parsedBills
@@ -542,7 +547,7 @@ export async function runEvalComparison(
     confidence: latestBill.confidence,
   };
 
-  return { parsedData, comparisons: storedComparisons };
+  return { parsedData, comparisons: storedComparisons, ...counts };
 }
 
 // ---------------------------------------------------------------------------
