@@ -1,0 +1,25 @@
+HTTP 200
+content-encoding: br
+cf-cache-status: DYNAMIC
+age: 0
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=TpsruJiL9VwqvBFK56D6mL4Fe1pkTfkLOY5vBSaIFmDp6Snpmve0o%2BraDw0OI4vYW947T3tIF6c36Xs2%2B7dZ7zgYfMuMb7Jn0Wgh7a%2Blnt85%2BWM7KW0DDmSL3yMCk5a%2FmKfCjgV60UI%3D"}]}
+x-content-type-options: nosniff
+x-matched-path: /api/locations/[id]/retailers
+date: Thu, 16 Jul 2026 03:41:09 GMT
+content-type: application/json
+vary: RSC, Next-Router-State-Tree, Next-Router-Prefetch, accept-encoding
+x-frame-options: SAMEORIGIN
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+content-security-policy: default-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' *.marker.io bat.bing.com connect.facebook.net *.marketo.net *.marketo.com *.consumer.org.nz *.googletagmanager.com *.googleadservices.com *.googlesyndication.com e.infogram.com *.raygun.io;connect-src 'self' *.marker.io *.googletagmanager.com *.google-analytics.com *.doubleclick.net bat.bing.com *.mktoresp.com *.marketo.net *.mktoutil.com www.facebook.com *.raygun.io;style-src 'self' 'unsafe-inline' *.marker.io *.consumer.org.nz;frame-src 'self' *.marker.io e.infogram.com *.googletagmanager.com *.doubleclick.net *.googlesyndication.com *.consumer.org.nz *.youtube.com www.canva.com flo.uri.sh;img-src * data:;font-src * data:;
+cache-control: public, max-age=0, must-revalidate
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-vercel-cache: MISS
+referrer-policy: strict-origin-when-cross-origin
+cf-ray: a1bdfd549a09d9ba-AKL
+permissions-policy: microphone=(), camera=(), geolocation=(self), fullscreen=(self), payment=(), screen-wake-lock=(), publickey-credentials-get=(), display-capture=(self)
+x-xss-protection: 1; mode=block
+server: cloudflare
+x-vercel-id: syd1::syd1::4mpxp-1784173269234-1b75755dd2ba
+
+---- body ----
+[{"id":1,"name":"Contact Energy"},{"id":70,"name":"Ecotricity"},{"id":68,"name":"Electric Kiwi"},{"id":24,"name":"Genesis Energy"},{"id":74,"name":"GLOBUG"},{"id":45,"name":"Hanergy"},{"id":75,"name":"Mercury"},{"id":19,"name":"Meridian Energy"},{"id":56,"name":"Nova Energy"},{"id":40,"name":"Octopus Energy"},{"id":59,"name":"Powershop"},{"id":58,"name":"Pulse Energy"},{"id":41,"name":"Tensor"}]

@@ -1,0 +1,15 @@
+POST /
+# captured-from: https://www.powerswitch.org.nz/
+sec-ch-ua-platform: "Windows"
+next-action: 6a3f72e4062eaddbfb90c89ee71031b9eefdbbfb
+referer: https://www.powerswitch.org.nz/
+sec-ch-ua: "HeadlessChrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"
+sec-ch-ua-mobile: ?0
+next-router-state-tree: %5B%22%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D
+user-agent: FlipNZ-BillMonitor/1.0 (+https://flip.nz; issue #240 capture; contact: ops@flip.nz)
+accept: text/x-component
+content-type: text/plain;charset=UTF-8
+x-deployment-id: dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs
+
+---- body ----
+[{"previousData":{"address":null,"icp":null,"electricity_location":null,"gas_location":null,"electricity_retailer":"$undefined"},"modifiedFields":{"address_id":"2-.1.6.6.1aoR.","icp_identifier":"$undefined"}}]

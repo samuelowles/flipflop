@@ -1,0 +1,15 @@
+POST /results?p=vEVbyZKPEa
+# captured-from: https://www.powerswitch.org.nz/results?p=vEVbyZKPEa
+sec-ch-ua-platform: "Windows"
+next-action: 4bd932e5159daf1829fcdb1ce5e38b3c096cb660
+referer: https://www.powerswitch.org.nz/results?p=vEVbyZKPEa
+sec-ch-ua: "HeadlessChrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"
+sec-ch-ua-mobile: ?0
+next-router-state-tree: %5B%22%22%2C%7B%22children%22%3A%5B%22results%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D%7D%2Cnull%2Cnull%2Ctrue%5D
+user-agent: FlipNZ-BillMonitor/1.0 (+https://flip.nz; issue #240 capture; contact: ops@flip.nz)
+accept: text/x-component
+content-type: text/plain;charset=UTF-8
+x-deployment-id: dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs
+
+---- body ----
+["vEVbyZKPEa"]

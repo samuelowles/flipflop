@@ -1,0 +1,25 @@
+HTTP 200
+content-encoding: br
+cf-cache-status: DYNAMIC
+age: 0
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=2AB1DUneNnJFL0EmlE7QvMJZ%2BbTZVdqdAOxJPKwCW579RGZkH6vm30daUTK5UDghqZoSKNxMnx3v3UyFa5WfvPoUmnHNBB4ucXPK0mcRNQhOgRGUMjWEOEhcBzrGFuh6vTj073UY5Es%3D"}]}
+x-content-type-options: nosniff
+x-matched-path: /api/locations/[id]/retailers
+date: Thu, 16 Jul 2026 03:41:09 GMT
+content-type: application/json
+vary: RSC, Next-Router-State-Tree, Next-Router-Prefetch, accept-encoding
+x-frame-options: SAMEORIGIN
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+content-security-policy: default-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' *.marker.io bat.bing.com connect.facebook.net *.marketo.net *.marketo.com *.consumer.org.nz *.googletagmanager.com *.googleadservices.com *.googlesyndication.com e.infogram.com *.raygun.io;connect-src 'self' *.marker.io *.googletagmanager.com *.google-analytics.com *.doubleclick.net bat.bing.com *.mktoresp.com *.marketo.net *.mktoutil.com www.facebook.com *.raygun.io;style-src 'self' 'unsafe-inline' *.marker.io *.consumer.org.nz;frame-src 'self' *.marker.io e.infogram.com *.googletagmanager.com *.doubleclick.net *.googlesyndication.com *.consumer.org.nz *.youtube.com www.canva.com flo.uri.sh;img-src * data:;font-src * data:;
+cache-control: public, max-age=0, must-revalidate
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-vercel-cache: MISS
+referrer-policy: strict-origin-when-cross-origin
+cf-ray: a1bdfd561fd5d9ba-AKL
+permissions-policy: microphone=(), camera=(), geolocation=(self), fullscreen=(self), payment=(), screen-wake-lock=(), publickey-credentials-get=(), display-capture=(self)
+x-xss-protection: 1; mode=block
+server: cloudflare
+x-vercel-id: syd1::syd1::87h97-1784173269470-8b6204d1fe23
+
+---- body ----
+[{"id":1,"name":"Contact Energy"},{"id":24,"name":"Genesis Energy"},{"id":45,"name":"Hanergy"},{"id":75,"name":"Mercury"},{"id":56,"name":"Nova Energy"},{"id":58,"name":"Pulse Energy"}]

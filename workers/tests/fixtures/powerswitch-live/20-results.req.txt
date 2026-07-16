@@ -1,0 +1,13 @@
+GET /results?p=vEVbyZKPEa&_rsc=z21oq
+# captured-from: https://www.powerswitch.org.nz/results?p=vEVbyZKPEa&_rsc=z21oq
+rsc: 1
+sec-ch-ua-platform: "Windows"
+referer: https://www.powerswitch.org.nz/results?p=vEVbyZKPEa
+sec-ch-ua: "HeadlessChrome";v="149", "Chromium";v="149", "Not)A;Brand";v="24"
+sec-ch-ua-mobile: ?0
+next-router-state-tree: %5B%22%22%2C%7B%22children%22%3A%5B%22results%22%2C%7B%22children%22%3A%5B%22__PAGE__%22%2C%7B%7D%2Cnull%2Cnull%5D%7D%2Cnull%2Cnull%2Ctrue%5D%7D%2Cnull%2C%22refetch%22%5D
+user-agent: FlipNZ-BillMonitor/1.0 (+https://flip.nz; issue #240 capture; contact: ops@flip.nz)
+x-deployment-id: dpl_8BpX3Bw4H38yeGchwSqqVDACmcHs
+
+---- body ----
+

@@ -1,0 +1,28 @@
+HTTP 200
+x-action-revalidated: [[],0,0]
+content-encoding: br
+cf-cache-status: DYNAMIC
+report-to: {"group":"cf-nel","max_age":604800,"endpoints":[{"url":"https://a.nel.cloudflare.com/report/v4?s=5Ue71LCBXRNkCih0a3P%2BKHBgO0h0fmwFOCr4Mpk%2BCSeAvxqmrG7zQo%2Ba1hRKG39tj7Zg24tHDBayzoQpmQamiLeEK0Um%2BgVh66XpKL6aZqTpuWzPCMPXabnrREcnKTgLwxZkSBr0Soc%3D"}]}
+x-content-type-options: nosniff
+x-matched-path: /questionnaire/household
+date: Thu, 16 Jul 2026 03:41:09 GMT
+content-type: text/x-component
+vary: RSC, Next-Router-State-Tree, Next-Router-Prefetch, accept-encoding
+x-frame-options: SAMEORIGIN
+strict-transport-security: max-age=31536000; includeSubDomains; preload
+content-security-policy: default-src 'self';script-src 'self' 'unsafe-eval' 'unsafe-inline' *.marker.io bat.bing.com connect.facebook.net *.marketo.net *.marketo.com *.consumer.org.nz *.googletagmanager.com *.googleadservices.com *.googlesyndication.com e.infogram.com *.raygun.io;connect-src 'self' *.marker.io *.googletagmanager.com *.google-analytics.com *.doubleclick.net bat.bing.com *.mktoresp.com *.marketo.net *.mktoutil.com www.facebook.com *.raygun.io;style-src 'self' 'unsafe-inline' *.marker.io *.consumer.org.nz;frame-src 'self' *.marker.io e.infogram.com *.googletagmanager.com *.doubleclick.net *.googlesyndication.com *.consumer.org.nz *.youtube.com www.canva.com flo.uri.sh;img-src * data:;font-src * data:;
+cache-control: no-cache, no-store, max-age=0, must-revalidate
+nel: {"report_to":"cf-nel","success_fraction":0.0,"max_age":604800}
+x-vercel-cache: MISS
+referrer-policy: strict-origin-when-cross-origin
+cf-ray: a1bdfd4d7c5ad9ba-AKL
+permissions-policy: microphone=(), camera=(), geolocation=(self), fullscreen=(self), payment=(), screen-wake-lock=(), publickey-credentials-get=(), display-capture=(self)
+x-xss-protection: 1; mode=block
+x-powered-by: Next.js
+server: cloudflare
+x-vercel-id: syd1::syd1::ldrmk-1784173268090-c4dcd6244159
+
+---- body ----
+0:["$@1",["s1ZR-o3QVA3MqdSoqlf2o",null]]
+1:{"result":{"address":{"id":"2-.1.6.6.1aoR.","a":"1 Queen Street, Auckland Central, Auckland 1010","x":"174.766421180063","y":"-36.843387358438","unit_number":null,"street_number":"1","alpha":null,"street_or_property_name":"Queen Street","suburb_or_town":"Auckland","suburb":"Auckland Central","source":"AddressFinder"},"electricity_location":{"id":267,"name":"Auckland Central and Manukau"},"gas_location":{"id":266,"name":"Auckland Central (Gas)"}}}
+
