@@ -14,7 +14,13 @@ vi.mock('./messaging', () => ({
   sendAndLog: vi.fn().mockResolvedValue({ messageId: 'msg-1', channel: 'whatsapp', fallback: false, whatsappAttempts: 1 }),
 }));
 
+vi.mock('../models/users', () => ({
+  getUserById: vi.fn(),
+  updateUser: vi.fn(),
+}));
+
 import { getBillById, updateBillStatus, updateBillParsedData, markBillCompareEnqueued } from '../models/bills';
+import { getUserById, updateUser } from '../models/users';
 import { sendAndLog } from './messaging';
 
 function createMockR2Object(size: number, body: Uint8Array): R2Object {
@@ -125,6 +131,13 @@ describe('handleParseJob', () => {
     vi.clearAllMocks();
     // Default: idempotency claim wins (first enqueue proceeds).
     vi.mocked(markBillCompareEnqueued).mockResolvedValue(true);
+    // Default user: phone set, no installation address on file.
+    vi.mocked(getUserById).mockResolvedValue({
+      id: 'user123',
+      phone: '+64211234567',
+      installationAddress: null,
+    } as never);
+    vi.mocked(updateUser).mockResolvedValue({} as never);
   });
 
   it('should complete full parse flow with high confidence', async () => {
@@ -209,6 +222,115 @@ describe('handleParseJob', () => {
       '+64211234567',
       expect.stringMatching(/contact/)
     );
+  });
+
+  describe('installation address persistence (Gmail-flow fix)', () => {
+    const ADDRESS = '1 Queen Street, Auckland Central, Auckland 1010';
+
+    function makeEnv(r2Key: string, body: Uint8Array) {
+      const r2Objects = new Map<string, R2Object>();
+      r2Objects.set(r2Key, createMockR2Object(body.length, body));
+      return {
+        DB: {
+          prepare: vi.fn().mockReturnValue({
+            bind: vi.fn().mockReturnValue({ first: vi.fn().mockResolvedValue(null) }),
+          }),
+        } as unknown as D1Database,
+        BILLS: createMockR2Bucket(r2Objects),
+        COMPARE_QUEUE: createMockQueue(),
+        SENT_API_KEY: 'test-key',
+        ENCRYPTION_KEY: 'test-encryption-key',
+        PYTHON_SERVICE_URL: 'http://localhost:8000',
+      };
+    }
+
+    beforeEach(() => {
+      vi.mocked(getBillById).mockResolvedValue({
+        id: 'bill-addr',
+        userId: 'user123',
+        retailerId: 'mercury',
+        status: 'pending_parse',
+      } as never);
+      vi.mocked(updateBillStatus).mockResolvedValue(undefined);
+      vi.mocked(updateBillParsedData).mockResolvedValue(undefined);
+    });
+
+    it('persists the extracted address (encrypted via updateUser) when the user has none', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ usage_kwh: 500, total_cents: 12500, confidence: 0.92, address: ADDRESS }),
+      });
+      const env = makeEnv('bills/a.pdf', new Uint8Array([1]));
+
+      await handleParseJob('bill-addr', 'bills/a.pdf', env);
+
+      expect(updateUser).toHaveBeenCalledWith(
+        env.DB,
+        { ENCRYPTION_KEY: 'test-encryption-key' },
+        'user123',
+        { installationAddress: ADDRESS }
+      );
+    });
+
+    it('never overwrites an existing installation address', async () => {
+      vi.mocked(getUserById).mockResolvedValue({
+        id: 'user123',
+        phone: '+64211234567',
+        installationAddress: '99 Existing Way, Wellington 6011',
+      } as never);
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ usage_kwh: 500, total_cents: 12500, confidence: 0.92, address: ADDRESS }),
+      });
+      const env = makeEnv('bills/b.pdf', new Uint8Array([2]));
+
+      await handleParseJob('bill-addr', 'bills/b.pdf', env);
+
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('does not call updateUser when the parser returned no address', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ usage_kwh: 500, total_cents: 12500, confidence: 0.92, address: null }),
+      });
+      const env = makeEnv('bills/c.pdf', new Uint8Array([3]));
+
+      await handleParseJob('bill-addr', 'bills/c.pdf', env);
+
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('is best-effort: an updateUser failure must not fail the parse job', async () => {
+      vi.mocked(updateUser).mockRejectedValue(new Error('D1 write failed'));
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ usage_kwh: 500, total_cents: 12500, confidence: 0.92, address: ADDRESS }),
+      });
+      const env = makeEnv('bills/d.pdf', new Uint8Array([4]));
+
+      await expect(handleParseJob('bill-addr', 'bills/d.pdf', env)).resolves.toBeUndefined();
+
+      // Parse still completed: parsed data written, compare enqueued.
+      expect(updateBillParsedData).toHaveBeenCalledWith(
+        env.DB, 'bill-addr', expect.objectContaining({ status: 'parsed' })
+      );
+      expect(env.COMPARE_QUEUE.send).toHaveBeenCalledTimes(1);
+    });
+
+    it('keeps the address (PII) out of the plaintext parsed_json column', async () => {
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({ usage_kwh: 500, total_cents: 12500, confidence: 0.92, address: ADDRESS }),
+      });
+      const env = makeEnv('bills/e.pdf', new Uint8Array([5]));
+
+      await handleParseJob('bill-addr', 'bills/e.pdf', env);
+
+      const parsedJson = vi.mocked(updateBillParsedData).mock.calls[0]![2].parsedJson as string;
+      expect(parsedJson).not.toContain('Queen Street');
+      expect(JSON.parse(parsedJson)).not.toHaveProperty('address');
+    });
   });
 
   it('should NOT enqueue comparison when compare was already claimed (idempotent on bill_id)', async () => {

@@ -53,7 +53,7 @@ EXACT_FIELDS = (
     "retailer", "meter_type", "icp_number",
     "period_start", "period_end", "days", "usage_kwh",
     "total_cents", "c_per_kwh", "c_per_day",
-    "fixed_term_expiry", "break_fee_cents",
+    "fixed_term_expiry", "break_fee_cents", "address",
 )
 # plan_name is extracted heuristically (retailer prefix, label, truncation) —
 # the existing 358-test suite asserts it with substring ``in`` checks, not

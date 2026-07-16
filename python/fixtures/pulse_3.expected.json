@@ -11,5 +11,6 @@
   "c_per_kwh": 25.5,
   "c_per_day": 90.0,
   "fixed_term_expiry": null,
-  "break_fee_cents": 0
+  "break_fee_cents": 0,
+  "address": "12 Demo Street, Auckland"
 }

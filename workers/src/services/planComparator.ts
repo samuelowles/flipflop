@@ -178,13 +178,23 @@ function computeSeasonalWeights(bills: readonly ComparisonBillSummary[]): { summ
 }
 
 /**
+ * Outcome of runComparison. When no comparison row was produced,
+ * `skipReason` carries the TRUE cause so the flow trace never reports
+ * "no parsed bills" for a user whose bill did parse (deployed-run finding).
+ */
+export interface ComparisonRunOutcome {
+  readonly comparisonId: string | null;
+  readonly skipReason?: string;
+}
+
+/**
  * Run a full plan comparison for a user after a new bill is parsed.
  * Called from the compare queue consumer.
  */
 export async function runComparison(
   userId: string,
   env: CompareEnv
-): Promise<string | null> {
+): Promise<ComparisonRunOutcome> {
   // 1. Fetch user's bill history (parsed bills only)
   const allBills = await getBillsByUserId(env.DB, userId);
   const parsedBills = allBills.filter(b => b.status === 'parsed');
@@ -196,7 +206,7 @@ export async function runComparison(
       reason: 'no parsed bills',
       timestamp: new Date().toISOString(),
     }));
-    return null;
+    return { comparisonId: null, skipReason: 'no parsed bills' };
   }
 
   // 2. Build bill summaries for Python
@@ -208,7 +218,7 @@ export async function runComparison(
       reason: 'no valid bill summaries',
       timestamp: new Date().toISOString(),
     }));
-    return null;
+    return { comparisonId: null, skipReason: 'parsed bills missing required fields (usage/total/period)' };
   }
 
   // 3. Build usage profile
@@ -283,7 +293,7 @@ export async function runComparison(
       reason: 'no plans available',
       timestamp: new Date().toISOString(),
     }));
-    return null;
+    return { comparisonId: null, skipReason: `no plans available for region ${region}` };
   }
 
   // 6. POST to Python /compare via the typed boundary primitive
@@ -363,7 +373,7 @@ export async function runComparison(
       reason: 'recommended plan not matchable',
       timestamp: new Date().toISOString(),
     }));
-    return null;
+    return { comparisonId: null, skipReason: 'recommended plan not matchable' };
   }
 
   // reason is only set by Python on stay_put; carry it through when present.
@@ -443,7 +453,7 @@ export async function runComparison(
     timestamp: new Date().toISOString(),
   }));
 
-  return comparison.id;
+  return { comparisonId: comparison.id };
 }
 
 /**

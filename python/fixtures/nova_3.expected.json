@@ -11,5 +11,6 @@
   "c_per_kwh": 28.9,
   "c_per_day": 85.0,
   "fixed_term_expiry": null,
-  "break_fee_cents": 0
+  "break_fee_cents": 0,
+  "address": "3 Sample Road, Christchurch"
 }

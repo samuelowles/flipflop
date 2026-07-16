@@ -199,7 +199,7 @@ _PARSER_RESULT_FIELDS = {
     "retailer", "plan_name", "meter_type", "icp_number", "period_start",
     "period_end", "days", "usage_kwh", "total_cents", "c_per_kwh",
     "c_per_day", "fixed_term_expiry", "break_fee_cents", "confidence",
-    "raw_json", "parser_used",
+    "raw_json", "parser_used", "address",
 }
 
 

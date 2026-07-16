@@ -11,5 +11,6 @@
   "c_per_kwh": 32.9,
   "c_per_day": 12.0,
   "fixed_term_expiry": null,
-  "break_fee_cents": 0
+  "break_fee_cents": 0,
+  "address": "7 Fern Close, Christchurch"
 }

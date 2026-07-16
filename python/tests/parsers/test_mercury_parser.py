@@ -42,7 +42,7 @@ Your electricity bill
 
 Customer: Alex Sample
 ICP: 0009876543DEF99
-Supply Address: 456 Queen Street, Auckland
+Supply Address: 1 Queen Street, Auckland Central, Auckland 1010
 
 Mercury Online Plan
 
@@ -106,7 +106,7 @@ Your electricity bill
 
 Customer: Taylor Test
 ICP: 000444555666XY7
-Supply Address: 78 Crescent Road, Christchurch
+Supply Address: 1 Queen Street, Auckland Central, Auckland 1010
 
 Mercury Everyday Plan (Low User)
 
@@ -156,7 +156,7 @@ Your electricity bill
 
 Customer: Casey Nightuser
 ICP: 000777888999TU2
-Supply Address: 5 Dark Alley, Hamilton
+Supply Address: 1 Queen Street, Auckland Central, Auckland 1010
 
 Mercury Saver Plan (Day/Night)
 

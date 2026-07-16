@@ -41,7 +41,7 @@ Your Energy bill
 Account: 8842001-7
 Customer: A. Ratepayer
 ICP Number: 0005555666GST77
-Supply at: 789 Rural Road, Waikato
+Supply at: 789 Rural Road, Matangi, Hamilton 3284
 
 Genesis Everyday Plan
 

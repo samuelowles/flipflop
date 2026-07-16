@@ -11,5 +11,6 @@
   "c_per_kwh": 22.1,
   "c_per_day": 150.0,
   "fixed_term_expiry": null,
-  "break_fee_cents": 0
+  "break_fee_cents": 0,
+  "address": "88 Test Street, Auckland"
 }
