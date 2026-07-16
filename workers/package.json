@@ -13,7 +13,8 @@
     "lint": "eslint .",
     "migrate:local": "wrangler d1 execute flip-db --local --file",
     "migrate:remote": "wrangler d1 execute flip-db --remote --file",
-    "test-run:reset": "node ../scripts/test-run-reset.mjs"
+    "test-run:reset": "node ../scripts/test-run-reset.mjs",
+    "powerswitch:smoke": "npx tsx ../scripts/powerswitch-smoke.mjs"
   },
   "dependencies": {
     "hono": "^4.0.0"
