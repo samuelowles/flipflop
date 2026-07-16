@@ -1,54 +1,74 @@
 /**
- * #220 — Powerswitch per-user address resolution.
+ * #220/#240 — Powerswitch per-user address resolution (rebuilt against REAL captures).
  *
  * Given a user's NZ address string, resolve it to a Powerswitch `pxid`
- * (Addressfinder-backed address id) and internal location id. The pair is
- * persisted on the user row (migration 0018) so #221 can replay the
- * questionnaire per user without re-resolving the address every time.
+ * (Addressfinder address id) + internal location id, and persist both on the
+ * user row (migration 0018) so the per-user replay (#221) can run without
+ * re-resolving. Rebuilt against workers/tests/fixtures/powerswitch-live/
+ * {03-autocomplete,07-q-household}.res.txt — every request byte traces there.
  *
- * COMPLIANCE (docs/POWERSWITCH_COMPLIANCE.md, issue #219 — the authority):
+ * PROTOCOL CORRECTION (#240): the questionnaire is driven by Next.js server
+ * actions, NOT form endpoints or redirects. Each call is `POST <url>` with
+ * `Content-Type: text/plain;charset=UTF-8`, `Accept: text/x-component`, a
+ * `Next-Action: <hash>` header (deployment-bound — rotation is drift), and a
+ * JSON-array body. The response is an RSC FLIGHT (text/x-component); the payload
+ * is the `1:{…}` row. Address → location is `POST /questionnaire/household`
+ * returning `{result:{electricity_location:{id:267,…}}}` — NOT a Location-header
+ * redirect. The session is cookie-keyed, so a CookieJar threads autocomplete →
+ * household (capture README: "server-side session profile keyed by cookie").
+ *
+ * COMPLIANCE (docs/POWERSWITCH_COMPLIANCE.md, issue #219):
  *   - LIVE per-user calls are GATED behind `env.POWERSWITCH_LIVE === 'true'`.
- *     With the flag unset/false this module is INERT: it makes no live calls,
- *     logs `powerswitch_live_disabled`, and returns a `disabled` outcome.
- *     Tests use FIXTURES only (no live calls ever run in CI).
- *   - ICP is NEVER submitted. No code path here reads, constructs, or posts an
- *     ICP value. The questionnaire's optional ICP step is always skipped;
- *     results are complete without it (verified 2026-07-15).
+ *     With the flag unset/false this module is INERT (no live calls, logs
+ *     `powerswitch_live_disabled`, returns `disabled`). CI uses FIXTURES only.
+ *   - ICP is NEVER submitted — `icp_identifier: "$undefined"` in the household
+ *     body. No code path reads, constructs, or posts an ICP value.
  *   - Sequential requests with delay + exponential backoff (shared-resource
  *     etiquette; mirrors services/powerswitchScraper.ts).
  *   - Identified user agent on every request (no browser-UA spoofing).
- *   - Drift handling: if the autocomplete response lacks the expected
- *     `completions` shape (Powerswitch redeploy churn), emit a distinct
- *     `console.error('powerswitch_drift', {...})` and return a typed `drift`
- *     failure — never silently persist a partial/garbage guess.
- *
- * Match confidence:
- *   - exact / single completion → auto-accept.
- *   - zero completions          → needs_review (no bad guess persisted).
- *   - multiple completions       → if the user gave no unit AND a base
- *     (non-unit-level) completion exists, pick the base address; otherwise
- *     flag for manual review (reuses the `needs_review` status convention
- *     from bill parsing).
+ *   - Drift: a response lacking the expected flight shape → structured
+ *     `console.error('powerswitch_drift', …)` + typed `drift` failure. Never
+ *     persists a partial/garbage guess.
  */
 
 import { updatePowerswitchLocation } from '../models/users';
+import { findFlightObject } from './powerswitchRscParser';
 
 /** Base URL. Public site; no auth. */
 export const POWERSWITCH_BASE_URL = 'https://www.powerswitch.org.nz';
 
 /**
- * Identified user agent. Same string used by services/powerswitchScraper.ts so
- * Powerswitch sees one consistent Flip identity across both surfaces.
+ * Identified user agent. Same string the capture harness + scraper use so
+ * Powerswitch sees one consistent Flip identity across all surfaces.
  */
 export const POWERSWITCH_USER_AGENT =
-  'FlipNZ-BillMonitor/1.0 (+https://flip.nz; issue #220; contact: ops@flip.nz)';
+  'FlipNZ-BillMonitor/1.0 (+https://flip.nz; issue #240; contact: ops@flip.nz)';
+
+/**
+ * Captured Next.js server-action hashes (deployment-bound — from the
+ * NN-*.req.txt captures). When Powerswitch redeploys these rotate; the live
+ * calls then 4xx and the daily drift canary raises + sets the KV drift flag.
+ */
+export const AUTOCOMPLETE_ACTION = 'da6fc133fa56dbcc912a48743ab36b5923271146'; // 03-autocomplete.req.txt
+export const HOUSEHOLD_ACTION = '6a3f72e4062eaddbfb90c89ee71031b9eefdbbfb'; // 07-q-household.req.txt
+export const INSULATION_ACTION = '95a1d5c6e2700a5cf6efd321d66b0dc867ac2b9c'; // 16-q-insulation.req.txt
+export const RESULTS_ACTION = 'c22005b4ec83d0b95d0791579a9249f182c212c4'; // 18-results.req.txt
 
 /** Etiquette constants — conservative; Powerswitch is a shared not-for-profit resource. */
-const REQUEST_DELAY_MS = 1500; // delay between the autocomplete + questionnaire calls
+const REQUEST_DELAY_MS = 1500; // delay between the autocomplete + household calls
 const MAX_RETRIES = 3;
 const BACKOFF_BASE_MS = 2000; // 2s, 4s, 8s
 
-/** Env shape this module needs. KV is unused now but reserved for #221's results cache. */
+/** Cookie jar threading the cookie-keyed session across the POST chain. */
+export interface CookieJar {
+  cookies: string[]; // "name=value" entries
+}
+
+export function createCookieJar(): CookieJar {
+  return { cookies: [] };
+}
+
+/** Env shape this module needs. KV is reserved for #221's results cache + drift flag. */
 export interface PowerswitchSessionEnv {
   readonly DB: D1Database;
   readonly KV: KVNamespace;
@@ -56,7 +76,7 @@ export interface PowerswitchSessionEnv {
   readonly POWERSWITCH_LIVE?: string;
 }
 
-/** Expected autocomplete completion entry shape. */
+/** Expected autocomplete completion entry shape (03-autocomplete.res.txt). */
 export interface PowerswitchCompletion {
   readonly a: string;
   readonly pxid: string;
@@ -79,9 +99,8 @@ export function isPowerswitchLive(env: PowerswitchSessionEnv): boolean {
 /**
  * Resolve a user's address string to a pxid (+ location id) and persist both
  * on the user row. Returns a typed outcome — callers route `needs_review` /
- * `drift` to the manual-review path. Never persists a guess.
- *
- * ICP is never submitted at any point in this flow.
+ * `drift` to the manual-review path. Never persists a guess. ICP is never
+ * submitted. One cookie-keyed session threads autocomplete → household.
  */
 export async function resolveUserAddress(
   env: PowerswitchSessionEnv,
@@ -102,8 +121,10 @@ export async function resolveUserAddress(
     return { status: 'needs_review', reason: 'zero_match', completions: 0 };
   }
 
-  // 1. Autocomplete — POST to the site root (Next.js server-action).
-  const completionOutcome = await fetchCompletions(trimmed);
+  const jar = createCookieJar();
+
+  // 1. Autocomplete — POST / (server-action), text/plain body ["<address>"].
+  const completionOutcome = await fetchCompletions(trimmed, jar);
   if (completionOutcome.status !== 'ok') {
     return completionOutcome.status === 'drift'
       ? { status: 'drift', reason: completionOutcome.reason }
@@ -118,12 +139,13 @@ export async function resolveUserAddress(
   }
   const { pxid } = match;
 
-  // 3. Resolve the pxid → internal location id via the questionnaire redirect.
-  //    Etiquette: a minimum inter-request delay before the second live call
-  //    (sequential, never parallel). Best-effort: a resolve without a location
-  //    id is still useful (#221 can re-request it), so null is a valid result.
+  // 3. Resolve the pxid → internal location id via POST /questionnaire/household
+  //    (returns result.electricity_location.id). Etiquette: a minimum inter-
+  //    request delay before the second live call (sequential, never parallel).
+  //    Best-effort: a resolve without a location id is still useful, so null is
+  //    a valid result.
   await delay(REQUEST_DELAY_MS);
-  const locationId = await resolveLocationId(pxid);
+  const locationId = await resolveLocationId(pxid, jar);
 
   // 4. Persist on the user row.
   await updatePowerswitchLocation(env.DB, userId, { pxid, locationId });
@@ -173,6 +195,73 @@ export function pickBestMatch(
 }
 
 // ---------------------------------------------------------------------------
+// Server-action POST helper (shared with the per-user replay)
+// ---------------------------------------------------------------------------
+
+/**
+ * POST a Next.js server action. Body is a JSON array (text/plain); the response
+ * is an RSC flight (text/x-component). Identified UA + the deployment-bound
+ * action hash on every attempt. Sequential by construction (no Promise.all).
+ * Captures Set-Cookie into the jar (the session is cookie-keyed).
+ */
+export async function postAction(
+  url: string,
+  bodyArray: unknown,
+  actionHash: string,
+  jar?: CookieJar
+): Promise<string> {
+  const body = JSON.stringify(bodyArray);
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+    try {
+      const headers: Record<string, string> = {
+        'User-Agent': POWERSWITCH_USER_AGENT,
+        'Content-Type': 'text/plain;charset=UTF-8',
+        Accept: 'text/x-component',
+        'Next-Action': actionHash,
+      };
+      if (jar && jar.cookies.length > 0) {
+        headers['Cookie'] = jar.cookies.join('; ');
+      }
+      const response = await fetch(url, {
+        method: 'POST',
+        headers,
+        body,
+        redirect: 'error', // server actions return 200 + flight, not a redirect
+        cf: { cacheTtl: 0 },
+      });
+
+      // Thread the session cookie through the chain.
+      if (jar) {
+        const setCookies =
+          typeof response.headers.getSetCookie === 'function' ? response.headers.getSetCookie() : [];
+        for (const sc of setCookies) {
+          const pair = sc.split(';')[0]!;
+          const name = pair.split('=')[0]!.trim();
+          jar.cookies = jar.cookies.filter((c) => !c.startsWith(name + '='));
+          if (pair) jar.cookies.push(pair);
+        }
+      }
+
+      if (response.status >= 500 && attempt < MAX_RETRIES) {
+        await delay(BACKOFF_BASE_MS * 2 ** (attempt - 1));
+        continue;
+      }
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
+      }
+      return await response.text();
+    } catch (error) {
+      lastError = error;
+      if (attempt < MAX_RETRIES) {
+        await delay(BACKOFF_BASE_MS * 2 ** (attempt - 1));
+      }
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error('POST failed after retries');
+}
+
+// ---------------------------------------------------------------------------
 // Fetch helpers
 // ---------------------------------------------------------------------------
 
@@ -181,35 +270,58 @@ type CompletionsResult =
   | { readonly status: 'drift'; readonly reason: string }
   | { readonly status: 'error'; readonly reason: string };
 
-/**
- * POST the partial address to the Powerswitch autocomplete server-action.
- * Validates the response shape; on drift emits a structured error and returns
- * a typed failure rather than persisting garbage.
- */
-async function fetchCompletions(address: string): Promise<CompletionsResult> {
-  let body: unknown;
-  try {
-    const response = await postWithBackoff(
-      POWERSWITCH_BASE_URL + '/',
-      // Next.js server-action form body. The action id rotates per deploy; we
-      // send the address under the field the action reads. The compliance gate
-      // (#221) owns discovering the live action id; against fixtures the test
-      // stubs fetch and ignores the body shape.
-      new URLSearchParams({ address }),
-      { 'Next-Action': 'autocomplete' }
-    );
-    body = response;
-  } catch (error) {
-    const reason = error instanceof Error ? error.message : 'autocomplete fetch failed';
-    return { status: 'error', reason };
-  }
+/** previousData defaults for the household body (07-q-household.req.txt shape). */
+const HOUSEHOLD_PREVIOUS_DATA = {
+  address: '$undefined',
+  icp: '$undefined',
+  electricity_location: '$undefined',
+  gas_location: '$undefined',
+  electricity_retailer: '$undefined',
+};
 
-  return validateCompletions(body);
+/**
+ * Build the household server-action body for a pxid (07-q-household.req.txt).
+ * Shared by the session (address→location) and the replay (full address + the
+ * cookie-keyed session that the insulation/results POSTs depend on). ICP is
+ * always `"$undefined"` — never submitted.
+ */
+export function householdRequestBody(pxid: string): unknown[] {
+  return [
+    {
+      previousData: HOUSEHOLD_PREVIOUS_DATA,
+      modifiedFields: { address_id: pxid, icp_identifier: '$undefined' },
+    },
+  ];
 }
 
 /**
- * Validate the autocomplete response shape. Drift (missing/renamed `completions`
- * array) → structured error log + typed failure. Never throws.
+ * POST the partial address to the autocomplete server-action and validate the
+ * flight's completions row. Drift (missing/renamed shape) → typed failure.
+ */
+async function fetchCompletions(address: string, jar: CookieJar): Promise<CompletionsResult> {
+  let flight: string;
+  try {
+    flight = await postAction(
+      POWERSWITCH_BASE_URL + '/',
+      [address], // 03-autocomplete.req.txt body: ["<address>"]
+      AUTOCOMPLETE_ACTION,
+      jar
+    );
+  } catch (error) {
+    return { status: 'error', reason: error instanceof Error ? error.message : 'autocomplete fetch failed' };
+  }
+
+  const obj = findFlightObject(flight, 'completions');
+  if (!obj) {
+    logDrift('no completions row in autocomplete flight', flight);
+    return { status: 'drift', reason: 'missing_completions_row' };
+  }
+  return validateCompletions(obj);
+}
+
+/**
+ * Validate the autocomplete completion object. Drift (missing/non-array
+ * `completions`, or a malformed entry) → structured error + typed failure.
  */
 export function validateCompletions(body: unknown): CompletionsResult {
   if (body === null || typeof body !== 'object') {
@@ -242,18 +354,26 @@ export function validateCompletions(body: unknown): CompletionsResult {
 }
 
 /**
- * Resolve a pxid to the internal location id via the questionnaire redirect.
- * GET /questionnaire/household?address_id={pxid} redirects to
- * /questionnaire/{locationId}/... — we extract the first integer path segment.
- * Returns null if it can't be parsed (resolve is still useful without it).
+ * Resolve a pxid to the internal location id via POST /questionnaire/household
+ * (07-q-household.res.txt: result.electricity_location.id = 267). Returns null
+ * if the flight lacks the location (a resolve is still useful without it).
  */
-async function resolveLocationId(pxid: string): Promise<string | null> {
+async function resolveLocationId(pxid: string, jar: CookieJar): Promise<string | null> {
   try {
-    const url = `${POWERSWITCH_BASE_URL}/questionnaire/household?address_id=${encodeURIComponent(pxid)}`;
-    const location = await getLocationHeaderWithBackoff(url);
-    if (!location) return null;
-    const match = location.match(/\/questionnaire\/(\d+)\b/);
-    return match?.[1] ?? null;
+    const flight = await postAction(
+      `${POWERSWITCH_BASE_URL}/questionnaire/household?address_id=${encodeURIComponent(pxid)}`,
+      householdRequestBody(pxid),
+      HOUSEHOLD_ACTION,
+      jar
+    );
+    const obj = findFlightObject(flight, 'result');
+    if (!obj) return null;
+    const result = obj.result;
+    if (result === null || typeof result !== 'object') return null;
+    const loc = (result as Record<string, unknown>).electricity_location;
+    if (loc === null || typeof loc !== 'object') return null;
+    const id = (loc as Record<string, unknown>).id;
+    return typeof id === 'number' ? String(id) : null;
   } catch (error) {
     console.log(JSON.stringify({
       type: 'powerswitch_location_resolve_failed',
@@ -263,84 +383,6 @@ async function resolveLocationId(pxid: string): Promise<string | null> {
     }));
     return null;
   }
-}
-
-/**
- * POST with retry + backoff. Returns parsed JSON. Identified user agent on
- * every attempt. Sequential by construction (no Promise.all anywhere here).
- */
-async function postWithBackoff(
-  url: string,
-  body: URLSearchParams,
-  extraHeaders: Record<string, string>
-): Promise<unknown> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: {
-          'User-Agent': POWERSWITCH_USER_AGENT,
-          'Content-Type': 'application/x-www-form-urlencoded',
-          Accept: 'application/json',
-          ...extraHeaders,
-        },
-        body,
-        redirect: 'error', // we don't expect a redirect on the server-action
-        cf: { cacheTtl: 0 },
-      });
-      if (response.status >= 500 && attempt < MAX_RETRIES) {
-        await delay(BACKOFF_BASE_MS * 2 ** (attempt - 1));
-        continue;
-      }
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
-      }
-      return await response.json();
-    } catch (error) {
-      lastError = error;
-      if (attempt < MAX_RETRIES) {
-        await delay(BACKOFF_BASE_MS * 2 ** (attempt - 1));
-      }
-    }
-  }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error('POST failed after retries');
-}
-
-/**
- * GET the Location header from the questionnaire redirect (manual redirect,
- * so we capture the header rather than follow it). Retries on transient errors.
- */
-async function getLocationHeaderWithBackoff(url: string): Promise<string | null> {
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-    try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          'User-Agent': POWERSWITCH_USER_AGENT,
-          Accept: 'text/html',
-        },
-        redirect: 'manual', // capture the Location header, don't follow
-        cf: { cacheTtl: 0 },
-      });
-      // A manual redirect surfaces as a 3xx with a Location header.
-      const location = response.headers.get('Location') ?? response.headers.get('location');
-      if (location) return location;
-      // Some deploys may return 200 with the id in the body path; tolerate null.
-      return null;
-    } catch (error) {
-      lastError = error;
-      if (attempt < MAX_RETRIES) {
-        await delay(BACKOFF_BASE_MS * 2 ** (attempt - 1));
-      }
-    }
-  }
-  throw lastError instanceof Error
-    ? lastError
-    : new Error('GET location header failed after retries');
 }
 
 // ---------------------------------------------------------------------------
@@ -354,17 +396,14 @@ function delay(ms: number): Promise<void> {
 /**
  * Whether an address string carries a unit-level prefix. NZ unit conventions:
  *   - "12A ..." / "1/12 ..." (unit/number), or a leading letter then number.
- * A bare street number like "1 Queen Street" or "12 Birkdale Road" has NO unit.
- * Heuristic only — used to decide whether to auto-pick a base address.
+ * A bare street number like "1 Queen Street" has NO unit. Heuristic only —
+ * used to decide whether to auto-pick a base address.
  */
 export function addressHasUnit(address: string): boolean {
   const trimmed = address.trim();
-  // "1/12 ..." — slash-separated unit prefix.
-  if (/^\d+\s*\/\s*\d+/.test(trimmed)) return true;
-  // "12A ..." — number immediately followed by a letter.
-  if (/^\d+[A-Za-z]\b/.test(trimmed)) return true;
-  // "Unit 3", "Flat 2", "Apartment 12", "U 3" prefixes.
-  if (/^(unit|flat|apartment|apt|u|f)\s+\w+\b/i.test(trimmed)) return true;
+  if (/^\d+\s*\/\s*\d+/.test(trimmed)) return true; // "1/12 ..."
+  if (/^\d+[A-Za-z]\b/.test(trimmed)) return true; // "12A ..."
+  if (/^(unit|flat|apartment|apt|u|f)\s+\w+\b/i.test(trimmed)) return true; // "Unit 3 ..."
   return false;
 }
 

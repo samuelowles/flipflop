@@ -1,20 +1,23 @@
 /**
- * #221 — Powerswitch RSC results parser.
+ * #221/#240 — Powerswitch RSC results parser (rebuilt against REAL captures).
  *
- * Parses the RSC (React Server Components) flight stream returned by
- * `GET /results?p={token}` into a structured plan set. The flight format is
- * line-keyed: each line is `id:JSON` (or a bare JSON value) and the
- * plan/usage objects are plain JSON values embedded in the stream.
+ * Parses the React Server Components flight stream returned by
+ * `POST /results?p={token}` (capture: workers/tests/fixtures/powerswitch-live/
+ * 18-results.res.txt) into a structured plan set. The flight is line-keyed:
+ * each line is `id:JSON`; the plan/usage objects live on the `1:{…}` row.
+ *
+ * CARDINAL RULE (issue #240): every schema assertion below traces to a byte in
+ * 18-results.res.txt. The earlier build was written against invented fixtures
+ * and was wrong on every point — annual_kwh (real: household.usage.electricity),
+ * string plan ids (real: NUMERIC, e.g. 176000), per-tariff description/
+ * prices_last_changed (real: plan-level, not per-tariff), OFFPEAK register
+ * (real: OP). This parser keys on the real shapes only.
  *
  * STRICT SCHEMA GUARD: on ANY shape mismatch the parser returns a `drift`
  * outcome and emits a structured `powerswitch_schema_drift` error. It NEVER
  * returns a partial/garbage parse — callers MUST abort without persisting on
- * drift. This mirrors the `MONEY_FIELD_MISSING_THRESHOLD` drift-guard
- * philosophy in services/powerswitchScraper.ts.
- *
- * Separated from powerswitchReplay.ts because schema validation is a distinct,
- * independently-testable responsibility; the replay orchestrates HTTP + caching
- * and consumes this parser.
+ * drift (mirrors the MONEY_FIELD_MISSING_THRESHOLD philosophy in
+ * services/powerswitchScraper.ts).
  */
 
 // ---------------------------------------------------------------------------
@@ -23,39 +26,44 @@
 
 export type TariffDisplayType = 'amount' | 'percentage';
 
-/** A single tariff line within a plan (F, D1, N1, TD3, ...). */
+/**
+ * A single tariff line within a plan. Real shape (18-results.res.txt):
+ * `{id, code, name, type, value, weight, display, value_array, display_type,
+ *   requires_bill_input, register_content_code}`. We carry the fields the mapper
+ * + drift guard depend on; per-tariff description/prices_last_changed do NOT
+ * exist in the real capture (long descriptions are separate `2:T…` text lines).
+ */
 export interface ParsedTariff {
+  /** Tariff code: F, D1, N1, TD3, PP, EC, ... (real, from capture). */
   readonly code: string;
+  /** Human-readable tariff name. */
   readonly name: string;
-  /** Scalar value — cents/kWh (amount) or percentage off (percentage). */
+  /** value is $/kWh (amount) or a fraction (percentage, e.g. 0.2685 = 26.85%). */
   readonly value: number;
-  /** 12-month series of the same unit as `value`. */
-  readonly valueArray: ReadonlyArray<number>;
   readonly displayType: TariffDisplayType;
-  /** Register content code: PK, OFFPEAK, FREE, F, ... */
+  /** Register content code: PK, OP, FREE, F, TD3, EC, ED, IN, PP, SH, UN, "". */
   readonly registerContentCode: string;
-  /** Free-text description (carries TOU window text + special conditions). */
-  readonly description: string;
-  /** ISO date the price was last changed. */
-  readonly pricesLastChanged: string | null;
 }
 
-/** A plan within the results set. */
+/** A plan within the results set. `id`/`retailerId` are stringified at the boundary. */
 export interface ParsedPlan {
+  /** Numeric Powerswitch plan id, stringified (e.g. "176000"). */
   readonly id: string;
   readonly name: string;
+  /** Retailer display name (real: plan.retailer.name, e.g. "Electric Kiwi"). */
   readonly retailerId: string;
   readonly energyType: string;
   readonly fixedTerm: boolean;
-  /** ISO date or null. */
-  readonly priceChangeDue: string | null;
+  /** Real shape: boolean (false normally, true when a price change is pending). */
+  readonly priceChangeDue: boolean | string;
   readonly tariffs: ReadonlyArray<ParsedTariff>;
 }
 
-/** Household usage estimate. */
+/** Household usage estimate. Field names preserved — the consumer reads annualKwh. */
 export interface ParsedUsage {
+  /** Annual kWh — real: household.usage.electricity (e.g. 7007.6875). */
   readonly annualKwh: number;
-  /** 12-month series (Jan..Dec). */
+  /** 12-month series (Jan..Dec) — real: household.usage.electricity_monthly. */
   readonly monthlyKwh: ReadonlyArray<number>;
 }
 
@@ -75,11 +83,10 @@ export type ParseRscOutcome =
 // ---------------------------------------------------------------------------
 
 /**
- * Split the flight stream into its `id:JSON` lines and parse each. Returns the
- * list of parsed top-level values (objects). Lines that are not valid JSON or
- * not objects are skipped (the flight carries control lines too); the schema
- * guard below validates the *extracted* objects, so skipped control lines are
- * safe.
+ * Split the flight stream into its `id:JSON` lines and parse each. Lines that
+ * are not valid JSON (the `2:T…`/`3:T…` prose lines, control/prefetch hints) or
+ * not objects are skipped; the schema guard validates the extracted objects, so
+ * skipped control lines are safe.
  */
 export function extractFlightRows(flight: string): unknown[] {
   const rows: unknown[] = [];
@@ -96,6 +103,18 @@ export function extractFlightRows(flight: string): unknown[] {
     }
   }
   return rows;
+}
+
+/**
+ * Find the first object row in the flight that contains `key`. Used by the
+ * session (key 'completions') and replay (keys 'result'/'profile') to pull the
+ * single payload object off the `1:{…}` row without re-parsing the whole stream.
+ */
+export function findFlightObject(flight: string, key: string): Record<string, unknown> | null {
+  for (const row of extractFlightRows(flight)) {
+    if (isObject(row) && key in row) return row;
+  }
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -115,15 +134,16 @@ function validateUsage(obj: Record<string, unknown>): { readonly ok: true; reado
   if (!isObject(household)) return { ok: false, reason: 'missing_household' };
   const usage = household.usage;
   if (!isObject(usage)) return { ok: false, reason: 'missing_household_usage' };
-  if (!isNumber(usage.annual_kwh)) return { ok: false, reason: 'usage_annual_kwh_not_number' };
-  const monthly = usage.monthly_kwh;
+  // Real key is `electricity` (NOT annual_kwh). 18-results.res.txt: usage.electricity: 7007.6875.
+  if (!isNumber(usage.electricity)) return { ok: false, reason: 'usage_electricity_not_number' };
+  const monthly = usage.electricity_monthly;
   if (!Array.isArray(monthly) || monthly.length !== 12 || !monthly.every(isNumber)) {
-    return { ok: false, reason: 'usage_monthly_kwh_not_12_numbers' };
+    return { ok: false, reason: 'usage_electricity_monthly_not_12_numbers' };
   }
   return {
     ok: true,
     value: {
-      annualKwh: usage.annual_kwh,
+      annualKwh: usage.electricity,
       monthlyKwh: monthly as number[],
     },
   };
@@ -131,46 +151,43 @@ function validateUsage(obj: Record<string, unknown>): { readonly ok: true; reado
 
 function validateTariff(v: unknown): { readonly ok: true; readonly value: ParsedTariff } | { readonly ok: false; readonly reason: string } {
   if (!isObject(v)) return { ok: false, reason: 'tariff_not_object' };
-  const { code, name, value, value_array, display_type, register_content_code, description, prices_last_changed } = v as Record<string, unknown>;
+  const { code, name, value, display_type, register_content_code } = v as Record<string, unknown>;
   if (typeof code !== 'string' || !code) return { ok: false, reason: 'tariff_code_missing' };
   if (typeof name !== 'string') return { ok: false, reason: 'tariff_name_not_string' };
   if (!isNumber(value)) return { ok: false, reason: 'tariff_value_not_number' };
-  if (!Array.isArray(value_array) || value_array.length !== 12 || !value_array.every(isNumber)) {
-    return { ok: false, reason: 'tariff_value_array_not_12_numbers' };
-  }
   if (display_type !== 'amount' && display_type !== 'percentage') {
     return { ok: false, reason: 'tariff_display_type_invalid' };
   }
   if (typeof register_content_code !== 'string') return { ok: false, reason: 'tariff_register_content_code_not_string' };
-  if (typeof description !== 'string') return { ok: false, reason: 'tariff_description_not_string' };
-  if (prices_last_changed !== null && typeof prices_last_changed !== 'string') {
-    return { ok: false, reason: 'tariff_prices_last_changed_not_string_or_null' };
-  }
   return {
     ok: true,
     value: {
       code,
       name,
       value,
-      valueArray: value_array as number[],
       displayType: display_type as TariffDisplayType,
       registerContentCode: register_content_code,
-      description,
-      pricesLastChanged: prices_last_changed as string | null,
     },
   };
 }
 
 function validatePlan(v: unknown): { readonly ok: true; readonly value: ParsedPlan } | { readonly ok: false; readonly reason: string } {
   if (!isObject(v)) return { ok: false, reason: 'plan_not_object' };
-  const { id, name, retailer_id, energy_type, fixed_term, price_change_due, tariffs } = v as Record<string, unknown>;
-  if (typeof id !== 'string' || !id) return { ok: false, reason: 'plan_id_missing' };
+  const { id, name, retailer_id, retailer, energy_type, fixed_term, price_change_due, tariffs } = v as Record<string, unknown>;
+  // Real plan id + retailer_id are NUMERIC (e.g. 176000, 68). Stringify at the boundary.
+  if (!isNumber(id)) return { ok: false, reason: 'plan_id_not_number' };
   if (typeof name !== 'string') return { ok: false, reason: 'plan_name_not_string' };
-  if (typeof retailer_id !== 'string') return { ok: false, reason: 'plan_retailer_id_not_string' };
+  if (!isNumber(retailer_id)) return { ok: false, reason: 'plan_retailer_id_not_number' };
+  // Retailer display name rides on the plan (plan.retailer.name) — no separate fetch.
+  const retailerName = isObject(retailer) && typeof retailer.name === 'string'
+    ? retailer.name
+    : String(retailer_id);
   if (typeof energy_type !== 'string') return { ok: false, reason: 'plan_energy_type_not_string' };
   if (typeof fixed_term !== 'boolean') return { ok: false, reason: 'plan_fixed_term_not_boolean' };
-  if (price_change_due !== null && typeof price_change_due !== 'string') {
-    return { ok: false, reason: 'plan_price_change_due_not_string_or_null' };
+  // Real: boolean (false normally, true on 174456 Broadband Bundle). README notes
+  // it can also be a date string — accept both, reject anything else.
+  if (typeof price_change_due !== 'boolean' && typeof price_change_due !== 'string') {
+    return { ok: false, reason: 'plan_price_change_due_not_boolean_or_string' };
   }
   if (!Array.isArray(tariffs) || tariffs.length === 0) return { ok: false, reason: 'plan_tariffs_empty_or_missing' };
   const parsedTariffs: ParsedTariff[] = [];
@@ -182,12 +199,12 @@ function validatePlan(v: unknown): { readonly ok: true; readonly value: ParsedPl
   return {
     ok: true,
     value: {
-      id,
+      id: String(id),
       name,
-      retailerId: retailer_id,
+      retailerId: retailerName,
       energyType: energy_type,
       fixedTerm: fixed_term,
-      priceChangeDue: price_change_due as string | null,
+      priceChangeDue: price_change_due as boolean | string,
       tariffs: parsedTariffs,
     },
   };

@@ -20,7 +20,7 @@ import { getBillsByUserId } from '../models/bills';
 import { createComparison } from '../models/comparisons';
 import { readCachedResults } from './powerswitchReplay';
 import { parseRscResults } from './powerswitchRscParser';
-import { rsc_results_flight } from './powerswitchFixtures';
+import { rsc_results_flight } from './powerswitchLiveFixtures';
 import type { Bill } from '../types/bill';
 import type { ComparisonResultItem, PlanComparison } from '../types/comparison';
 import type { ParsedResults } from './powerswitchRscParser';
@@ -152,11 +152,9 @@ describe('compareUserWithPowerswitch — E2E (#222)', () => {
       plans: [
         {
           id: 'p', name: 'P', retailerId: 'r', energyType: 'electricity',
-          fixedTerm: false, priceChangeDue: null,
+          fixedTerm: false, priceChangeDue: false,
           tariffs: [
-            { code: 'TD3', name: 'x', value: -10, valueArray: Array(12).fill(-10),
-              displayType: 'percentage', registerContentCode: 'FREE',
-              description: '', pricesLastChanged: null },
+            { code: 'TD3', name: 'x', value: -10, displayType: 'percentage', registerContentCode: 'FREE' },
           ],
         },
       ],
@@ -206,8 +204,8 @@ describe('compareUserWithPowerswitch — E2E (#222)', () => {
     // The Python comparator was POSTed the mapped plans (snake_cased).
     const [, init] = mockFetch.mock.calls[0]!;
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.availablePlans).toHaveLength(3);
-    expect(body.availablePlans[0].retailer_id).toBe('mercury');
+    expect(body.availablePlans).toHaveLength(15);
+    expect(body.availablePlans[0].retailer_id).toBe('Electric Kiwi');
     // Usage came from the real bill (600 kWh / 30 days = 20/day).
     expect(body.usageProfile.avgDailyKwh).toBe(20);
   });
@@ -252,10 +250,10 @@ describe('compareUserWithPowerswitch — E2E (#222)', () => {
     });
     expect(out.status).toBe('ok');
 
-    // avgDailyKwh = annualKwh (7840) / 365 ≈ 21.48.
+    // avgDailyKwh = annualKwh (7007.6875) / 365 ≈ 19.2.
     const [, init] = mockFetch.mock.calls[0]!;
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.usageProfile.avgDailyKwh).toBeCloseTo(7840 / 365, 1);
+    expect(body.usageProfile.avgDailyKwh).toBeCloseTo(7007.6875 / 365, 1);
     // billId is null (no bill), billIdsJson is null.
     const cmpInput = vi.mocked(createComparison).mock.calls[0]![1];
     expect(cmpInput.billId).toBeNull();
