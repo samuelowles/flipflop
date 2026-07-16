@@ -92,7 +92,7 @@ interface TransitionContext {
   readonly comparisonAvailable?: boolean;
 }
 
-const KV_KEY_PREFIX = 'state:';
+export const KV_KEY_PREFIX = 'state:';
 const KV_TTL_SECONDS = 180 * 24 * 60 * 60; // 180 days
 
 // Generate a request_id when the caller does not provide one (mirrors the

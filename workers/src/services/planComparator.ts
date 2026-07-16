@@ -35,7 +35,7 @@ interface CompareEnv {
 // AC #74 — idempotency: skip enqueuing a notify for a comparison_id that was
 // already notified. KV key per comparison; TTL matches the notify cooldown
 // window so a re-compare that produces a fresh comparison_id can notify later.
-const NOTIFIED_KEY_PREFIX = 'notified:';
+export const NOTIFIED_KEY_PREFIX = 'notified:';
 const NOTIFIED_KEY_TTL_SECONDS = 30 * 24 * 60 * 60; // 30 days
 
 // Minimal runtime validation — no zod dependency (Issue #123 boundary check).

@@ -49,21 +49,21 @@ export function meetsThreshold(savingCents: number, thresholdCents: number): boo
 // Legacy default retained for reference / cooldown material-change calc.
 // Per-user threshold is read via getNotificationThreshold (issue #126).
 const NOTIFY_COOLDOWN_DAYS = 30;
-const NOTIFY_COOLDOWN_KEY_PREFIX = 'notify_cooldown:';
+export const NOTIFY_COOLDOWN_KEY_PREFIX = 'notify_cooldown:';
 const MATERIAL_CHANGE_THRESHOLD_PCT = 20; // notify if saving changes by >20%
 
 // Issue #128 — send-side dedup. A THIRD guard, distinct from the enqueue-side
 // `notified:{comparisonId}` (#74, 30d) and the per-user `notify_cooldown:`
 // (#74, 30d). This one fires at the dispatch moment and drops a second send
 // of the SAME plan recommendation to the SAME user within 1h.
-const SEND_DEDUP_KEY_PREFIX = 'dedup:';
+export const SEND_DEDUP_KEY_PREFIX = 'dedup:';
 const SEND_DEDUP_TTL_SECONDS = 60 * 60; // 1 hour
 
 // Issue #127 — per-user+plan cooldown. A FOURTH guard, distinct from the three
 // above. Supersedes a second notification of the SAME user about the SAME best
 // plan within 7 days (PRD 3.4). Keying on planId means a plan change clears the
 // cooldown automatically (different plan -> different key -> absent).
-const COOLDOWN_KEY_PREFIX = 'cooldown:';
+export const COOLDOWN_KEY_PREFIX = 'cooldown:';
 const COOLDOWN_TTL_SECONDS = 7 * 24 * 60 * 60; // 7 days
 
 /**

@@ -10,7 +10,7 @@ import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates
 import { adminRateLimitStatus } from './routes/adminRateLimit';
 import { adminListNotifications } from './routes/adminNotifications';
 import { createSwitchRoute } from './routes/switch';
-import { flowStatusPage, flowStatusJson, adminFlowLink } from './routes/flow';
+import { flowStatusPage, flowStatusJson, adminFlowLink, adminTestRunReset } from './routes/flow';
 import { purgeNotificationAudit } from './models/notificationAudit';
 import { pollAllUsers } from './services/emailPoller';
 import { refreshPlans, isEiep14aEnabled, type EnvWithPlans } from './services/eiep14a';
@@ -111,6 +111,10 @@ app.get('/admin/notifications', adminListNotifications);
 // Issue #241: admin-only signed-link minter. Resolves phone → userId and
 // returns a /flow/status signed link. Inherits the /admin/* adminAuth.
 app.get('/admin/flow-link', adminFlowLink);
+
+// Issue #242: admin-only per-user flow-state reset for clean test re-runs
+// (docs/TESTING_RUN.md §5). Inherits the /admin/* adminAuth middleware.
+app.post('/admin/test-run/reset', adminTestRunReset);
 
 // Issue #228 / #241 (Epic 13 DoD): FlowTrace observation routes. Auth happens
 // INSIDE the handlers (signed-link triple OR admin Bearer) so a browser can

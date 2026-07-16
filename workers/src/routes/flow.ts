@@ -19,6 +19,7 @@
 import type { Context } from 'hono';
 import { getUserByPhone } from '../models/users';
 import { readFlowTrace } from '../services/flowTrace';
+import { executeReset } from '../services/testRunReset';
 import { verifyFlowLink, mintFlowLink } from '../services/flowLink';
 import { timingSafeEqual } from '../middleware/adminAuth';
 import type { FlowStage, FlowStageStatus } from '../types/flowTrace';
@@ -109,6 +110,33 @@ export async function adminFlowLink(c: Context): Promise<Response> {
   if (!user) return c.json({ error: `No user found for phone ${phone}` }, 404);
   const url = await mintFlowLink(env.ENCRYPTION_KEY, user.id);
   return c.json({ url });
+}
+
+/**
+ * POST /admin/test-run/reset — admin-only (gated by the /admin/* adminAuth
+ * middleware in index.ts). Clears ONE user's per-user flow state so the
+ * operator can re-run the end-to-end flow cleanly (docs/TESTING_RUN.md §5).
+ * Body: { "phone": "+64…" } OR { "userId": "…" }. Resolves phone → userId via
+ * getUserByPhone (same path as /admin/flow-link), then delegates to
+ * executeReset (services/testRunReset.ts — imports the real KV key constants,
+ * so this can never drift). Bills dedup persists by design; globals untouched.
+ */
+export async function adminTestRunReset(c: Context): Promise<Response> {
+  const env = c.env as FlowRouteEnv;
+  const body = await c.req.json().catch(() => ({})) as { phone?: string; userId?: string };
+
+  let userId = body.userId?.trim();
+  if (!userId) {
+    const phone = (body.phone ?? '').trim();
+    if (!phone) return c.json({ error: 'Provide "phone" or "userId"' }, 400);
+    if (!env.ENCRYPTION_KEY) return c.json({ error: 'Encryption not configured' }, 500);
+    const user = await getUserByPhone(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, phone);
+    if (!user) return c.json({ error: `No user found for phone ${phone}` }, 404);
+    userId = user.id;
+  }
+
+  const { deleted } = await executeReset({ KV: env.KV }, userId);
+  return c.json({ userId, deleted: [...deleted], count: deleted.length });
 }
 
 /** Server-rendered HTML trace page (polls status.json every 2s). */
