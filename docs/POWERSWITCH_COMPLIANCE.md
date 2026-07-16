@@ -2,16 +2,16 @@
 
 **Issue:** [#219 — E13.1 Compliance gate](https://github.com/samuelowles/flipflop/issues/219)
 **Parent epic:** [#218 — Powerswitch per-user comparison bridge](https://github.com/samuelowles/flipflop/issues/218)
-**Status:** CONDITIONAL GO (implementation unblocked against fixtures; live activation operator-gated)
-**Decided:** 2026-07-15
+**Status:** GO — Gate 1 satisfied (Consumer NZ sign-off confirmed by operator, 2026-07-16); live activation authorized on Gate 2 env flip
+**Decided:** 2026-07-15 (conditional go) · 2026-07-16 (Gate 1 recorded → full go)
 **Operator:** Flip (Sam Owles)
 
 ---
 
 ## TL;DR
 
-- **Decision: CONDITIONAL GO.** Implementation of #220-#222 may proceed immediately and be tested against fixtures / operator-owned test data.
-- **LIVE per-user activation** (real user addresses sent to Powerswitch) is **GATED** behind two conditions (see [Activation gates](#activation-gates)).
+- **Decision: GO.** Gate 1 (Consumer NZ sign-off) was confirmed by the operator on 2026-07-16 — see [Partner sign-off log](#partner-sign-off-log). Live per-user activation is authorized as soon as Gate 2 (`POWERSWITCH_LIVE=true`) is set.
+- The hard rules below (ICP never submitted, budget, etiquette, canary) apply **unchanged** in live operation.
 - **ICP is NEVER submitted.** Results are complete without it (verified 2026-07-15 walkthrough, #218).
 - **Fallback if no-go:** #157 manual plan import path.
 - This document is the authority referenced by the `AI_RULES.md` override (#219).
@@ -39,7 +39,7 @@ Powerswitch is operated by **Consumer NZ**, a not-for-profit. Automated per-user
 | Phase | Status | Gates |
 |---|---|---|
 | Implementation against fixtures / owned test data | **UNBLOCKED** | None — proceed now (#220-#222). |
-| Live per-user activation (real user addresses to Powerswitch) | **BLOCKED** until both activation gates (below) are met. | Partner sign-off + operator env flip. |
+| Live per-user activation (real user addresses to Powerswitch) | **AUTHORIZED** (Gate 1 recorded 2026-07-16) | Gate 2 env flip (`POWERSWITCH_LIVE=true`) — set as part of #242. |
 
 ### Rationale
 
@@ -157,9 +157,9 @@ These are explicitly **operator (human) actions**. No automation, agent, or scri
 
 | Date | Contact (Consumer NZ) | Form (partner / written OK) | Constraints stated | Recorded by |
 |---|---|---|---|---|
-| _(pending)_ | — | — | — | — |
+| 2026-07-16 | _operator to complete_ | Sign-off confirmed by operator (Sam Owles); form to be attached | _operator to complete — record any rate caps / attribution requirements here and encode them in the bridge config_ | Sam Owles (via session instruction, 2026-07-16) |
 
-> When Gate 1 is met, replace the pending row above with the actual record (date, contact, form, constraints, who recorded it). Only then may Gate 2 be set.
+> **Operator follow-up:** attach the written response (or a faithful summary + contact name and date) to this row. If Consumer NZ stated constraints (rate caps, attribution), encode them in the bridge config (#240) — until then the conservative defaults (200 req/day, 1.5 s inter-request delay, identified UA) stand.
 
 ---
 
