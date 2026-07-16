@@ -10,7 +10,7 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import { flowStatusPage, flowStatusJson, adminFlowLink } from './flow';
+import { flowStatusPage, flowStatusJson, adminFlowLink, adminTestRunReset } from './flow';
 import { adminAuth } from '../middleware/adminAuth';
 import * as users from '../models/users';
 import * as flowTrace from '../services/flowTrace';
@@ -42,6 +42,7 @@ function buildApp(_kv: KVNamespace): { app: Hono; signedLink: Promise<string> } 
   // /admin/flow-link inherits the /admin/* adminAuth (registered here).
   app.use('/admin/*', adminAuth);
   app.get('/admin/flow-link', adminFlowLink);
+  app.post('/admin/test-run/reset', adminTestRunReset);
   return { app, signedLink: mintFlowLink(ENCRYPTION_KEY, USER_ID) };
 }
 
@@ -211,3 +212,65 @@ describe('GET /admin/flow-link — signed-link minter (#241)', () => {
     expect(res.status).toBe(404);
   });
 });
+
+describe('POST /admin/test-run/reset — per-user flow reset (#242)', () => {
+  beforeEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it('returns 401 without admin Bearer (auth gate)', async () => {
+    const kv = makeKV();
+    const { app } = buildApp(kv);
+    const res = await app.request(
+      '/admin/test-run/reset',
+      { method: 'POST', body: JSON.stringify({ userId: USER_ID }) },
+      { KV: kv, ENCRYPTION_KEY, ADMIN_API_KEY }
+    );
+    expect(res.status).toBe(401);
+  });
+
+  it('returns 400 when neither phone nor userId is provided', async () => {
+    const kv = makeKV();
+    const { app } = buildApp(kv);
+    const res = await app.request(
+      '/admin/test-run/reset',
+      { method: 'POST', body: JSON.stringify({}), headers: { Authorization: `Bearer ${ADMIN_API_KEY}`, 'Content-Type': 'application/json' } },
+      { KV: kv, ENCRYPTION_KEY, ADMIN_API_KEY, DB: {} as D1Database }
+    );
+    expect(res.status).toBe(400);
+  });
+
+  it('deletes the user’s per-user keys and returns them (userId path)', async () => {
+    const kv = makeKV();
+    // Seed two exact per-user keys (prefixed dedup keys aren’t listed by this
+    // mock; executeReset’s prefix deletion is covered in testRunReset.test.ts).
+    kv.store.set(`flow:${USER_ID}`, '{}');
+    kv.store.set(`powerswitch:results:${USER_ID}`, '{}');
+    const { app } = buildApp(kv);
+    const res = await app.request(
+      '/admin/test-run/reset',
+      { method: 'POST', body: JSON.stringify({ userId: USER_ID }), headers: { Authorization: `Bearer ${ADMIN_API_KEY}`, 'Content-Type': 'application/json' } },
+      { KV: kv, ENCRYPTION_KEY, ADMIN_API_KEY, DB: {} as D1Database }
+    );
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { userId: string; count: number; deleted: string[] };
+    expect(body.userId).toBe(USER_ID);
+    expect(body.count).toBe(2);
+    expect(body.deleted).toContain(`flow:${USER_ID}`);
+    expect(body.deleted).toContain(`powerswitch:results:${USER_ID}`);
+    expect(kv.store.has(`flow:${USER_ID}`)).toBe(false);
+  });
+
+  it('resolves phone → userId and 404s when no user matches', async () => {
+    const kv = makeKV();
+    vi.spyOn(users, 'getUserByPhone').mockResolvedValue(null);
+    const { app } = buildApp(kv);
+    const res = await app.request(
+      '/admin/test-run/reset',
+      { method: 'POST', body: JSON.stringify({ phone: '+64219999999' }), headers: { Authorization: `Bearer ${ADMIN_API_KEY}`, 'Content-Type': 'application/json' } },
+      { KV: kv, ENCRYPTION_KEY, ADMIN_API_KEY, DB: {} as D1Database }
+    );
+    expect(res.status).toBe(404);
+  });
+});
+

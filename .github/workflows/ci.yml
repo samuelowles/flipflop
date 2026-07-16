@@ -16,7 +16,8 @@ jobs:
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: "20"
+          # Node 22 LTS — wrangler ≥4 (dev/deploy/dry-run) requires Node ≥22.
+          node-version: "22"
           cache: npm
           cache-dependency-path: workers/package-lock.json
 
@@ -33,6 +34,13 @@ jobs:
         # TODO(phase-2): re-enable --coverage once @cloudflare/vitest-pool-workers
         # supports @vitest/coverage-v8 in workerd (tracked in #135).
         run: npm test
+
+      # Issue #242 — deploy dry-run as a CI gate so binding/entrypoint breakage
+      # (e.g. a Durable Object declared in wrangler.toml but not exported from
+      # src/index.ts — the RateLimiter blocker that left master undeployable)
+      # can never merge silently again. Bundles the Worker without deploying.
+      - name: Wrangler deploy dry-run (binding/entrypoint guard)
+        run: npx wrangler deploy --dry-run --outdir /tmp/dryrun
 
       # Coverage upload is disabled until --coverage is re-enabled above.
       - name: Upload coverage report

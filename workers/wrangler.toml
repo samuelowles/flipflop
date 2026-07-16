@@ -62,6 +62,16 @@ EIF_EIEP14A_ENABLED = "false"
 # pages only, zero PII. See docs/AI_RULES.md override block + module header.
 POWERSWITCH_SCRAPER_ENABLED = "false"
 
+# Issue #242 — live test deployment flags (Compliance Gate 2: Consumer NZ
+# sign-off recorded 2026-07-16 in docs/POWERSWITCH_COMPLIANCE.md, PR #244).
+# POWERSWITCH_LIVE arms the per-user bridge + daily drift canary (real calls to
+# powerswitch.co.nz). FLOW_TEST_MODE bypasses the notify threshold/cooldown so a
+# test run always fires a WhatsApp send when a trace is active. See
+# docs/TESTING_RUN.md. Hard rules (ICP never submitted, budget, etiquette,
+# canary) unchanged.
+POWERSWITCH_LIVE = "true"
+FLOW_TEST_MODE = "true"
+
 # Durable Object used by src/middleware/rateLimit.ts for atomic per-key rate
 # limiting.  One DO instance per rate-limit key serialises read-modify-write
 # cycles that would race under KV.

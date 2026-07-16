@@ -10,8 +10,8 @@ import type { GmailPollingEnv, RetailerSearchEntry } from './emailPipeline';
 // keep resolving the env type from this module after the pipeline extraction.
 export type { GmailPollingEnv } from './emailPipeline';
 
-const LAST_POLL_KV_PREFIX = 'gmail:lastPoll:';
-const SCAN_PROGRESS_KV_PREFIX = 'gmail:scan:';
+export const LAST_POLL_KV_PREFIX = 'gmail:lastPoll:';
+export const SCAN_PROGRESS_KV_PREFIX = 'gmail:scan:';
 const LAST_POLL_KV_TTL = 365 * 24 * 60 * 60; // 365 days
 const SCAN_PROGRESS_KV_TTL = 3600; // 1 hour
 const INITIAL_LOOKBACK_DAYS = 365;
