@@ -118,6 +118,46 @@ Electric Kiwi bill
 Total: $75.00
 """
 
+# 5. REAL production layout (anonymized, 2026-07 regression): statement page +
+# tax-invoice page. Quirks that broke extraction on a real user's bill:
+# ordinal dates with 2-digit years, $-denominated rates, no plan name, no
+# "Total units" line (Peak/Off-peak/Hour of Power components only), and
+# pdfplumber gluing left-column cells onto table rows — the address arrives
+# as "Tax Invoice <addr>" and the Peak row as "<city> <postcode> Peak ...".
+BILL_REAL_LAYOUT = """
+Statement
+OPENING BALANCE $418.59
+Description Date Credit Debit Balance
+Sam Sample
+45 SAMPLE ROAD Payment - Thank you 1st Jul $418.59 $0.00
+BEACH HAVEN
+AUCKLAND 0626
+New Power Charges $140.36 $140.36
+Customer #:
+12345678 Credit Card Surcharge $1.05 $141.41
+Date:
+TOTAL TO PAY $141.41
+8th July 2026
+Electric Kiwi Limited
+GST #: 113-618-701
+Tax Invoice 45 SAMPLE ROAD, BEACH HAVEN, AUCKLAND, 0626
+Invoice #: 1234567890 ICP 000123456789EK9
+POWER USAGE 24th Jun 26 - 2nd Jul 26 inclusive
+Sam Sample
+45 SAMPLE ROAD Description Usage Rate (incl GST) Total
+BEACH HAVEN
+AUCKLAND 0626 Peak Charges 98.31 kWh $0.5671/kWh $55.75
+Off-peak Charges 175.62 kWh $0.4254/kWh $74.71
+Customer #:
+12345678 Hour of Power Savings 24.56 kWh FREE $0.00
+Date:
+Supply Charges 9 days $1.1000/day $9.90
+8th July 2026
+New Power Charges (Incl GST) $140.36
+TOTAL NEW USAGE CHARGES - All Services $140.36
+See statement on page 1 for final total due
+"""
+
 
 class TestElectricKiwiParser:
     def test_parser_registered(self):
@@ -250,3 +290,42 @@ class TestElectricKiwiParser:
             "raw_json",
         ):
             assert hasattr(result, field), f"missing schema field: {field}"
+
+    # -----------------------------------------------------------------
+    # Real production layout regression (2026-07): the bill must clear
+    # the 0.85 parsed threshold and yield pipeline-usable fields.
+    # -----------------------------------------------------------------
+    @patch("pdfplumber.open")
+    def test_real_layout_regression(self, mock_open, parser):
+        mock_open.return_value = _mock_pdf(BILL_REAL_LAYOUT)
+
+        result = parser.parse("real_layout.pdf")
+
+        # Confidence: must reach 'parsed' (this exact layout previously
+        # scored 0.545 and stalled the pipeline at needs_review).
+        assert result.confidence >= 0.85
+
+        # Ordinal + 2-digit-year date range: "24th Jun 26 - 2nd Jul 26".
+        assert result.period_start == "2026-06-24"
+        assert result.period_end == "2026-07-02"
+        assert result.days == 9
+
+        # Usage = Peak + Off-peak + Hour of Power (free kWh is consumption).
+        assert result.usage_kwh == pytest.approx(298.49)
+
+        # $-denominated peak rate -> cents.
+        assert result.c_per_kwh == pytest.approx(56.71)
+        assert result.c_per_day == pytest.approx(110.0)
+
+        # Power charges, not the card-surcharge-inflated statement total.
+        assert result.total_cents == 14036
+
+        # Peak/Off-peak TOU is day_night — NOT controlled ("Off Peak" would
+        # otherwise false-match the controlled-load pattern).
+        assert result.meter_type == "day_night"
+
+        # Address recovered from the glued "Tax Invoice <addr>" line, with
+        # the comma-before-postcode normalised away.
+        assert result.address == "45 SAMPLE ROAD, BEACH HAVEN, AUCKLAND 0626"
+
+        assert result.icp_number == "000123456789EK9"
