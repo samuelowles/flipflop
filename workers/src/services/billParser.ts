@@ -1,5 +1,5 @@
 import { getBillById, markBillCompareEnqueued, updateBillStatus, updateBillParsedData } from '../models/bills';
-import { getUserById } from '../models/users';
+import { getUserById, updateUser } from '../models/users';
 import { sendAndLog } from './messaging';
 import { getRetailerById, retailerParserSlug } from '../models/retailers';
 import { renderTemplate } from './sentTemplates';
@@ -26,6 +26,14 @@ interface ParseServiceResponse {
   readonly break_fee_cents?: number;
   readonly confidence: number;
   readonly error?: string;
+  /**
+   * Supply/installation address extracted from the bill, one normalised
+   * autocomplete-friendly line, or null when not confidently extractable.
+   * Persisted (encrypted) to users.installation_address when the user has
+   * none — the Gmail flow onboards with phone only, and this is the address
+   * ensurePowerswitchResults needs to resolve a Powerswitch pxid.
+   */
+  readonly address?: string | null;
 }
 
 interface CompareMessage {
@@ -239,7 +247,10 @@ export async function handleParseJob(
   const status: Extract<BillStatus, 'parsed' | 'needs_review'> =
     parseResult.confidence >= confidenceThreshold ? 'parsed' : 'needs_review';
 
-  // 6. Update bill with parsed data (sets parsed_at via the model)
+  // 6. Update bill with parsed data (sets parsed_at via the model).
+  //    parsed_json is a plaintext column — keep the address (PII) out of it;
+  //    the address is persisted encrypted on the user row below.
+  const { address: extractedAddress, ...parseResultSansAddress } = parseResult;
   await updateBillParsedData(env.DB, billId, {
     retailerId: parseResult.retailer_id ?? bill.retailerId ?? undefined,
     planName: parseResult.plan_name,
@@ -254,9 +265,38 @@ export async function handleParseJob(
     fixedTermExpiry: parseResult.fixed_term_expiry ?? null,
     breakFeeCents: parseResult.break_fee_cents,
     confidence: parseResult.confidence,
-    parsedJson: JSON.stringify(parseResult),
+    parsedJson: JSON.stringify(parseResultSansAddress),
     status,
   });
+
+  // 6.5. Persist the bill's supply address as the user's installation_address
+  //      (encrypted by updateUser). Gmail-onboarded users have a phone only;
+  //      the bill is the one place their address already exists, and
+  //      ensurePowerswitchResults needs it to resolve a Powerswitch pxid.
+  //      Only-when-absent (never overwrite) and best-effort (a failure here
+  //      must never fail the parse job).
+  const user = await getUserById(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId);
+  if (extractedAddress && user && !user.installationAddress) {
+    try {
+      await updateUser(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId, {
+        installationAddress: extractedAddress,
+      });
+      console.log(JSON.stringify({
+        type: 'parse_address_persisted',
+        billId,
+        userId: bill.userId,
+        timestamp: new Date().toISOString(),
+      }));
+    } catch (addrErr) {
+      console.log(JSON.stringify({
+        type: 'parse_address_persist_failed',
+        billId,
+        userId: bill.userId,
+        error: addrErr instanceof Error ? addrErr.message : 'unknown',
+        timestamp: new Date().toISOString(),
+      }));
+    }
+  }
 
   // 7. Enqueue comparison if confidence is good.
   //    Idempotency (Issue #43): atomically claim the enqueue via a conditional
@@ -290,8 +330,8 @@ export async function handleParseJob(
     }
   }
 
-  // 8. Send confirmation message to user (Epic #2 #42: bill_received template)
-  const user = await getUserById(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId);
+  // 8. Send confirmation message to user (Epic #2 #42: bill_received template).
+  //    Reuses the user row fetched in step 6.5.
   const phone = user?.phone ?? null;
   if (phone) {
     // Resolve retailer display name from the bill's retailerId.

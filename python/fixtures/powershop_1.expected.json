@@ -11,5 +11,6 @@
   "c_per_kwh": 23.0,
   "c_per_day": 85.0,
   "fixed_term_expiry": null,
-  "break_fee_cents": 0
+  "break_fee_cents": 0,
+  "address": "45 Power Street, Wellington"
 }

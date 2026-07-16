@@ -11,5 +11,6 @@
   "c_per_kwh": 25.4,
   "c_per_day": 130.0,
   "fixed_term_expiry": null,
-  "break_fee_cents": 0
+  "break_fee_cents": 0,
+  "address": "78 Seahorse Terrace, Sumner, Christchurch 8081"
 }

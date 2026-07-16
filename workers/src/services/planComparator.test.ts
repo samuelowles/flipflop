@@ -205,7 +205,7 @@ describe('runComparison — happy path (#70)', () => {
     const result = await runComparison('user-1', env);
 
     // Returns the single summary comparison id.
-    expect(result).toBe('cmp-1');
+    expect(result).toEqual({ comparisonId: 'cmp-1' });
 
     // 1. Bill fetched.
     expect(getBillsByUserId).toHaveBeenCalledWith(env.DB, 'user-1');
@@ -263,7 +263,7 @@ describe('runComparison — happy path (#70)', () => {
 
     const result = await runComparison('user-1', env);
 
-    expect(result).toBeNull();
+    expect(result).toEqual({ comparisonId: null, skipReason: 'no parsed bills' });
     expect(getCanonicalPlans).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
   });

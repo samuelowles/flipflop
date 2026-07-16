@@ -47,6 +47,10 @@ class ParserResult:
     confidence: float  # 0.0 - 1.0
     raw_json: str  # full parser output as JSON string
     parser_used: Optional[str] = None  # id of parser that produced this result
+    # Supply/installation address, one normalised autocomplete-friendly line
+    # ("1 Queen Street, Auckland Central, Auckland 1010"), or None when not
+    # confidently extractable. Deliberately excluded from confidence scoring.
+    address: Optional[str] = None
 
     VALID_METER_TYPES = frozenset(
         {"standard", "low_user", "day_night", "controlled"}

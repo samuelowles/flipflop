@@ -11,5 +11,6 @@
   "c_per_kwh": 27.0,
   "c_per_day": 90.0,
   "fixed_term_expiry": null,
-  "break_fee_cents": 0
+  "break_fee_cents": 0,
+  "address": "88 Tasman Road, Nelson 7010"
 }

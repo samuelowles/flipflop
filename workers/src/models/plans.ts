@@ -45,14 +45,18 @@ function rowToPlan(row: Record<string, unknown>): Plan {
 }
 
 /**
- * Get all plans that apply to a given region.
+ * Get all plans that apply to a given region. A NULL region means the plan
+ * is not region-restricted (nationwide) — the seeded manual plans
+ * (migrations 0004/0008) all carry region NULL, and `region = ?1` alone
+ * never matches NULL, which left runComparison with zero plans for every
+ * real user (deployed-run finding, 2026-07-16).
  */
 export async function getPlansByRegion(
   db: D1Database,
   region: string
 ): Promise<readonly Plan[]> {
   const stmt = db.prepare(
-    'SELECT * FROM plans WHERE region = ?1 AND (effective_to IS NULL OR effective_to >= datetime(\'now\')) ORDER BY retailer_id, name'
+    'SELECT * FROM plans WHERE (region = ?1 OR region IS NULL) AND (effective_to IS NULL OR effective_to >= datetime(\'now\')) ORDER BY retailer_id, name'
   );
   const results = await stmt.bind(region).all<Record<string, unknown>>();
 

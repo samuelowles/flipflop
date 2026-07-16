@@ -45,6 +45,101 @@ def extract_icp(text: str) -> Optional[str]:
 
 
 # ---------------------------------------------------------------------------
+# Supply / installation address extraction
+# ---------------------------------------------------------------------------
+
+# Labelled address line: "Supply Address: 456 Queen Street, Auckland".
+# "Supply at:" is Genesis Energy's label variant.
+_ADDRESS_LABEL_PATTERN = re.compile(
+    r"(?:(?:Supply|Installation|Site|Premises|Property)\s*[Aa]ddress|Supply\s+at)"
+    r"\s*[:#\-]?\s*(.+)",
+    re.IGNORECASE,
+)
+
+# Leading unit noise the Powerswitch autocomplete chokes on: "Unit 5, ..." /
+# "Flat 2, ...". Slash forms ("1/12 Queen St") are left intact — Powerswitch
+# resolves those.
+_UNIT_PREFIX_PATTERN = re.compile(
+    r"^(?:Unit|Flat|Apt|Apartment)\s*\w+\s*[,/]\s*", re.IGNORECASE
+)
+
+# Street number at the start: "12", "12A", "1/12".
+_STREET_NUMBER_PATTERN = re.compile(r"^\d+[A-Za-z]?(?:/\d+[A-Za-z]?)?\s+\S")
+
+# NZ 4-digit postcode (word-bounded, at or near the end of the line).
+_POSTCODE_PATTERN = re.compile(r"\b\d{4}\b\s*$")
+
+# PDF row extraction can glue neighbouring cells onto the address line
+# ("..., Auckland 0616 ICP 1000123456UN7C0" — seen on a real Meridian bill).
+# Truncate right after the postcode (which ends an NZ address), and strip
+# known non-address tails when no postcode is present.
+_POSTCODE_CUT_PATTERN = re.compile(r"^(.*?,[^,]*?\b\d{4})\b")
+_TRAILING_JUNK_PATTERN = re.compile(
+    r"\s+(?:ICP|I\.C\.P\.?|Account|Customer|GST|Invoice)\b.*$", re.IGNORECASE
+)
+
+# Main NZ urban centres. Smaller towns are accepted via the postcode signal
+# instead of an exhaustive gazetteer.
+_NZ_CITY_TOKENS = re.compile(
+    r"\b(?:Auckland|Wellington|Christchurch|Hamilton|Tauranga|Dunedin|Napier"
+    r"|Hastings|Nelson|Rotorua|New\s+Plymouth|Whang[āa]rei|Invercargill"
+    r"|Palmerston\s+North|Queenstown|Lower\s+Hutt|Upper\s+Hutt|Porirua"
+    r"|Whanganui|Gisborne|Timaru|Blenheim|Taup[ōo]|Masterton|Ashburton"
+    r"|Levin|Cambridge|Whakat[āa]ne|Pukekohe|Rangiora|Rolleston|Oamaru"
+    r"|Greymouth|Richmond|Wanaka|W[āa]naka|Kerikeri|Feilding|Tokoroa"
+    r"|Te\s+Awamutu|Paraparaumu|Waikanae)\b",
+    re.IGNORECASE,
+)
+
+
+def _normalise_address(raw: str) -> Optional[str]:
+    """Normalise a candidate address line; return None if low-confidence.
+
+    Autocomplete-friendly output: street + suburb + city (+postcode), single
+    spaces, no label, no leading unit noise, no trailing punctuation. A
+    candidate without a street number, or without a known city token or
+    postcode, is rejected — a wrong address wastes live Powerswitch budget,
+    a missing one just falls back to seeded plans.
+    """
+    addr = re.sub(r"\s+", " ", raw).strip().strip(".,;")
+    addr = _UNIT_PREFIX_PATTERN.sub("", addr)
+    cut = _POSTCODE_CUT_PATTERN.match(addr)
+    if cut:
+        addr = cut.group(1)
+    addr = _TRAILING_JUNK_PATTERN.sub("", addr).strip().strip(".,;")
+    if not addr or len(addr) > 120:
+        return None
+    if not _STREET_NUMBER_PATTERN.match(addr):
+        return None
+    if "," not in addr:
+        return None
+    if not (_NZ_CITY_TOKENS.search(addr) or _POSTCODE_PATTERN.search(addr)):
+        return None
+    return addr
+
+
+def extract_address(text: str) -> Optional[str]:
+    """Extract the supply/installation address as one normalised line.
+
+    Tries labelled lines first ("Supply Address: ..."); falls back to the
+    first bare header line shaped like a street address (some retailers,
+    e.g. Meridian, print the supply address unlabelled below the customer
+    name). Returns None rather than a low-confidence guess.
+    """
+    for match in _ADDRESS_LABEL_PATTERN.finditer(text):
+        addr = _normalise_address(match.group(1))
+        if addr:
+            return addr
+
+    for line in text.splitlines():
+        addr = _normalise_address(line)
+        if addr:
+            return addr
+
+    return None
+
+
+# ---------------------------------------------------------------------------
 # kWh extraction
 # ---------------------------------------------------------------------------
 

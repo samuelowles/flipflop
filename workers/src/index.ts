@@ -245,7 +245,7 @@ async function queue(
         // produced a comparison row for this user.
         if (!usedPowerswitchPath) {
           await startStage(kv, body.user_id, 'compare');
-          const comparisonId = await runComparison(body.user_id, {
+          const { comparisonId, skipReason } = await runComparison(body.user_id, {
             DB: env.DB as D1Database,
             KV: kv,
             NOTIFY_QUEUE: env.NOTIFY_QUEUE as Queue<{ userId: string; comparisonId: string }>,
@@ -255,11 +255,13 @@ async function queue(
           });
           if (comparisonId) {
             await finishStage(kv, body.user_id, 'compare', {
-              detail: comparisonId ? `Seeded-plan comparison ${comparisonId}` : 'no comparison produced',
-              artifacts: comparisonId ? { comparisonId } : {},
+              detail: `Seeded-plan comparison ${comparisonId}`,
+              artifacts: { comparisonId },
             });
           } else {
-            await skipStage(kv, body.user_id, 'compare', 'no parsed bills or no plans available');
+            // The true reason from runComparison — never claim "no parsed
+            // bills" for a user whose bill did parse (deployed-run finding).
+            await skipStage(kv, body.user_id, 'compare', skipReason ?? 'no comparison produced');
           }
         }
         message.ack();

@@ -34,6 +34,7 @@ from parsers.base import (
     validate_c_per_day,
 )
 from parsers.extractors import (
+    extract_address,
     extract_daily_charge,
     extract_dates,
     extract_dollars,
@@ -152,6 +153,7 @@ class TrustpowerParser(BaseParser):
             fixed_term_expiry=fixed_term_expiry,
             break_fee_cents=break_fee_cents,
             confidence=confidence,
+            address=extract_address(full_text),
             raw_json=json.dumps({"retailer_id": self.RETAILER_ID, "text_length": len(full_text)}),
         )
 

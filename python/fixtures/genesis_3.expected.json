@@ -11,5 +11,6 @@
   "c_per_kwh": 26.3,
   "c_per_day": 90.0,
   "fixed_term_expiry": null,
-  "break_fee_cents": 0
+  "break_fee_cents": 0,
+  "address": "3 Pohutukawa Drive, Mission Bay, Auckland 1071"
 }
