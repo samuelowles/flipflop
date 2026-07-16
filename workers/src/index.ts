@@ -29,6 +29,11 @@ import { runSwitchSanityCheck, type SwitchSanityEnv } from './services/switchTra
 import { startStage, finishStage, failStage, skipStage } from './services/flowTrace';
 import { runPowerswitchCanary, type CanaryEnv } from './services/powerswitchReplay';
 
+// Durable Object classes must be exported from the entrypoint (`main`) for
+// wrangler to bind them; the RATE_LIMITER binding in wrangler.toml fails
+// `wrangler dev`/`deploy` without this re-export.
+export { RateLimiter } from './durable-objects/RateLimiter';
+
 const app = new Hono();
 
 // Global error boundary (MUST be first)
