@@ -113,8 +113,8 @@ describe('comparePlans — Worker/Python contract (#123)', () => {
 
     // Body is the comparison input, snake_cased for Python
     const body = JSON.parse((init as RequestInit).body as string);
-    expect(body.usageProfile.avgDailyKwh).toBe(22.5);
-    expect(body.availablePlans[1].retailer_id).toBe('ret-b');
+    expect(body.usage_profile.avg_daily_kwh).toBe(22.5);
+    expect(body.available_plans[1].retailer_id).toBe('ret-b');
 
     // Result is the bare ranked list, top result is the cheapest non-current plan
     expect(Array.isArray(result)).toBe(true);

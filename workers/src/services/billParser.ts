@@ -1,7 +1,7 @@
 import { getBillById, markBillCompareEnqueued, updateBillStatus, updateBillParsedData } from '../models/bills';
 import { getUserById } from '../models/users';
 import { sendAndLog } from './messaging';
-import { getRetailerById } from '../models/retailers';
+import { getRetailerById, retailerParserSlug } from '../models/retailers';
 import { renderTemplate } from './sentTemplates';
 import type { BillStatus, MeterType } from '../types/bill';
 
@@ -214,11 +214,23 @@ export async function handleParseJob(
 
   // 4. Get file bytes and POST to Python /parse endpoint (single-shot).
   //    Forwards user_id and retailer hint. Throws ParseError on failure.
+  //    The Python parser registry keys on SLUGS ('mercury'), not D1 UUIDs —
+  //    translate via the retailer name or the hint silently does nothing.
+  let retailerSlug = '';
+  if (bill.retailerId) {
+    try {
+      const retailer = await getRetailerById(env.DB, bill.retailerId);
+      if (retailer?.name) retailerSlug = retailerParserSlug(retailer.name);
+    } catch {
+      // Hint resolution is best-effort — a lookup failure must never fail the
+      // parse; the parser just runs generic (lower confidence).
+    }
+  }
   const fileBytes = await r2Object.arrayBuffer();
   const parseResult = await parseBill(
     fileBytes,
     bill.userId,
-    bill.retailerId ?? '',
+    retailerSlug,
     pythonUrl,
     env.PYTHON_SERVICE_AUTH_TOKEN
   );

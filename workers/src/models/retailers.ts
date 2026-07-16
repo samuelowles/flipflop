@@ -44,6 +44,21 @@ const RETAILER_SENDER_MAP: ReadonlyMap<string, string> = new Map(
  * Returns the retailer primary-key ID, or null when the sender is unknown
  * (downstream logic then prompts the user to identify their retailer).
  */
+/**
+ * Map a retailer display name to the Python parser registry slug
+ * (python/parsers/*: RETAILER_ID — 'contact', 'mercury', 'electric_kiwi', …).
+ * The registry keys on slugs, but D1 retailer ids are UUIDs — passing a UUID
+ * as the parse hint silently disabled the retailer-specific parser + its
+ * confidence boost (found in the #242 live test run). Rule verified against
+ * all 10 registered parsers: drop a trailing 'Energy'/'Electric' word,
+ * lowercase, spaces → underscores.
+ *   'Contact Energy'→'contact', 'Flick Electric'→'flick', 'Electric Kiwi'→'electric_kiwi'
+ */
+export function retailerParserSlug(name: string): string {
+  const trimmed = name.trim().replace(/\s+(Energy|Electric)$/i, '');
+  return trimmed.toLowerCase().replace(/\s+/g, '_');
+}
+
 export function detectRetailerBySender(sender: string): string | null {
   const normalised = sender.replace(/\s+/g, '').toLowerCase();
   return RETAILER_SENDER_MAP.get(normalised) ?? null;

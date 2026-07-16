@@ -227,9 +227,16 @@ export async function postAction(
         method: 'POST',
         headers,
         body,
-        redirect: 'error', // server actions return 200 + flight, not a redirect
+        // Server actions return 200 + flight, not a redirect. NOTE: workerd
+        // does not implement redirect:'error' ("use manual and check the
+        // status") — found live in the #242 test run; Node fetch accepts
+        // 'error' so the smoke script masked it. 3xx is rejected below.
+        redirect: 'manual',
         cf: { cacheTtl: 0 },
       });
+      if (response.status >= 300 && response.status < 400) {
+        throw new Error(`unexpected redirect HTTP ${response.status}`);
+      }
 
       // Thread the session cookie through the chain.
       if (jar) {

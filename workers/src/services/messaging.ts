@@ -1,7 +1,11 @@
-const SENT_API_BASE = 'https://api.sent.dm/v1';
-
+import { env as workerEnv } from 'cloudflare:workers';
 import type { EncryptionEnv } from '../models/encryption';
 import { createMessage } from '../models/messages';
+
+// #242 testing: optionally override the Sent API origin (e.g. a local mock for
+// end-to-end runs without real WhatsApp sends). Unset in production → real API.
+const SENT_API_BASE =
+  ((workerEnv as { SENT_API_BASE_URL?: string }).SENT_API_BASE_URL ?? 'https://api.sent.dm/v1');
 
 interface SentMessageResponse {
   readonly id: string;

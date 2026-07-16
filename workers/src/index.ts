@@ -19,7 +19,7 @@ import { handleParseJob, ParseError } from './services/billParser';
 import { updateBillFailed, getBillById } from './models/bills';
 import { runComparison } from './services/planComparator';
 import { compareUserWithPowerswitch } from './services/compareUserWithPowerswitch';
-import { readCachedResults } from './services/powerswitchReplay';
+import { ensurePowerswitchResults } from './services/ensurePowerswitchResults';
 import { consumePlanDiffs, type PlanDiffConsumerEnv } from './services/planDiffConsumer';
 import { evaluateAndNotify } from './services/notificationEngine';
 import { purgeOldLLMAudit } from './services/llmAudit';
@@ -206,24 +206,34 @@ async function queue(
         if (env.POWERSWITCH_LIVE === 'true') {
           await startStage(kv, body.user_id, 'powerswitch');
           try {
-            const cached = await readCachedResults({ KV: kv, POWERSWITCH_LIVE: env.POWERSWITCH_LIVE as string }, body.user_id);
-            if (cached) {
+            // #242 gap fix: populate the per-user results cache in-pipeline
+            // (resolve pxid from installation_address if needed, then replay).
+            // Previously only the canary ever called the bridge, so this branch
+            // always skipped to seeded plans.
+            const ensured = await ensurePowerswitchResults({
+              DB: env.DB as D1Database,
+              KV: kv,
+              ENCRYPTION_KEY: env.ENCRYPTION_KEY as string,
+              POWERSWITCH_LIVE: env.POWERSWITCH_LIVE as string,
+            }, body.user_id);
+            if (ensured.status === 'ok') {
               const outcome = await compareUserWithPowerswitch(body.user_id, psEnv);
               if (outcome.status === 'ok') {
                 usedPowerswitchPath = true;
                 await finishStage(kv, body.user_id, 'powerswitch', {
-                  detail: `${cached.plans.length} plans fetched from cache`,
-                  artifacts: { plansFetched: String(cached.plans.length) },
+                  detail: `${ensured.results.plans.length} plans (${ensured.source})`,
+                  artifacts: { plansFetched: String(ensured.results.plans.length), source: ensured.source },
                 });
                 await finishStage(kv, body.user_id, 'compare', {
                   detail: `Powerswitch comparison: ${outcome.recommendation}`,
                   artifacts: { comparisonId: outcome.comparisonId, recommendation: outcome.recommendation },
                 });
               } else {
-                await finishStage(kv, body.user_id, 'powerswitch', { detail: `outcome: ${outcome.status}` });
+                const reason = 'reason' in outcome ? `: ${(outcome as { reason?: string }).reason ?? ''}` : '';
+                await finishStage(kv, body.user_id, 'powerswitch', { detail: `outcome: ${outcome.status}${reason}` });
               }
             } else {
-              await skipStage(kv, body.user_id, 'powerswitch', 'live enabled but no cached result — seeded plans');
+              await skipStage(kv, body.user_id, 'powerswitch', `unavailable (${ensured.reason}) — seeded plans`);
             }
           } catch (psErr) {
             await failStage(kv, body.user_id, 'powerswitch', (psErr as Error).message);
