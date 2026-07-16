@@ -2,6 +2,13 @@ name: CI
 
 on:
   pull_request:
+  # Master pushes are gated too: squash-merges land without re-running the PR
+  # checks against the merged tree, and deploys are Cloudflare's Git
+  # integration (Workers Builds, production branch = master), which deploys
+  # regardless of test state — a red run here is the alarm that a bad commit
+  # shipped.
+  push:
+    branches: [master]
 
 jobs:
   ci:
