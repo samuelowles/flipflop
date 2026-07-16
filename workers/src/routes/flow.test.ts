@@ -34,7 +34,7 @@ function makeKV(): KVNamespace & { store: Map<string, string> } {
   } as unknown as KVNamespace & { store: Map<string, string> };
 }
 
-function buildApp(kv: KVNamespace): { app: Hono; signedLink: Promise<string> } {
+function buildApp(_kv: KVNamespace): { app: Hono; signedLink: Promise<string> } {
   const app = new Hono();
   // /flow/* routes have NO adminAuth middleware now — auth is inside handlers.
   app.get('/flow/status', flowStatusPage);
