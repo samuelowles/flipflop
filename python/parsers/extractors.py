@@ -115,7 +115,8 @@ def _normalise_address(raw: str) -> Optional[str]:
         return None
     if not (_NZ_CITY_TOKENS.search(addr) or _POSTCODE_PATTERN.search(addr)):
         return None
-    return addr
+    # "AUCKLAND, 0626" → "AUCKLAND 0626" — Powerswitch autocomplete format.
+    return re.sub(r",\s*(\d{4})$", r" \1", addr)
 
 
 def extract_address(text: str) -> Optional[str]:
@@ -135,6 +136,15 @@ def extract_address(text: str) -> Optional[str]:
         addr = _normalise_address(line)
         if addr:
             return addr
+        # Mid-line candidate: PDF row extraction can glue a leading cell onto
+        # the address ("Tax Invoice 129 B RANGATIRA ROAD, BEACH HAVEN, ..."
+        # — real Electric Kiwi layout). Retry from each street-number-looking
+        # token; validation still rejects non-address digit runs (phone
+        # numbers and invoice ids carry no comma-separated locality).
+        for m in re.finditer(r"\b\d{1,4}[A-Za-z]?\b", line):
+            addr = _normalise_address(line[m.start():])
+            if addr:
+                return addr
 
     return None
 
@@ -267,12 +277,18 @@ _DATE_PATTERNS = [
 ]
 
 
+# Ordinal day suffixes ("24th Jun", "2nd Jul" — Electric Kiwi layout) defeat
+# the range patterns; strip them before matching.
+_ORDINAL_SUFFIX_PATTERN = re.compile(r"(\d{1,2})(?:st|nd|rd|th)\b", re.IGNORECASE)
+
+
 def extract_dates(text: str) -> tuple[Optional[str], Optional[str]]:
     """Extract billing period start and end dates from *text*.
 
     Returns ``(period_start, period_end)`` as ISO 8601 strings, or
     ``(None, None)`` if dates cannot be found.
     """
+    text = _ORDINAL_SUFFIX_PATTERN.sub(r"\1", text)
     for pattern in _DATE_PATTERNS:
         match = pattern.search(text)
         if match:
@@ -345,9 +361,19 @@ _PER_KWH_PATTERNS = [
 ]
 
 
+# Dollar-denominated rate: "$0.5671/kWh" (Electric Kiwi layout). Converted
+# to cents before joining the shared candidate pool.
+_PER_KWH_DOLLAR_PATTERN = re.compile(r"\$\s*([\d.]+)\s*(?:/|per)\s*kWh", re.IGNORECASE)
+
+
 def extract_per_kwh(text: str) -> Optional[float]:
     """Extract the per-kWh rate in cents from *text*."""
     candidates = []
+    for match in _PER_KWH_DOLLAR_PATTERN.finditer(text):
+        try:
+            candidates.append(round(float(match.group(1)) * 100, 2))
+        except ValueError:
+            continue
     for pattern in _PER_KWH_PATTERNS:
         for match in pattern.finditer(text):
             try:

@@ -1,0 +1,3 @@
+# PDFs are binary — core.autocrlf=true was CRLF-smudging fixture PDFs on
+# Windows checkout, corrupting them (xref offsets shift). Blobs are pristine.
+*.pdf binary

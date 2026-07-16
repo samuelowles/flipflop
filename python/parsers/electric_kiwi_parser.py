@@ -116,19 +116,35 @@ class ElectricKiwiParser(BaseParser):
         else:
             c_per_kwh = 0.0
 
+        # Real EK invoice layout: Peak + Off-peak charge lines (Hour of Power
+        # TOU). Several fields behave differently on this layout (below).
+        tou_layout = bool(
+            self._TOU_PEAK.search(full_text) and self._TOU_OFFPEAK.search(full_text)
+        )
+
         # --- Plan name ---
-        plan_name = extract_plan_name(full_text)
-        if plan_name:
+        if tou_layout:
+            # Real EK invoices never print a plan name — the only "plan"
+            # token is footer boilerplate (Billy comparison-site blurb),
+            # which extracts as garbage. The slot is absent by design on
+            # this layout, not missing, so it does not depress confidence.
+            plan_name = "Unknown"
             fields_found += 1
         else:
-            plan_name = "Unknown"
+            plan_name = extract_plan_name(full_text)
+            if plan_name:
+                fields_found += 1
+            else:
+                plan_name = "Unknown"
 
         # --- Meter type ---
         # Electric Kiwi canonical bills always carry enough signal to classify
         # the meter, so a determined type — including the default "standard" —
         # counts as a found field. This lets canonical residential bills reach
         # the AC's >=0.9 confidence target (same pattern as #52 / #55).
-        meter_type = extract_meter_type(full_text)
+        # Peak/Off-peak TOU is a day_night-class meter, not a controlled load;
+        # the shared extractor's "Off Peak" → controlled match is wrong here.
+        meter_type = "day_night" if tou_layout else extract_meter_type(full_text)
         fields_found += 1
 
         # --- Days ---
@@ -164,14 +180,27 @@ class ElectricKiwiParser(BaseParser):
             raw_json=json.dumps({"retailer_id": self.RETAILER_ID, "text_length": len(full_text)}),
         )
 
-    @staticmethod
-    def _extract_electric_kiwi_usage(text: str) -> Optional[float]:
+    # Usage-table component lines on real EK invoices — NOT line-anchored:
+    # pdfplumber glues the left-column address cell onto the first table row
+    # ("AUCKLAND 0626 Peak Charges 98.31 kWh $0.5671/kWh $55.75").
+    _TOU_PEAK = re.compile(r"(?<!-)(?<!f )\bPeak\s+Charges\b[^\n]*?kWh", re.IGNORECASE)
+    _TOU_OFFPEAK = re.compile(r"\bOff[- ]?peak\s+Charges\b[^\n]*?kWh", re.IGNORECASE)
+    _TOU_COMPONENT = re.compile(
+        r"\b(?:(?:Peak|Off[- ]?peak|Day|Night)\s+Charges|Hour of Power\s+Savings)"
+        r"[^\n]*?([\d,]+(?:\.\d+)?)\s*kWh",
+        re.IGNORECASE,
+    )
+
+    @classmethod
+    def _extract_electric_kiwi_usage(cls, text: str) -> Optional[float]:
         """Extract total kWh from a labelled total line.
 
         Electric Kiwi day/night bills list day and night components
         separately before a total; this prefers an explicit "Total
         units/usage" label so the aggregate is returned rather than the
-        first component.
+        first component. Real EK invoices have NO total line — only
+        Peak / Off-peak / Hour of Power component lines, which are summed
+        (free Hour of Power kWh is still consumption).
         """
         patterns = [
             re.compile(r"[Tt]otal\s*(?:units|usage|consumption|kWh)[\s:#-]*([\d,]+(?:\.\d+)?)"),
@@ -184,6 +213,13 @@ class ElectricKiwiParser(BaseParser):
                     return float(match.group(1).replace(",", ""))
                 except ValueError:
                     continue
+
+        components = [m.group(1) for m in cls._TOU_COMPONENT.finditer(text)]
+        if len(components) >= 2:
+            try:
+                return round(sum(float(c.replace(",", "")) for c in components), 2)
+            except ValueError:
+                pass
         return None
 
     @staticmethod

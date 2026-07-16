@@ -155,6 +155,8 @@ _DATE_FORMATS = (
     "%b %d, %Y",    # May 14, 2026
     "%B %d, %Y",    # May 14, 2026
     "%Y%m%d",       # 20260514
+    "%d %b %y",     # 24 Jun 26 (Electric Kiwi tax-invoice header)
+    "%d %B %y",     # 24 June 26
 )
 
 

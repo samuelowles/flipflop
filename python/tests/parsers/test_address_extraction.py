@@ -74,6 +74,13 @@ def test_whitespace_collapsed_and_label_removed():
     assert extract_address(text) == "9 Example Road, Wellington"
 
 
+def test_midline_glued_prefix_and_comma_postcode():
+    # Real Electric Kiwi layout: pdfplumber glues the "Tax Invoice" cell onto
+    # the address row, and the postcode arrives comma-separated.
+    text = "Tax Invoice 45 SAMPLE ROAD, BEACH HAVEN, AUCKLAND, 0626\n"
+    assert extract_address(text) == "45 SAMPLE ROAD, BEACH HAVEN, AUCKLAND 0626"
+
+
 # --- Low-confidence candidates must return None ---------------------------
 
 @pytest.mark.parametrize("text", [
@@ -82,6 +89,8 @@ def test_whitespace_collapsed_and_label_removed():
     "Supply Address: 12 Nowhere Lane, Smallville\n",                   # no city token, no postcode
     "Supply Address: 12 Nowhere Lane\n",                               # no locality separator
     "Daily charge: 30 days @ 90.00 c/day = $27.00\n",                  # charge line noise
+    "contact Utilities Disputes on 0800 22 33 40 or go www.udl.co.nz\n",  # phone-number line
+    "45 SAMPLE ROAD Payment - Thank you 1st Jul $418.59 $0.00\n",      # address glued with txn row (no comma)
 ])
 def test_low_confidence_returns_none(text):
     assert extract_address(text) is None
