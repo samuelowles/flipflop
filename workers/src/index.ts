@@ -27,7 +27,7 @@ import { runFreeTierCheckin, type FreeTierCheckinEnv } from './services/freeTier
 import { runFixedTermExpiryScan, type FixedTermExpiryEnv } from './services/fixedTermExpiry';
 import { runSwitchSanityCheck, type SwitchSanityEnv } from './services/switchTracker';
 import { startStage, finishStage, failStage, skipStage } from './services/flowTrace';
-import { runPowerswitchCanary, type CanaryEnv } from './services/powerswitchReplay';
+import { runPowerswitchCanary, type CanaryEnv } from './services/powerswitchCanary';
 
 // Durable Object classes must be exported from the entrypoint (`main`) for
 // wrangler to bind them; the RATE_LIMITER binding in wrangler.toml fails

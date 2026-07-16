@@ -1,63 +1,54 @@
 /**
- * #222 — Map parsed Powerswitch tariff rows → the comparator's plan shape.
+ * #222/#240 — Map parsed Powerswitch tariff rows → the comparator's plan shape.
  *
- * Consumes the `ParsedPlan` set produced by #221's RSC parser (read from the
- * per-user KV cache `powerswitch:results:{userId}`) and turns each plan into a
- * `ComparisonPlan` dict that the Python comparator (`/compare`) understands.
+ * Consumes the `ParsedPlan` set from #221's RSC parser and turns each into a
+ * `ComparisonPlan` dict the Python comparator understands. Rebuilt against the
+ * REAL capture (workers/tests/fixtures/powerswitch-live/18-results.res.txt).
  *
- * The mapping is deliberately faithful to what Powerswitch returns — it does NOT
- * invent rates. Where Powerswitch's data model diverges from the comparator's
- * flat-rate assumption (TOU windows, "assumed % power free" discounts), the
- * mapper carries the truth forward via `conditions_json` and caveats:
+ * UNIT CORRECTION (#240): tariff `value` is in $/kWh EX-GST (e.g. 0.288), and
+ * the F charge is $/day. The comparator works in CENTS. So every rate is
+ * multiplied by 100 here. The earlier build treated value as cents and was off
+ * by 100×. Cross-checked against the capture: 161277 (IN 0.288 + EC 0.0019,
+ * F 1.8) → (0.288+0.0019)×7008 + 1.8×365 = $2688.6, ×1.15 GST = $3091.9 ≈ the
+ * captured annual_cost of $3092. ✓
  *
- *   - Fixed charge (`code:F`, register `PK`) → `c_per_day` ($/day → cents/day).
- *   - Any-time / peak energy (`D1`/`N1`-ish with register `PK`, `display_type=amount`)
- *     → `c_per_kwh` (the peak/standard rate).
- *   - Off-peak / TOU night register (`register_content_code=OFFPEAK`) → marks the
- *     plan as TOU (`conditions_json.is_tou = true`). The comparator's pricing.py
- *     flags TOU plans UNSUPPORTED rather than mispricing them at a flat rate;
- *     this preserves parity with the Python engine's honest "cannot price TOU
- *     without window split" behaviour.
- *   - Percentage tariffs (`display_type=percentage`, e.g. `TD3` "assumed % power
- *     free") → modelled as a `prompt_payment_discount`-style discount ONLY when
- *     the percentage is a positive off value. These are MODELLED ASSUMPTIONS, not
- *     guaranteed rates — the caveat is carried into the plan's
- *     `conditions_json.modelled_discount_note` so the recommendation reason can
- *     surface it ("assumed X% free — modelled, not guaranteed").
- *   - `fixed_term` + `price_change_due` → `conditions_json.fixed_term` /
- *     `conditions_json.price_change_due`.
+ * TOU CORRECTION (#240): the real off-peak register_content_code is `OP`, not
+ * OFFPEAK. TOU plans (PK + OP/SH) are BLENDED into a single c_per_kwh using an
+ * assumed peak/off-peak usage split, and are NOT flagged is_tou — pricing.py
+ * (is_unsupported_plan) would otherwise drop them. The blend is a calibration
+ * knob (peak_share), not a measured value; it is carried in conditions_json so
+ * the recommendation reason can caveat it.
  *
- * Low-user vs standard-user: Powerswitch surfaces plan variants; the mapper does
- * NOT classify low-user eligibility itself (the comparator derives that from
- * usage + `low_user_eligible`). A plan whose name contains "low user" is marked
- * `low_user_eligible: true`; otherwise it stays standard.
- *
- * Parity with the Python comparator (python/comparator/pricing.py):
- *   - For flat-rate + daily-charge + prompt-payment-discount plans, the mapped
- *     shape feeds `calculate_bill_cost` identically to a seeded plan row.
- *   - For TOU plans, `conditions_json.is_tou = true` makes the Python engine
- *     flag the plan unsupported — the same outcome as a seeded TOU plan. No
- *     silent mispricing.
+ * TD3 ("assumed % power free") is a positive percentage FRACTION (0.2685 =
+ * 26.85%). Modelled as prompt_payment_discount = value×100 — an assumption, not
+ * a guaranteed rate; caveat carried into conditions_json + the reason.
  */
 
-import type { ParsedPlan } from './powerswitchRscParser';
+import type { ParsedPlan, ParsedTariff } from './powerswitchRscParser';
 import type { ComparisonPlan } from '../types/comparison';
 
+/** $→cents. Powerswitch rates are $/kWh and $/day; the comparator is in cents. */
+const DOLLAR_TO_CENTS = 100;
+
 /**
- * Conditions surfaced to the Python comparator + the recommendation reason.
- * Mirrors the keys pricing.py reads (`is_tou`, `rate_type`).
+ * Assumed share of annual usage falling in the peak window. The remainder is
+ * spread evenly across the off-peak/shoulder registers. A calibration knob —
+ * real splits vary by household; tuning this retunes every TOU blend. ponytail:
+ * single global, per-plan shares if a household profile ever warrants it.
  */
+const PEAK_SHARE = 0.7;
+
+/** Conditions surfaced to the Python comparator + the recommendation reason. */
 export interface PowerswitchPlanConditions {
-  /** True when the plan has an OFFPEAK (TOU) register. pricing.py flags TOU unsupported. */
-  readonly is_tou?: boolean;
+  readonly source: 'powerswitch_user';
+  readonly fixed_term: boolean;
+  readonly price_change_due: boolean | string;
+  /** 'tou' when peak+off-peak registers were blended; 'flat' otherwise. */
+  readonly register_type?: 'tou' | 'flat';
+  /** The peak share used by the blend (present only for TOU). */
+  readonly peak_share?: number;
   /** Carried so the recommendation reason can caveat modelled discounts. */
   readonly modelled_discount_note?: string;
-  /** True for fixed-term plans (contract). */
-  readonly fixed_term?: boolean;
-  /** ISO date when a price change is due, if announced. */
-  readonly price_change_due?: string | null;
-  /** Source provenance tag for the comparison path. */
-  readonly source?: string;
 }
 
 /** A mapped plan ready for the comparator + a human-readable caveat string. */
@@ -68,80 +59,87 @@ export interface MappedPowerswitchPlan {
   readonly caveat: string;
 }
 
-/** DOLLAR→cents multiplier. Powerswitch F charge is in $/day. */
-const DOLLAR_TO_CENTS = 100;
+/** Per-kWh levies (Electricity Authority Levy etc.) — added to the energy rate. */
+const LEVY_CODES = new Set(['EC', 'ED']);
+/** Single-rate (any-time) energy registers. */
+const FLAT_CODES = new Set(['IN', 'UN']);
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
+}
 
 /**
  * Map a single parsed Powerswitch plan into the comparator's plan shape.
- *
- * Returns `null` when the plan has NO usable rate (neither a flat energy rate
- * nor a fixed charge) — such a plan cannot be priced and is dropped rather than
- * sent to the comparator as a zero-cost bogus alternative.
+ * Returns `null` when the plan has no usable rate AND no fixed charge — it
+ * cannot be priced and is dropped rather than sent as a zero-cost bogus option.
  */
 export function mapPowerswitchPlan(parsed: ParsedPlan): MappedPowerswitchPlan | null {
-  const fixedTariff = parsed.tariffs.find((t) => t.code === 'F');
-  const amountTariffs = parsed.tariffs.filter(
-    (t) => t.displayType === 'amount' && t.code !== 'F'
+  const tariffs = parsed.tariffs;
+
+  // Fixed daily charge: the F tariff, $/day → cents/day.
+  const fixedTariff = tariffs.find((t) => t.code === 'F' && t.displayType === 'amount');
+  const cPerDay = fixedTariff ? round2(fixedTariff.value * DOLLAR_TO_CENTS) : undefined;
+
+  // Partition the amount registers (excluding F) by role.
+  const amountTariffs = tariffs.filter((t) => t.displayType === 'amount' && t.code !== 'F');
+  const peak = amountTariffs.find((t) => t.registerContentCode === 'PK');
+  // Off-peak: OP, or an empty register_content_code when a peak is present
+  // (180418 "Flex Low Use" keys off-peak on register "").
+  const offpeak = amountTariffs.filter(
+    (t) => t.registerContentCode === 'OP' || (peak && t.registerContentCode === '' && t.value > 0)
   );
+  const shoulder = amountTariffs.filter((t) => t.registerContentCode === 'SH');
+  const flat = amountTariffs.filter((t) => FLAT_CODES.has(t.registerContentCode));
+  const levies = amountTariffs.filter((t) => LEVY_CODES.has(t.registerContentCode));
+  const levySum = levies.reduce((s, t) => s + t.value, 0);
 
-  // c_per_day: the F tariff is $/day. Convert to cents/day.
-  const cPerDay = fixedTariff ? Math.round(fixedTariff.value * DOLLAR_TO_CENTS * 100) / 100 : undefined;
-
-  // Detect TOU: any amount tariff on an OFFPEAK register means time-of-use.
-  const hasOffpeak = amountTariffs.some((t) => t.registerContentCode.toUpperCase() === 'OFFPEAK');
-
-  // c_per_kwh: the peak / standard register (PK) amount tariff. When a plan is
-  // pure single-rate (only a PK amount tariff, no OFFPEAK), this is the flat
-  // rate. For TOU plans the PK rate is the day/peak rate — but the plan is
-  // flagged is_tou so the comparator does not flat-price it.
-  const peakTariff = amountTariffs.find((t) => t.registerContentCode.toUpperCase() === 'PK')
-    ?? amountTariffs[0];
-  const cPerKwh = peakTariff ? peakTariff.value : undefined;
-
-  // Percentage tariffs (e.g. TD3 "assumed % power free"). These are MODELLED
-  // discounts, not guaranteed rates. Powerswitch encodes them as negative
-  // percentages off (e.g. -12 = 12% off). A positive percentage would be a
-  // surcharge — we do not model those as discounts.
-  const pctTariffs = parsed.tariffs.filter((t) => t.displayType === 'percentage');
-  const discountPct = pctTariffs.reduce((sum, t) => {
-    // value is negative for "off" (e.g. -12); abs() gives the discount magnitude.
-    const off = t.value < 0 ? Math.abs(t.value) : 0;
-    return sum + off;
-  }, 0);
+  // Blend a single $/kWh rate. TOU when a peak coexists with off-peak/shoulder.
+  const isTou = !!peak && (offpeak.length > 0 || shoulder.length > 0);
+  let cPerKwh: number | undefined;
+  if (isTou && peak) {
+    const offReg = [...offpeak, ...shoulder];
+    const offAvg = offReg.length > 0 ? offReg.reduce((s, t) => s + t.value, 0) / offReg.length : 0;
+    const blended = peak.value * PEAK_SHARE + offAvg * (1 - PEAK_SHARE) + levySum;
+    cPerKwh = round2(blended * DOLLAR_TO_CENTS);
+  } else if (flat.length > 0) {
+    // Single-rate: sum the any-time registers (+ levies), $/kWh → cents/kWh.
+    const flatSum = flat.reduce((s, t) => s + t.value, 0) + levySum;
+    cPerKwh = round2(flatSum * DOLLAR_TO_CENTS);
+  } else if (peak) {
+    // Peak-only (no off-peak) — treat the peak rate as the flat rate.
+    cPerKwh = round2((peak.value + levySum) * DOLLAR_TO_CENTS);
+  }
 
   // A plan with neither a rate nor a daily charge cannot be priced.
   if (cPerKwh === undefined && cPerDay === undefined) {
     return null;
   }
 
-  const caveats: string[] = [];
+  // Percentage tariffs: TD3 "assumed % power free" is a POSITIVE fraction
+  // (0.2685 = 26.85%). PP/ED discounts show value 0 here. Model positive
+  // percentages as a prompt-payment-style subtotal discount — an assumption.
+  const pctTariffs = tariffs.filter((t) => t.displayType === 'percentage' && t.value > 0);
+  const discountPct = round2(pctTariffs.reduce((s, t) => s + t.value, 0) * 100);
 
-  // Build the conditions object with optional fields (the interface is readonly,
-  // so assemble it in one pass rather than mutating).
+  const caveats: string[] = [];
   const conditions: PowerswitchPlanConditions = {
     source: 'powerswitch_user',
     fixed_term: parsed.fixedTerm,
     price_change_due: parsed.priceChangeDue,
-    ...(hasOffpeak
-      ? { is_tou: true as const }
-      : {}),
+    ...(isTou
+      ? { register_type: 'tou' as const, peak_share: PEAK_SHARE }
+      : { register_type: 'flat' as const }),
     ...(discountPct > 0
-      ? {
-          modelled_discount_note:
-            `assumed ${discountPct}% free (modelled discount, not a guaranteed rate)`,
-        }
+      ? { modelled_discount_note: `assumed ${discountPct}% power free (modelled, not guaranteed)` }
       : {}),
   };
 
-  if (hasOffpeak) {
-    caveats.push('TOU plan: priced as unsupported (window split not modelled)');
+  if (isTou) {
+    caveats.push(
+      `TOU plan priced via assumed ${Math.round(PEAK_SHARE * 100)}/${Math.round((1 - PEAK_SHARE) * 100)} peak/off-peak split (modelled, not guaranteed)`
+    );
   }
-
   if (discountPct > 0) {
-    // Modelled as a prompt-payment-style discount on the subtotal. This is an
-    // ASSUMPTION — Powerswitch's "assumed % power free" is a questionnaire-based
-    // estimate of controlled-load usage, not a contractual rate. Carry the
-    // caveat so notification copy can be honest.
     caveats.push(conditions.modelled_discount_note!);
   }
 
@@ -153,8 +151,7 @@ export function mapPowerswitchPlan(parsed: ParsedPlan): MappedPowerswitchPlan | 
     name: parsed.name,
     c_per_kwh: cPerKwh,
     c_per_day: cPerDay,
-    // prompt_payment_discount is the comparator's discount hook (pricing.py
-    // applies it to the subtotal). We model the % free discount through it.
+    // pricing.py applies prompt_payment_discount to the subtotal.
     prompt_payment_discount: discountPct > 0 ? discountPct : undefined,
     conditions_json: JSON.stringify(conditions),
     low_user_eligible: lowUserEligible,
@@ -166,10 +163,7 @@ export function mapPowerswitchPlan(parsed: ParsedPlan): MappedPowerswitchPlan | 
 /**
  * Map a full parsed plan set → comparator plan dicts. Plans that cannot be
  * priced (no rate + no daily charge) are dropped. Returns the mapped plans plus
- * the combined caveat string for the recommendation reason.
- *
- * @param plans parsed plans from the #221 KV cache
- * @returns mapped plans (non-empty if at least one plan priced) + caveats
+ * the de-duplicated caveat string for the recommendation reason.
  */
 export function mapPowerswitchPlans(
   plans: ReadonlyArray<ParsedPlan>
@@ -179,17 +173,14 @@ export function mapPowerswitchPlans(
     const m = mapPowerswitchPlan(p);
     if (m) mapped.push(m);
   }
-  // De-duplicate caveats so the reason stays concise.
   const uniqueCaveats = [...new Set(mapped.map((m) => m.caveat).filter(Boolean))];
   return { plans: mapped, caveats: uniqueCaveats.join(' | ') };
 }
 
-/** Re-export for the comparison-path service to compute a plan-set content hash. */
+/** Deterministic content hash of a plan's tariff set (provenance raw_hash). */
 export function tariffContentHash(parsed: ParsedPlan): string {
-  // Lightweight deterministic hash of the tariff lines for the provenance row's
-  // raw_hash. Not cryptographic — just an idempotency fingerprint.
   const sig = parsed.tariffs
-    .map((t) => `${t.code}:${t.registerContentCode}:${t.value}:${t.displayType}`)
+    .map((t: ParsedTariff) => `${t.code}:${t.registerContentCode}:${t.value}:${t.displayType}`)
     .join('|');
   let h = 0;
   for (let i = 0; i < sig.length; i++) {
