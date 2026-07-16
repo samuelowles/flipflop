@@ -76,11 +76,19 @@ message — that is the `notify` stage's deliverable. Use E.164 (`+64…`).
 
 From the repo root:
 
+> **⚠️ 2a WARNING (verified 2026-07-16):** the remote `flip-db` schema is already
+> current (0001 → 0018) but was applied via direct `d1 execute`, so it has **no
+> `d1_migrations` ledger**. Running `wrangler d1 migrations apply --remote` would
+> consider NOTHING applied and re-run every migration against the populated
+> database. **Do not run it.** Verify schema instead (expect `1`):
+> ```bash
+> cd workers && npx wrangler d1 execute flip-db --remote --command >   "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='powerswitch_pxid'"
+> ```
+> For FUTURE migrations (0019+), apply each with
+> `npx wrangler d1 execute flip-db --remote --file migrations/00NN_name.sql`
+> (mind the FK gotcha: wrap table rebuilds in PRAGMA foreign_keys=OFF/ON).
+
 ```bash
-# 2a. Apply every D1 migration to the REMOTE database (0001 → 0018).
-cd workers
-npx wrangler d1 migrations apply flip-db --remote
-cd ..
 
 # 2b. Deploy the Worker.
 cd workers
