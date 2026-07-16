@@ -133,18 +133,18 @@ function makeMockR2(): R2Bucket {
   } as unknown as R2Bucket;
 }
 
-function makeMockQueue(): Queue<{ billId: string; r2Key: string }> {
-  const sent: Array<{ billId: string; r2Key: string }> = [];
+function makeMockQueue(): Queue<{ billId: string; r2Key: string; userId: string }> {
+  const sent: Array<{ billId: string; r2Key: string; userId: string }> = [];
   return {
-    send: (msg: { billId: string; r2Key: string }) => {
+    send: (msg: { billId: string; r2Key: string; userId: string }) => {
       sent.push(msg);
       return Promise.resolve();
     },
-    sendBatch: (msgs: Array<{ billId: string; r2Key: string }>) => {
+    sendBatch: (msgs: Array<{ billId: string; r2Key: string; userId: string }>) => {
       sent.push(...msgs);
       return Promise.resolve();
     },
-  } as unknown as Queue<{ billId: string; r2Key: string }>;
+  } as unknown as Queue<{ billId: string; r2Key: string; userId: string }> & { sent: typeof sent };
 }
 
 function makeEnv(
@@ -156,7 +156,7 @@ function makeEnv(
   DB: D1Database;
   KV: KVNamespace;
   BILLS: R2Bucket;
-  PARSE_QUEUE: Queue<{ billId: string; r2Key: string }>;
+  PARSE_QUEUE: Queue<{ billId: string; r2Key: string; userId: string }>;
   ENCRYPTION_KEY: string;
   GMAIL_CLIENT_ID: string;
   GMAIL_CLIENT_SECRET: string;

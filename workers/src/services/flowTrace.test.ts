@@ -174,3 +174,29 @@ describe('flowTrace — JSON shape stability', () => {
     expect(second >= first).toBe(true);
   });
 });
+
+/**
+ * Issue #241 — parse stage duration. Gmail-sourced PARSE_QUEUE messages now
+ * carry `userId`, so the consumer's startStage(…, 'parse') runs before
+ * finishStage(…, 'parse'), producing a real startedAt→finishedAt duration.
+ * This test exercises the exact running→ok transition the consumer relies on.
+ */
+describe('flowTrace — parse stage records a real duration (#241)', () => {
+  it('parse stage transitions running → ok with startedAt and finishedAt', async () => {
+    const kv = makeKV();
+    // Mirrors the index.ts consumer: startStage then finishStage.
+    await startStage(kv, 'u-parse', 'parse');
+    await new Promise((r) => setTimeout(r, 5));
+    await finishStage(kv, 'u-parse', 'parse', { detail: 'parsed' });
+
+    const trace = await readFlowTrace(kv, 'u-parse');
+    expect(trace).not.toBeNull();
+    const parse = trace!.stages.find((s) => s.stage === 'parse')!;
+    expect(parse.status).toBe('ok');
+    expect(parse.startedAt).toBeTruthy();
+    expect(parse.finishedAt).toBeTruthy();
+    // Real, non-negative duration.
+    const dur = new Date(parse.finishedAt!).getTime() - new Date(parse.startedAt!).getTime();
+    expect(dur).toBeGreaterThanOrEqual(0);
+  });
+});

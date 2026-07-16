@@ -15,7 +15,7 @@ export interface GmailPollingEnv extends EncryptionEnv {
   readonly DB: D1Database;
   readonly KV: KVNamespace;
   readonly BILLS: R2Bucket;
-  readonly PARSE_QUEUE: Queue<{ billId: string; r2Key: string }>;
+  readonly PARSE_QUEUE: Queue<{ billId: string; r2Key: string; userId: string }>;
   readonly GMAIL_CLIENT_ID: string;
   readonly GMAIL_CLIENT_SECRET: string;
 }
@@ -304,8 +304,9 @@ export async function processMessage(
         sourceMessageId,
       });
 
-      // Enqueue parse job
-      await env.PARSE_QUEUE.send({ billId: bill.id, r2Key });
+      // Enqueue parse job (#241: include userId so the parse stage enters
+      // `running` and records a real duration in the FlowTrace).
+      await env.PARSE_QUEUE.send({ billId: bill.id, r2Key, userId });
       billsFound++;
     }
 

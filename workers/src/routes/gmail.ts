@@ -7,6 +7,7 @@ import type { GmailPollingEnv } from '../services/emailPoller';
 import { sendText } from '../services/messaging';
 import { runEvalComparison } from './eval';
 import { startStage, finishStage, failStage } from '../services/flowTrace';
+import { mintFlowLink } from '../services/flowLink';
 
 const NONCE_KV_PREFIX = 'oauth:nonce:';
 const NONCE_TTL = 600; // 10 minutes
@@ -318,7 +319,7 @@ export async function gmailCallback(c: Context): Promise<Response> {
         DB: db,
         KV: kv,
         BILLS: c.env.BILLS as R2Bucket,
-        PARSE_QUEUE: c.env.PARSE_QUEUE as Queue<{ billId: string; r2Key: string }>,
+        PARSE_QUEUE: c.env.PARSE_QUEUE as Queue<{ billId: string; r2Key: string; userId: string }>,
         GMAIL_CLIENT_ID: clientId,
         GMAIL_CLIENT_SECRET: clientSecret,
         ENCRYPTION_KEY: encryptionKey,
@@ -349,8 +350,12 @@ export async function gmailCallback(c: Context): Promise<Response> {
       }
     }
 
+    // Issue #241 — mint a signed /flow/status link so the user can watch the
+    // pipeline live in a browser (no Bearer header needed).
+    const flowUrl = await mintFlowLink(encryptionKey, stored.userId);
+
     // Return progress page that polls /auth/gmail/scan-status and /auth/gmail/eval-status
-    return new Response(renderProgressPage(stored.userId, setupLog), {
+    return new Response(renderProgressPage(stored.userId, setupLog, false, flowUrl), {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
@@ -472,8 +477,11 @@ function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-function renderProgressPage(userId: string, setupLog: string[], _isError = false): string {
+function renderProgressPage(userId: string, setupLog: string[], _isError = false, flowUrl?: string): string {
   const logsJson = JSON.stringify(setupLog);
+  const traceLinkHtml = flowUrl
+    ? `<p style="margin-top:8px;"><a href="${escapeHtml(flowUrl)}" style="display:inline-block;padding:10px 20px;background:#1e8e3e;color:#fff;border-radius:6px;text-decoration:none;font-weight:500;">Watch your pipeline live →</a></p>`
+    : '';
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
@@ -518,6 +526,7 @@ function renderProgressPage(userId: string, setupLog: string[], _isError = false
 <body>
   <h1>Scanning your Gmail inbox</h1>
   <p class="subtitle">Searching for power bills from all NZ retailers over the past 12 months.</p>
+  ${traceLinkHtml}
 
   <div class="card">
     <h3>Setup</h3>
