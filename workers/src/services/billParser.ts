@@ -316,10 +316,22 @@ export async function handleParseJob(
       total_dollars: totalDollars,
     });
 
-    await sendAndLog(
-      env.SENT_API_KEY, env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY },
-      bill.userId, phone, confirmMsg
-    );
+    // Best-effort: a failed courtesy send must NEVER fail the parse job. In
+    // the #242 deployed run a Sent API error here threw past the consumer's
+    // ParseError check and marked successfully-parsed bills failed/unknown_error.
+    try {
+      await sendAndLog(
+        env.SENT_API_KEY, env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY },
+        bill.userId, phone, confirmMsg
+      );
+    } catch (sendErr) {
+      console.log(JSON.stringify({
+        type: 'bill_received_send_failed',
+        billId,
+        error: sendErr instanceof Error ? sendErr.message : 'unknown',
+        timestamp: new Date().toISOString(),
+      }));
+    }
   }
 
   // 9. Log completion

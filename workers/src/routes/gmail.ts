@@ -560,6 +560,7 @@ function renderProgressPage(userId: string, setupLog: string[], _isError = false
       <div class="stat"><span class="stat-label">Messages found</span><span class="stat-value" id="stat-found">—</span></div>
       <div class="stat"><span class="stat-label">Scanned</span><span class="stat-value" id="stat-scanned">—</span></div>
       <div class="stat"><span class="stat-label">Bills discovered</span><span class="stat-value" id="stat-bills">—</span></div>
+      <div class="stat"><span class="stat-label">Already imported (previous scans)</span><span class="stat-value" id="stat-duplicates">—</span></div>
       <div class="stat"><span class="stat-label">Skipped (no bill subject)</span><span class="stat-value" id="stat-nosubject">—</span></div>
       <div class="stat"><span class="stat-label">Skipped (no PDF)</span><span class="stat-value" id="stat-nopdf">—</span></div>
       <div class="stat"><span class="stat-label">Status</span><span class="stat-value" id="stat-status"><span class="spinner"></span>Running...</span></div>
@@ -724,6 +725,7 @@ function renderProgressPage(userId: string, setupLog: string[], _isError = false
       document.getElementById('stat-found').textContent = data.messagesFound;
       document.getElementById('stat-scanned').textContent = data.messagesScanned;
       document.getElementById('stat-bills').textContent = data.billsFound;
+      document.getElementById('stat-duplicates').textContent = data.billsAlreadyImported || 0;
       document.getElementById('stat-nosubject').textContent = data.messagesSkippedNoSubject;
       document.getElementById('stat-nopdf').textContent = data.messagesSkippedNoPdf;
 

@@ -82,6 +82,8 @@ export interface ScanProgress {
   messagesScanned: number;
   messagesSkippedNoSubject: number;
   messagesSkippedNoPdf: number;
+  /** Messages whose bill(s) were already ingested on a previous scan (dedup). */
+  billsAlreadyImported: number;
   billsFound: number;
   /** From addresses that yielded at least one bill */
   billSenders: string[];

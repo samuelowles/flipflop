@@ -303,6 +303,9 @@ async function queue(
             queueName,
             billId,
             errorCode,
+            // Raw error text — errorCode alone made production failures
+            // undiagnosable (12x unknown_error, #242 run).
+            error: error instanceof Error ? error.message : String(error),
             attempts: message.attempts,
             timestamp: new Date().toISOString(),
           }));
@@ -328,6 +331,7 @@ async function queue(
           queueName,
           billId,
           errorCode,
+          error: error instanceof Error ? error.message : String(error),
           terminal: !transient,
           attempts: message.attempts,
           timestamp: new Date().toISOString(),
