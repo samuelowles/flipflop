@@ -162,11 +162,15 @@ export async function resolveUserAddress(
 }
 
 /**
- * Pick the best completion. Rules (issue #220):
+ * Pick the best completion. Rules (issue #220, exact-match rule added after
+ * a real Meridian bill's "82A Verran Rd" resolution went to needs_review):
  *   - 0 completions → needs_review (zero_match).
  *   - 1 completion  → resolved (exact / single).
- *   - >1 completions → if the user gave no unit AND a base (non-unit) address
- *     exists among the completions, pick it; else needs_review (ambiguous).
+ *   - >1 completions → if EXACTLY ONE completion normalises equal to the
+ *     user's address (abbreviations expanded, flat forms unified, postcode
+ *     optional), pick it — the bill told us precisely which door, unit or
+ *     not. Otherwise: a user-supplied unit → needs_review (ambiguous); no
+ *     unit → prefer a base (non-unit) completion; else needs_review.
  */
 export function pickBestMatch(
   completions: ReadonlyArray<PowerswitchCompletion>,
@@ -180,8 +184,21 @@ export function pickBestMatch(
     return { status: 'resolved', pxid: only.pxid, locationId: null };
   }
 
-  // Multiple completions. If the user supplied a unit, we can't disambiguate
-  // safely → manual review.
+  // Multiple completions: an unambiguous exact match wins outright. The old
+  // rule sent ANY unit-carrying address (incl. lettered street numbers like
+  // "82A") straight to manual review even when a completion was literally
+  // the same address.
+  const target = normaliseAddressForMatch(userAddress);
+  const targetNoPc = stripPostcode(target);
+  const exact = completions.filter((c) => {
+    const cand = normaliseAddressForMatch(c.a);
+    return cand === target || stripPostcode(cand) === targetNoPc;
+  });
+  if (exact.length === 1) {
+    return { status: 'resolved', pxid: exact[0]!.pxid, locationId: null };
+  }
+
+  // If the user supplied a unit, we can't disambiguate further → manual review.
   if (addressHasUnit(userAddress)) {
     return { status: 'needs_review', reason: 'ambiguous', completions: completions.length };
   }
@@ -192,6 +209,35 @@ export function pickBestMatch(
     return { status: 'resolved', pxid: base.pxid, locationId: null };
   }
   return { status: 'needs_review', reason: 'ambiguous', completions: completions.length };
+}
+
+/** Common NZ street-suffix abbreviations, expanded for comparison only. */
+const STREET_ABBREVIATIONS: Record<string, string> = {
+  rd: 'road', st: 'street', ave: 'avenue', av: 'avenue', dr: 'drive',
+  cres: 'crescent', tce: 'terrace', pl: 'place', ln: 'lane', hwy: 'highway',
+  mt: 'mount', esp: 'esplanade', pde: 'parade', sq: 'square', gr: 'grove',
+};
+
+/**
+ * Normalise an address for equality comparison ONLY (never persisted, never
+ * submitted): lowercase, punctuation → spaces, "1/82 X" and "Unit 1, 82 X"
+ * unified, street abbreviations expanded. Both sides of the comparison go
+ * through this, so a semantically wrong expansion (e.g. "St Heliers" →
+ * "street heliers") is still equality-preserving.
+ */
+export function normaliseAddressForMatch(address: string): string {
+  let a = address.toLowerCase().replace(/[.,]/g, ' ');
+  a = a.replace(/^(\d+[a-z]?)\s*\/\s*(\d+)/, 'unit $1 $2'); // "1/82 X" → "unit 1 82 X"
+  a = a.replace(/^(?:unit|flat|apartment|apt|u|f)\s+(\w+)\b/, 'unit $1');
+  a = a.replace(/\s+/g, ' ').trim();
+  return a
+    .split(' ')
+    .map((w) => STREET_ABBREVIATIONS[w] ?? w)
+    .join(' ');
+}
+
+function stripPostcode(a: string): string {
+  return a.replace(/\s+\d{4}$/, '').trim();
 }
 
 // ---------------------------------------------------------------------------
