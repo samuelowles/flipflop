@@ -189,6 +189,50 @@ describe('pickBestMatch (match confidence)', () => {
     expect(out.status).toBe('needs_review');
     if (out.status === 'needs_review') expect(out.reason).toBe('ambiguous');
   });
+
+  // Exact-normalised-match rule — added after a real Meridian bill's lettered
+  // street number ("82A Verran Rd") was sent to needs_review despite the
+  // matching completion being in the list.
+  describe('exact normalised match beats the unit bail-out', () => {
+    const verran: PowerswitchCompletion[] = [
+      { a: '82 Verran Road, Birkdale, Auckland 0626', pxid: 'base-82', v: 1 },
+      { a: '82A Verran Road, Birkdale, Auckland 0626', pxid: 'unit-82a', v: 1 },
+      { a: '82B Verran Road, Birkdale, Auckland 0626', pxid: 'unit-82b', v: 1 },
+    ];
+
+    it('resolves a lettered street number to its exact completion (Rd ≡ Road)', () => {
+      const out = pickBestMatch(verran, '82A Verran Rd, Birkdale, Auckland 0626');
+      expect(out).toMatchObject({ status: 'resolved', pxid: 'unit-82a' });
+    });
+
+    it('matches when the user address has no postcode', () => {
+      const out = pickBestMatch(verran, '82A Verran Rd, Birkdale, Auckland');
+      expect(out).toMatchObject({ status: 'resolved', pxid: 'unit-82a' });
+    });
+
+    it('unifies "1/82" and "Unit 1, 82" flat forms', () => {
+      const flats: PowerswitchCompletion[] = [
+        { a: 'Unit 1, 240 Onewa Road, Birkenhead, Auckland 0626', pxid: 'flat-1', v: 1 },
+        { a: 'Unit 2, 240 Onewa Road, Birkenhead, Auckland 0626', pxid: 'flat-2', v: 1 },
+      ];
+      const out = pickBestMatch(flats, '1/240 Onewa Road, Birkenhead, Auckland 0626');
+      expect(out).toMatchObject({ status: 'resolved', pxid: 'flat-1' });
+    });
+
+    it('still flags ambiguous when no completion matches exactly and a unit was given', () => {
+      const out = pickBestMatch(verran, '82C Verran Rd, Birkdale, Auckland 0626');
+      expect(out).toMatchObject({ status: 'needs_review', reason: 'ambiguous' });
+    });
+
+    it('two identical-normalising completions do not auto-resolve', () => {
+      const dupes: PowerswitchCompletion[] = [
+        { a: '82A Verran Rd, Birkdale, Auckland 0626', pxid: 'dupe-1', v: 1 },
+        { a: '82A Verran Road, Birkdale, Auckland 0626', pxid: 'dupe-2', v: 1 },
+      ];
+      const out = pickBestMatch(dupes, '82A Verran Road, Birkdale, Auckland 0626');
+      expect(out).toMatchObject({ status: 'needs_review', reason: 'ambiguous' });
+    });
+  });
 });
 
 describe('postAction (server-action POST wire format)', () => {
