@@ -131,9 +131,14 @@ export function renderProgressPage(userId: string, setupLog: string[], _isError 
   </div>
 
   <script>
-    var userId = '${escapeHtml(userId)}';
+    // JS-context injection uses JSON.stringify, NOT escapeHtml — the browser
+    // does not decode HTML entities inside <script>, so an escaped signed URL
+    // ("?u=…&amp;exp=…") fails signature verification and the trace card
+    // never appears (real deployed-run finding). Values are server-generated
+    // (UUID / signed URL / own log lines) — no angle brackets possible.
+    var userId = ${JSON.stringify(userId)};
     var setupLogs = ${logsJson};
-    var flowJsonUrl = '${escapeHtml(flowJsonUrl)}';
+    var flowJsonUrl = ${JSON.stringify(flowJsonUrl)};
     var pollTimer;
     var evalTimer;
     var traceTimer;
@@ -214,7 +219,16 @@ export function renderProgressPage(userId: string, setupLog: string[], _isError 
     function pollTrace() {
       if (!flowJsonUrl) return;
       fetch(flowJsonUrl)
-        .then(function(r) { return r.ok ? r.json() : null; })
+        .then(function(r) {
+          if (!r.ok) {
+            // Debugging page — failures must be visible, not silent.
+            document.getElementById('trace-card').style.display = '';
+            document.getElementById('event-log').textContent =
+              'trace fetch failed (HTTP ' + r.status + ') — retrying every 2s';
+            return null;
+          }
+          return r.json();
+        })
         .then(function(t) { if (t && t.stages) renderTrace(t); })
         .catch(function() { /* retry on next poll */ });
     }
