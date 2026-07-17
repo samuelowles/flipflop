@@ -192,7 +192,10 @@ class TestFlickParser:
         assert result.days == 30
         assert result.c_per_kwh == 25.00
         assert result.c_per_day == 90.0
-        assert result.confidence >= 0.9
+        # 10/11 fields — this layout has no plan-name label, and the loose
+        # plan pattern that used to inflate this to 0.909 matched prose
+        # garbage (now tightened to require an explicit "Plan:" separator).
+        assert result.confidence >= 0.8
 
     # -----------------------------------------------------------------
     # AC: Edge / missing-field case.

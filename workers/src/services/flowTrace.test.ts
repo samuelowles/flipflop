@@ -200,3 +200,44 @@ describe('flowTrace — parse stage records a real duration (#241)', () => {
     expect(dur).toBeGreaterThanOrEqual(0);
   });
 });
+
+describe('flowTrace — append-only event log (multi-bill observability)', () => {
+  it('appends one event per transition, preserving earlier bills’ story', async () => {
+    const kv = makeKV();
+    // Bill 1 parses, then bill 2 parses — the stage row for `parse` is
+    // overwritten, but BOTH transitions survive in events.
+    await startStage(kv, 'u1', 'parse');
+    await finishStage(kv, 'u1', 'parse', { detail: 'bill A parsed', artifacts: { billId: 'A' } });
+    await startStage(kv, 'u1', 'parse');
+    await finishStage(kv, 'u1', 'parse', { detail: 'bill B parsed', artifacts: { billId: 'B' } });
+
+    const trace = await readFlowTrace(kv, 'u1');
+    expect(trace?.events).toHaveLength(4);
+    expect(trace?.events?.map(e => e.status)).toEqual(['running', 'ok', 'running', 'ok']);
+    expect(trace?.events?.[1]?.artifacts).toEqual({ billId: 'A' });
+    expect(trace?.events?.[3]?.artifacts).toEqual({ billId: 'B' });
+    // The stage table only remembers the LAST bill — that's the point.
+    expect(trace?.stages.find(s => s.stage === 'parse')?.detail).toBe('bill B parsed');
+  });
+
+  it('records failures and skips with their reasons', async () => {
+    const kv = makeKV();
+    await failStage(kv, 'u2', 'powerswitch', 'address_needs_review');
+    await skipStage(kv, 'u2', 'compare', 'no plans available for region National');
+
+    const trace = await readFlowTrace(kv, 'u2');
+    expect(trace?.events?.[0]).toMatchObject({ stage: 'powerswitch', status: 'failed', error: 'address_needs_review' });
+    expect(trace?.events?.[1]).toMatchObject({ stage: 'compare', status: 'skipped', detail: 'no plans available for region National' });
+  });
+
+  it('caps the log at MAX_FLOW_EVENTS, dropping oldest first', async () => {
+    const kv = makeKV();
+    for (let i = 0; i < 205; i++) {
+      await finishStage(kv, 'u3', 'parse', { detail: `event ${i}` });
+    }
+    const trace = await readFlowTrace(kv, 'u3');
+    expect(trace?.events).toHaveLength(200);
+    expect(trace?.events?.[0]?.detail).toBe('event 5');
+    expect(trace?.events?.[199]?.detail).toBe('event 204');
+  });
+});

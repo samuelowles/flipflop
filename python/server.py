@@ -137,15 +137,16 @@ def parse_bill():
         result = parser.parse(file_path)
         parser_name = "generic" if used_generic else (retailer_id or "generic")
 
-        # Retry once with the generic fallback when the primary parser's
-        # confidence is below the 0.7 threshold (AI_RULES Bill Parsing
-        # Thresholds). Only retries if the primary was NOT already generic.
-        if result.confidence < 0.7 and not used_generic:
-            fallback = GenericParser()
-            fallback_result = fallback.parse(file_path)
+        # One-parser goal: the generic parser is the primary path for all
+        # bill types. When a retailer hint selected a specific parser, ALWAYS
+        # also run the generic parser and keep the higher-confidence result —
+        # the old <0.7-gated retry left retailer parses in the 0.7-0.85 band
+        # stuck at needs_review even when generic extracted the layout fully.
+        # Cost: one extra local regex parse (no LLM, ~ms).
+        if not used_generic:
+            fallback_result = GenericParser().parse(file_path)
             logger.debug(
-                "Primary parser '%s' confidence %.3f < 0.7; "
-                "generic fallback confidence %.3f",
+                "Parser '%s' confidence %.3f; generic confidence %.3f",
                 parser_name, result.confidence, fallback_result.confidence,
             )
             if fallback_result.confidence > result.confidence:

@@ -177,10 +177,62 @@ def extract_kwh(text: str) -> Optional[float]:
 
 
 # ---------------------------------------------------------------------------
+# Time-of-use (TOU) charge components
+# ---------------------------------------------------------------------------
+
+# TOU usage-table lines on real bills (first seen on Electric Kiwi):
+# "Peak Charges 98.31 kWh ...", "Off-peak Charges 175.62 kWh ...",
+# "Hour of Power Savings 24.56 kWh FREE ...". NOT line-anchored — pdfplumber
+# glues left-column cells onto table rows ("AUCKLAND 0626 Peak Charges ...").
+_TOU_PEAK_PATTERN = re.compile(r"(?<!-)(?<!f )\bPeak\s+Charges\b[^\n]*?kWh", re.IGNORECASE)
+_TOU_OFFPEAK_PATTERN = re.compile(r"\bOff[- ]?peak\s+Charges\b[^\n]*?kWh", re.IGNORECASE)
+_TOU_COMPONENT_PATTERN = re.compile(
+    r"\b(?:(?:Peak|Off[- ]?peak|Day|Night)\s+Charges|Hour of Power\s+Savings)"
+    r"[^\n]*?([\d,]+(?:\.\d+)?)\s*kWh",
+    re.IGNORECASE,
+)
+
+
+def has_tou_charges(text: str) -> bool:
+    """True when the bill itemises Peak + Off-peak charge lines (TOU meter)."""
+    return bool(_TOU_PEAK_PATTERN.search(text) and _TOU_OFFPEAK_PATTERN.search(text))
+
+
+def extract_tou_usage(text: str) -> Optional[float]:
+    """Sum TOU component kWh lines (Peak + Off-peak + free Hour of Power).
+
+    Bills in this layout carry NO total-usage line; free kWh is still
+    consumption. Returns None unless at least two component lines are found.
+    """
+    components = [m.group(1) for m in _TOU_COMPONENT_PATTERN.finditer(text)]
+    if len(components) < 2:
+        return None
+    try:
+        return round(sum(float(c.replace(",", "")) for c in components), 2)
+    except ValueError:
+        return None
+
+
+# ---------------------------------------------------------------------------
 # Dollar extraction (returns integer cents)
 # ---------------------------------------------------------------------------
 
 _DOLLAR_PATTERNS = [
+    # Priority 0 (highest of all): the CURRENT-PERIOD charges total. Real
+    # bills with arrears put the arrears-inclusive figure under "Total amount
+    # due" ("Total amount due $492.80" when this period's power was $103.09 —
+    # real Contact bill), so an explicit current/new-charges label always
+    # wins. `[^\n$]*` bridges mid-label noise ("(Incl GST)", "- All Services",
+    # "- please pay by ...").
+    (
+        re.compile(
+            r"(?:Total\s*current\s*charges|Total\s*new\s*(?:usage\s*)?charges"
+            r"|New\s*Power\s*Charges|Current\s*charges\s*total)"
+            r"[^\n$]*\$\s*([\d,]+(?:\.\d{2})?)",
+            re.IGNORECASE,
+        ),
+        12,
+    ),
     # Priority 1 (highest): "Total amount due $X", "Amount due $X", or
     # "Total due $X" (Contact Energy phrasing). The literal "due" bridges
     # the label and the colon before the $ figure.
@@ -322,6 +374,9 @@ _DAILY_CHARGE_PATTERNS = [
     ),
     # "$0.90 per day"
     re.compile(r"\$\s*([\d.]+)\s*(?:/|per)\s*day", re.IGNORECASE),
+    # "1.768 dollars per day" (real Contact layout) — the shared <10 → x100
+    # dollars-to-cents heuristic below converts it.
+    re.compile(r"([\d.]+)\s*dollars?\s*(?:/|per)\s*day", re.IGNORECASE),
     # "Daily: 90.000 c" or "90.000 cents per day"
     re.compile(r"([\d.]+)\s*c(?:ents?)?\s*(?:/|per)\s*day", re.IGNORECASE),
     # "fixed charge 90.00c"
@@ -399,7 +454,10 @@ def extract_per_kwh(text: str) -> Optional[float]:
 
 _PLAN_NAME_PATTERNS = [
     re.compile(r"[Pp]lan\s*[Nn]ame[\s:#-]*(\S[\s\S]{0,40}?)(?:\n|$)", re.IGNORECASE),
-    re.compile(r"[Pp]lan[\s:#-]*(\S[\s\S]{0,40}?)(?:\n|$)", re.IGNORECASE),
+    # Require an explicit separator after "Plan" — a bare space matched prose
+    # ("...check you are on the right plan for your needs" in the Billy
+    # footer on real bills) and returned garbage plan names.
+    re.compile(r"[Pp]lan\s*[:#-]\s*(\S[\s\S]{0,40}?)(?:\n|$)", re.IGNORECASE),
     re.compile(
         r"(?:Standard|Low\s*User|Day\s*Night|Controlled|Economy|Classic|Anytime|Online|Saver|Freedom|Basic|Everyday)(?:\s*Plan)?",
         re.IGNORECASE,
@@ -454,6 +512,12 @@ def extract_meter_type(text: str) -> str:
     for pattern in _LOW_USER_PATTERNS:
         if pattern.search(text):
             return "low_user"
+
+    # Itemised Peak + Off-peak charge lines = a TOU meter. Checked before the
+    # controlled patterns because "Off-peak" would otherwise false-match the
+    # controlled-load "Off Peak" pattern (real Electric Kiwi bill).
+    if has_tou_charges(text):
+        return "day_night"
 
     for pattern in _DAY_NIGHT_PATTERNS:
         if pattern.search(text):

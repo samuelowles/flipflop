@@ -34,6 +34,8 @@ from parsers.extractors import (
     extract_meter_type,
     extract_per_kwh,
     extract_plan_name,
+    extract_tou_usage,
+    has_tou_charges,
 )
 
 
@@ -68,7 +70,12 @@ class GenericParser(BaseParser):
             fields_found += 1
 
         # --- Usage kWh ---
-        usage_kwh = extract_kwh(full_text)
+        # TOU-itemised bills (Peak/Off-peak/Hour-of-Power lines, no total
+        # line) are summed first — extract_kwh would grab the first
+        # component only (real Electric Kiwi bill).
+        usage_kwh = extract_tou_usage(full_text)
+        if usage_kwh is None:
+            usage_kwh = extract_kwh(full_text)
         if usage_kwh is not None:
             if validate_kwh_range(usage_kwh):
                 fields_found += 1
@@ -116,7 +123,7 @@ class GenericParser(BaseParser):
 
         # --- Meter type ---
         meter_type = extract_meter_type(full_text)
-        if meter_type != "standard":
+        if meter_type != "standard" or has_tou_charges(full_text):
             fields_found += 1
 
         # --- Retailer detection ---
@@ -136,11 +143,14 @@ class GenericParser(BaseParser):
         break_fee_cents = self._extract_break_fee(full_text)
 
         # --- Confidence ---
-        # Baseline 0.5: a generic fallback always yields at least 0.5 by design
-        # (issue #51), scaling up to a 0.8 ceiling as more fields are matched.
-        # The ceiling stays below per-retailer parsers (which can reach 1.0)
-        # so the router prefers retailer-specific matches when available.
-        confidence = 0.5 + 0.3 * (fields_found / total_fields)
+        # Honest field-coverage scoring, same formula as the retailer
+        # parsers. The old 0.5-baseline/0.8-ceiling design (issue #51) meant
+        # a generic-only parse could NEVER clear the 0.85 'parsed' threshold
+        # — a dead end now that the generic parser is the primary path for
+        # all bill types (retailer parsers are a hint-driven bonus, not a
+        # requirement). Garbage input scores low because nothing extracts;
+        # rich bills score high because everything does.
+        confidence = min(1.0, fields_found / total_fields)
 
         return ParserResult(
             retailer=retailer_name,
@@ -171,7 +181,9 @@ class GenericParser(BaseParser):
         """
         retailers: list[tuple[str, str, int]] = [
             # Major retailers (dedicated parsers available)
-            ("Contact Energy", r"Contact\s*Energy", re.IGNORECASE),
+            # Real Contact bills never print "Contact Energy" — the anchors
+            # are the contact.co.nz domain and "Thanks for choosing Contact".
+            ("Contact Energy", r"Contact\s*Energy|contact\.co\.nz|choosing\s+Contact", re.IGNORECASE),
             ("Genesis Energy", r"Genesis\s*Energy", re.IGNORECASE),
             ("Mercury", r"Mercury", re.IGNORECASE),
             # Major retailers (generic parser only)
