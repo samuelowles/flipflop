@@ -116,22 +116,24 @@ def _post_parse(client, retailer_id="contact"):
 
 
 class TestDispatcherRetry:
-    def test_no_retry_when_primary_confidence_high(self, client):
-        """Primary parser >= 0.7 -> no retry, primary wins."""
+    def test_primary_wins_when_higher_than_generic(self, client):
+        """Retailer parser beats generic -> retailer result wins. The generic
+        parser ALWAYS runs alongside a hinted parser (one-parser goal)."""
         primary = _FakeParser(confidence=0.9)
+        fallback = _FakeParser(confidence=0.6, retailer="Detected")
         with patch("server.parser_for_retailer", return_value=primary), \
-             patch("server.GenericParser") as gen_cls:
+             patch("server.GenericParser", return_value=fallback) as gen_cls:
             resp = _post_parse(client, retailer_id="contact")
         assert resp.status_code == 200
         body = json.loads(resp.data)
         assert body["confidence"] == pytest.approx(0.9)
         assert body["parser_used"] == "contact"
-        # GenericParser must NOT have been instantiated (no retry).
-        gen_cls.assert_not_called()
+        # Generic ran for comparison, exactly once.
+        assert gen_cls.call_count == 1
 
     def test_retry_with_generic_when_primary_below_threshold(self, client):
-        """Primary confidence < 0.7 (and not generic) -> retry once,
-        and the higher-confidence result wins."""
+        """Generic scores higher than the hinted retailer parser ->
+        the generic result wins."""
         primary = _FakeParser(confidence=0.4)
         fallback = _FakeParser(confidence=0.75, retailer="Detected")
         with patch("server.parser_for_retailer", return_value=primary), \
@@ -143,7 +145,7 @@ class TestDispatcherRetry:
         assert body["parser_used"] == "generic"
 
     def test_keeps_primary_when_fallback_not_better(self, client):
-        """Primary < 0.7 but fallback is not higher -> primary kept."""
+        """Generic not higher -> primary kept (ties go to the retailer parser)."""
         primary = _FakeParser(confidence=0.6)
         fallback = _FakeParser(confidence=0.5, retailer="Detected")
         with patch("server.parser_for_retailer", return_value=primary), \
@@ -156,7 +158,7 @@ class TestDispatcherRetry:
 
     def test_no_retry_when_generic_is_primary(self, client):
         """When no retailer parser is registered, generic is the primary
-        -> no second generic retry even if confidence < 0.7."""
+        -> it runs exactly once (no self-comparison)."""
         fallback = _FakeParser(confidence=0.55, retailer="Unknown")
         with patch("server.parser_for_retailer", return_value=None), \
              patch("server.GenericParser", return_value=fallback) as gen_cls:
@@ -171,8 +173,9 @@ class TestDispatcherRetry:
     def test_response_includes_parser_used_and_confidence(self, client):
         """AC: final result includes both parser_used and confidence."""
         primary = _FakeParser(confidence=0.95)
+        fallback = _FakeParser(confidence=0.4, retailer="Detected")
         with patch("server.parser_for_retailer", return_value=primary), \
-             patch("server.GenericParser"):
+             patch("server.GenericParser", return_value=fallback):
             resp = _post_parse(client, retailer_id="mercury")
         body = json.loads(resp.data)
         assert "parser_used" in body

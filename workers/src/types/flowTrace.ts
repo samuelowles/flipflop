@@ -40,10 +40,30 @@ export interface FlowStage {
   artifacts?: Record<string, string>;
 }
 
+/**
+ * One append-only log entry: a single stage transition, verbatim. Unlike the
+ * `stages` table (one row per stage, overwritten on every run), events are
+ * never overwritten — with multiple bills in flight, each bill's parse/
+ * compare transitions stay visible (billId etc. ride in `artifacts`).
+ */
+export interface FlowEvent {
+  readonly ts: string; // ISO 8601
+  readonly stage: FlowStageName;
+  readonly status: FlowStageStatus;
+  readonly detail?: string;
+  readonly error?: string;
+  readonly artifacts?: Record<string, string>;
+}
+
+/** Cap on stored events — oldest are dropped first (KV value stays small). */
+export const MAX_FLOW_EVENTS = 200;
+
 /** The full trace for one user, persisted at `flow:{userId}`. */
 export interface FlowTrace {
   readonly userId: string;
   stages: FlowStage[];
+  /** Append-only stage-transition log (capped at MAX_FLOW_EVENTS). */
+  events?: FlowEvent[];
   updatedAt: string; // ISO 8601
 }
 

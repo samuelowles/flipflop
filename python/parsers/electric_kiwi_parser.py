@@ -34,6 +34,8 @@ from parsers.base import (
 )
 from parsers.extractors import (
     extract_address,
+    extract_tou_usage,
+    has_tou_charges,
     extract_daily_charge,
     extract_dates,
     extract_dollars,
@@ -118,9 +120,7 @@ class ElectricKiwiParser(BaseParser):
 
         # Real EK invoice layout: Peak + Off-peak charge lines (Hour of Power
         # TOU). Several fields behave differently on this layout (below).
-        tou_layout = bool(
-            self._TOU_PEAK.search(full_text) and self._TOU_OFFPEAK.search(full_text)
-        )
+        tou_layout = has_tou_charges(full_text)
 
         # --- Plan name ---
         if tou_layout:
@@ -180,27 +180,16 @@ class ElectricKiwiParser(BaseParser):
             raw_json=json.dumps({"retailer_id": self.RETAILER_ID, "text_length": len(full_text)}),
         )
 
-    # Usage-table component lines on real EK invoices — NOT line-anchored:
-    # pdfplumber glues the left-column address cell onto the first table row
-    # ("AUCKLAND 0626 Peak Charges 98.31 kWh $0.5671/kWh $55.75").
-    _TOU_PEAK = re.compile(r"(?<!-)(?<!f )\bPeak\s+Charges\b[^\n]*?kWh", re.IGNORECASE)
-    _TOU_OFFPEAK = re.compile(r"\bOff[- ]?peak\s+Charges\b[^\n]*?kWh", re.IGNORECASE)
-    _TOU_COMPONENT = re.compile(
-        r"\b(?:(?:Peak|Off[- ]?peak|Day|Night)\s+Charges|Hour of Power\s+Savings)"
-        r"[^\n]*?([\d,]+(?:\.\d+)?)\s*kWh",
-        re.IGNORECASE,
-    )
-
-    @classmethod
-    def _extract_electric_kiwi_usage(cls, text: str) -> Optional[float]:
+    @staticmethod
+    def _extract_electric_kiwi_usage(text: str) -> Optional[float]:
         """Extract total kWh from a labelled total line.
 
         Electric Kiwi day/night bills list day and night components
         separately before a total; this prefers an explicit "Total
         units/usage" label so the aggregate is returned rather than the
         first component. Real EK invoices have NO total line — only
-        Peak / Off-peak / Hour of Power component lines, which are summed
-        (free Hour of Power kWh is still consumption).
+        Peak / Off-peak / Hour of Power component lines, summed by the
+        shared extract_tou_usage (free Hour of Power kWh is consumption).
         """
         patterns = [
             re.compile(r"[Tt]otal\s*(?:units|usage|consumption|kWh)[\s:#-]*([\d,]+(?:\.\d+)?)"),
@@ -213,14 +202,7 @@ class ElectricKiwiParser(BaseParser):
                     return float(match.group(1).replace(",", ""))
                 except ValueError:
                     continue
-
-        components = [m.group(1) for m in cls._TOU_COMPONENT.finditer(text)]
-        if len(components) >= 2:
-            try:
-                return round(sum(float(c.replace(",", "")) for c in components), 2)
-            except ValueError:
-                pass
-        return None
+        return extract_tou_usage(text)
 
     @staticmethod
     def _extract_electric_kiwi_total(text: str) -> Optional[int]:

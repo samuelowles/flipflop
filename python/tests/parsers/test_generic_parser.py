@@ -117,11 +117,9 @@ Total: $50.00
 
         result = parser.parse("unknown.pdf")
         assert result.retailer == "Unknown"
-        # Generic parser baseline confidence is 0.5 (issue #51); an unknown
-        # retailer with a single matched field still scores >= 0.5 but the
-        # ceiling (0.8) stays below per-retailer parsers.
-        assert result.confidence >= 0.5
-        assert result.confidence < 0.8
+        # Honest field-coverage scoring: one matched field (total) out of 11
+        # scores low — a near-empty bill must not look confident.
+        assert result.confidence < 0.2
 
     @patch("pdfplumber.open")
     def test_raises_on_empty_pdf(self, mock_open, parser):
@@ -190,8 +188,14 @@ Total: $50.00
 # ---------------------------------------------------------------------------
 # Issue #51 acceptance criteria: 5+ anonymized sample bill texts covering the
 # required scenarios. All texts are synthetic (no real PII / ICPs / account
-# numbers). Asserts detected fields, the [0.5, 0.8) confidence band, and that
-# the returned object matches the canonical ParserResult schema.
+# numbers). Asserts detected fields and that the returned object matches the
+# canonical ParserResult schema.
+#
+# Confidence contract (superseding #51's [0.5, 0.8) band): the generic parser
+# is now the PRIMARY parser for all bill types, scoring honest field coverage
+# (fields_found / 11, same formula as retailer parsers) — a rich bill can
+# clear the 0.85 'parsed' threshold, and garbage scores near zero instead of
+# being inflated to a 0.5 floor.
 # ---------------------------------------------------------------------------
 
 # Canonical schema fields every parser (retailer-specific or generic) returns.
@@ -280,10 +284,9 @@ def test_issue51_sample_bills(mock_open, parser, scenario_id, bill_text):
         f"canonical ParserResult fields"
     )
 
-    # --- Confidence band: baseline 0.5, ceiling < 0.8 (per-retailer is 1.0) ---
-    assert 0.5 <= result.confidence < 0.8, (
-        f"{scenario_id}: confidence {result.confidence} not in [0.5, 0.8)"
-    )
+    # --- Confidence: honest field coverage — monotone in extracted fields,
+    # near zero on garbage, high on rich bills.
+    assert 0.0 <= result.confidence <= 1.0
 
     # --- Per-scenario field assertions ---
     if scenario_id == "clean_full_bill":
@@ -291,36 +294,119 @@ def test_issue51_sample_bills(mock_open, parser, scenario_id, bill_text):
         assert result.usage_kwh == 650.0
         assert result.total_cents == 22000
         assert result.days == 30
+        assert result.confidence >= 0.7  # 8/11 fields
     elif scenario_id == "missing_icp":
         assert result.icp_number == ""
         assert result.usage_kwh == 580.0
         assert result.total_cents == 19550
         assert result.days > 0
+        assert 0.3 <= result.confidence < 0.85  # partial bill must NOT parse
     elif scenario_id == "missing_usage":
         assert result.icp_number == "0009876543XYZ12"
         assert result.usage_kwh == 0.0
         assert result.total_cents == 18000
         assert result.days == 30
+        assert 0.3 <= result.confidence < 0.85
     elif scenario_id == "minimal_partial":
         # Only total is reliably extractable.
         assert result.total_cents == 8840
         assert result.icp_number == ""
+        assert result.confidence < 0.2
     elif scenario_id == "unparseable_blob":
-        # No fields detected -> confidence sits at the 0.5 floor.
-        assert result.confidence == 0.5
+        # No fields detected -> confidence 0.0, not an inflated floor.
+        assert result.confidence == 0.0
         assert result.total_cents == 0
         assert result.usage_kwh == 0.0
         assert result.icp_number == ""
 
 
-def test_issue51_confidence_below_per_retailer_ceiling(parser):
-    """Issue #51 AC: generic confidence ceiling (0.8) must stay below the
-    per-retailer parser ceiling (1.0). Verified structurally against the
-    formula so the contract holds even if total_fields changes."""
-    # A maximally-matched generic bill (every field populated) yields the
-    # generic ceiling, which must be strictly less than the per-retailer
-    # ceiling of 1.0.
+def test_generic_can_reach_parsed_threshold(parser):
+    """One-parser goal: a fully-extractable bill through the GENERIC parser
+    must be able to clear the worker's 0.85 'parsed' threshold — the old
+    0.8 ceiling made generic-only parses dead-end at needs_review."""
     total_fields = 11
-    generic_ceiling = 0.5 + 0.3 * (total_fields / total_fields)
-    assert generic_ceiling == 0.8
-    assert generic_ceiling < 1.0
+    generic_ceiling = min(1.0, total_fields / total_fields)
+    assert generic_ceiling >= 0.85
+
+
+# ---------------------------------------------------------------------------
+# Real production layouts through the GENERIC parser (one-parser goal): both
+# must clear the 0.85 'parsed' threshold with correct fields, no retailer
+# hint needed. Texts are anonymized mirrors of real bills.
+# ---------------------------------------------------------------------------
+
+# Real Contact Energy layout quirks: no "Contact Energy" token anywhere
+# (detection anchors on contact.co.nz / "choosing Contact"), an
+# arrears-inclusive "Total amount due" that must LOSE to "Total current
+# charges", "dollars per day" daily rate, and the address glued mid-line
+# after "Energy used by".
+CONTACT_REAL_LAYOUT = """
+Support
+Your bill for 17 Aug 2021 to 23 Aug 2021
+To view and manage your account, use our app or sign
+in to My Account at contact.co.nz/myaccount. Tax Invoice/Statement
+Invoice number 9999999999
+Statement date 24 Aug 2021
+Mx S Sample
+Flat 1/240 Sample Road
+Birkenhead
+Auckland 0626
+Your account number
+Previous activity Charges Credits
+509999999 Previous balance $389.71
+Thanks for choosing Contact Total previous charges $389.71
+Summary of Current activity Charges Credits
+Fixed daily charges $12.38
+Account name(s) Variable charges $77.26
+GST $13.45
+Mx S Sample
+Total current charges $103.09
+Total amount due - please pay by 7 Sep 2021 $492.80
+Energy used by Flat 1/240 Sample Road, Birkenhead, Auckland 0626 - installation connection point (ICP) 0000211257UN0BA from
+17 Aug 21 to 23 Aug 21 (7 days)
+Electricity 209999999:1 23 Aug 21 114444 114895 451 451kWh
+Fixed daily charges
+Daily Charge 7 days @ 1.768 dollars per day $12.38
+Variable charges
+All Day Economy 451 kWh @ 17.000 cents per kWh $76.67
+Electricity Authority Levy 451 kWh @ 0.130 cent per kWh $0.59
+"""
+
+
+@patch("pdfplumber.open")
+def test_real_contact_layout_via_generic(mock_open, parser):
+    mock_open.return_value = _make_pdf_mock(CONTACT_REAL_LAYOUT)
+
+    result = parser.parse("contact_real.pdf")
+
+    assert result.confidence >= 0.85, f"got {result.confidence:.3f}"
+    assert result.retailer == "Contact Energy"
+    assert result.period_start == "2021-08-17"
+    assert result.period_end == "2021-08-23"
+    assert result.days == 7
+    assert result.usage_kwh == 451.0
+    # Current-period charges — NOT the arrears-inclusive $492.80.
+    assert result.total_cents == 10309
+    assert result.c_per_kwh == 17.0
+    assert result.c_per_day == pytest.approx(176.8)
+    assert result.icp_number == "0000211257UN0BA"
+    assert result.address == "1/240 Sample Road, Birkenhead, Auckland 0626"
+
+
+@patch("pdfplumber.open")
+def test_real_electric_kiwi_layout_via_generic(mock_open, parser):
+    from tests.parsers.test_electric_kiwi_parser import BILL_REAL_LAYOUT
+
+    mock_open.return_value = _make_pdf_mock(BILL_REAL_LAYOUT)
+
+    result = parser.parse("ek_real.pdf")
+
+    assert result.confidence >= 0.85, f"got {result.confidence:.3f}"
+    assert result.retailer == "Electric Kiwi"
+    assert result.usage_kwh == pytest.approx(298.49)
+    assert result.total_cents == 14036
+    assert result.days == 9
+    assert result.meter_type == "day_night"
+    # The loose plan pattern must NOT surface footer prose as a plan name.
+    assert result.plan_name == "Unknown"
+    assert result.address == "45 SAMPLE ROAD, BEACH HAVEN, AUCKLAND 0626"
