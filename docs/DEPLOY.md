@@ -63,7 +63,13 @@ npx wrangler secret put STRIPE_WEBHOOK_SECRET
 npx wrangler secret put ENCRYPTION_KEY
 npx wrangler secret put ADMIN_API_KEY
 ```
-- [ ] `ENCRYPTION_KEY` is a 256-bit key (generate with `openssl rand -hex 32`)
+- [ ] `ENCRYPTION_KEY` is a 256-bit key (generate with `openssl rand -hex 32`).
+      Hex and base64 are both accepted — they are told apart by length (64 hex
+      chars vs 43-44 base64). A key that decodes to anything other than 16/24/32
+      bytes is rejected at first use with a message naming the secret; it used to
+      surface as an opaque `Invalid key length` from whichever route touched PII
+      first, and a hex key silently decoded to 48 bytes and broke every
+      encrypt/decrypt in a deployment provisioned exactly as this line says.
 
 ### 1.8 Deploy Worker (Dev)
 ```bash
