@@ -17,7 +17,14 @@ export function escapeHtml(str: string): string {
     .replace(/"/g, '&quot;');
 }
 
-export function renderProgressPage(userId: string, setupLog: string[], _isError = false, flowUrl?: string): string {
+/**
+ * @param statusQuery HMAC-signed `u=&exp=&sig=` triple minted by the caller.
+ *   The status endpoints require it — a bare user id is a database key, not a
+ *   credential, and it travels in this page's own URL. Empty string is allowed
+ *   (the error render has no signed link); polling then simply 403s, which is
+ *   the correct outcome for a page that has nothing to poll.
+ */
+export function renderProgressPage(userId: string, setupLog: string[], _isError = false, flowUrl?: string, statusQuery = ''): string {
   const logsJson = JSON.stringify(setupLog);
   const flowJsonUrl = flowUrl ? flowUrl.replace('/flow/status?', '/flow/status.json?') : '';
   const traceLinkHtml = flowUrl
@@ -137,6 +144,7 @@ export function renderProgressPage(userId: string, setupLog: string[], _isError 
     // never appears (real deployed-run finding). Values are server-generated
     // (UUID / signed URL / own log lines) — no angle brackets possible.
     var userId = ${JSON.stringify(userId)};
+    var statusQuery = ${JSON.stringify(statusQuery)};
     var setupLogs = ${logsJson};
     var flowJsonUrl = ${JSON.stringify(flowJsonUrl)};
     var pollTimer;
@@ -307,7 +315,7 @@ export function renderProgressPage(userId: string, setupLog: string[], _isError 
     var EVAL_MAX_ATTEMPTS = 150; // x 2s = 5 minutes
     function pollEvalStatus() {
       evalAttempts++;
-      fetch('/auth/gmail/eval-status?userId=' + encodeURIComponent(userId))
+      fetch('/auth/gmail/eval-status?' + statusQuery)
         .then(function(r) { return r.json(); })
         .then(function(data) {
           if (data && data.found) {
@@ -385,7 +393,7 @@ export function renderProgressPage(userId: string, setupLog: string[], _isError 
     }
 
     function pollStatus() {
-      fetch('/auth/gmail/scan-status?userId=' + encodeURIComponent(userId))
+      fetch('/auth/gmail/scan-status?' + statusQuery)
         .then(function(r) { return r.json(); })
         .then(function(data) {
           if (data.error) return;

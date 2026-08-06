@@ -7,7 +7,7 @@ import type { GmailPollingEnv } from '../services/emailPoller';
 import { sendText } from '../services/messaging';
 import { runEvalComparison } from './eval';
 import { startStage, finishStage, failStage } from '../services/flowTrace';
-import { mintFlowLink } from '../services/flowLink';
+import { mintFlowLink, verifyFlowLink } from '../services/flowLink';
 import { escapeHtml, renderProgressPage } from './gmailProgressPage';
 
 const NONCE_KV_PREFIX = 'oauth:nonce:';
@@ -130,12 +130,44 @@ export async function gmailLogin(c: Context): Promise<Response> {
   return c.redirect(authUrl, 302);
 }
 
+/**
+ * Resolve the user for a status poll, or return the failure response.
+ *
+ * These endpoints took a bare `?userId=` and returned that user's data to
+ * anyone who asked. `billSenders` / `filteredSenders` are From addresses read
+ * out of their Gmail inbox, and eval-status returns their bill-derived
+ * comparisons — so the only thing standing between a stranger and someone
+ * else's data was knowing a UUID that TRAVELS IN A URL: it sits in the
+ * post-OAuth page the user is invited to open, so it lands in browser history
+ * and in anything they share.
+ *
+ * A database key is not a credential. These now require the same HMAC-signed
+ * `u`/`exp`/`sig` triple as /flow/status (issue #241), which is minted
+ * server-side by the page that polls them and expires with the trace.
+ */
+async function authorizeStatusRequest(
+  c: Context
+): Promise<{ userId: string } | { response: Response }> {
+  const encryptionKey = c.env.ENCRYPTION_KEY as string | undefined;
+  if (!encryptionKey) {
+    return { response: c.json({ error: 'Encryption not configured' }, 500) };
+  }
+  const u = c.req.query('u');
+  const exp = c.req.query('exp');
+  const sig = c.req.query('sig');
+  if (!(await verifyFlowLink(encryptionKey, u, exp, sig))) {
+    // One undifferentiated 403: distinguishing "bad signature" from "expired"
+    // from "unknown user" would confirm which user ids exist.
+    return { response: c.json({ error: 'Invalid or expired link' }, 403) };
+  }
+  return { userId: u as string };
+}
+
 // Scan status endpoint — polled by the callback progress page
 export async function gmailScanStatus(c: Context): Promise<Response> {
-  const userId = c.req.query('userId');
-  if (!userId) {
-    return c.json({ error: 'Missing userId parameter' }, 400);
-  }
+  const auth = await authorizeStatusRequest(c);
+  if ('response' in auth) return auth.response;
+  const userId = auth.userId;
 
   const kv = c.env.KV as KVNamespace;
   const progress = await readScanProgress(kv, userId);
@@ -150,10 +182,9 @@ export async function gmailScanStatus(c: Context): Promise<Response> {
 // Eval/comparison status endpoint — polled by the callback progress page
 // after scan completes, to show plan comparison results
 export async function gmailEvalStatus(c: Context): Promise<Response> {
-  const userId = c.req.query('userId');
-  if (!userId) {
-    return c.json({ error: 'Missing userId parameter' }, 400);
-  }
+  const auth = await authorizeStatusRequest(c);
+  if ('response' in auth) return auth.response;
+  const userId = auth.userId;
 
   const kv = c.env.KV as KVNamespace;
   const cacheKey = `gmail:eval:${userId}`;
@@ -376,8 +407,12 @@ export async function gmailCallback(c: Context): Promise<Response> {
     // pipeline live in a browser (no Bearer header needed).
     const flowUrl = await mintFlowLink(encryptionKey, stored.userId);
 
+    // The status endpoints authenticate on the same signed triple. Reuse the
+    // one just minted rather than signing twice — same user, same 24h TTL.
+    const statusQuery = flowUrl.slice(flowUrl.indexOf('?') + 1);
+
     // Return progress page that polls /auth/gmail/scan-status and /auth/gmail/eval-status
-    return new Response(renderProgressPage(stored.userId, setupLog, false, flowUrl), {
+    return new Response(renderProgressPage(stored.userId, setupLog, false, flowUrl, statusQuery), {
       status: 200,
       headers: { 'Content-Type': 'text/html; charset=utf-8' },
     });
