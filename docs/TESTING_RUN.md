@@ -22,6 +22,21 @@ after that §3 (the run) + §5 (reset) are all you need.
 > run against a deployment no real user can reach, and set it back immediately
 > afterwards. `workers/src/e2e/pipeline.e2e.test.ts` asserts the guards hold
 > with the production value.
+>
+> **The flag is now inert while `ENVIRONMENT="production"`.** A procedure that
+> depends on remembering to set a value back is one skipped step away from
+> leaving a beta tester unguarded for a day, so the lockout is structural:
+> `isFlowTestBypassActive` returns `false` outright in production, whatever
+> `FLOW_TEST_MODE` says. To run the operator flow end-to-end you must set BOTH
+> in `workers/wrangler.toml`:
+>
+> ```toml
+> ENVIRONMENT = "development"   # required — production hard-disables the bypass
+> FLOW_TEST_MODE = "true"
+> ```
+>
+> and set both back before anyone real reaches the deployment. Two deliberate
+> edits to disarm user protections is the point, not friction to route around.
 
 All commands assume your shell is at the repo root unless noted (`cd workers` is
 called out where needed). Replace `<WORKER_URL>` with your deployed origin, e.g.

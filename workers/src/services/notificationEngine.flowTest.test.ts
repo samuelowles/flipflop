@@ -80,3 +80,32 @@ describe('isFlowTestBypassActive (issue #228 test-mode toggle)', () => {
     expect(bypass).toBe(false);
   });
 });
+
+describe('FLOW_TEST_MODE cannot take effect in production', () => {
+  /**
+   * The flag disarms the threshold AND both cooldowns for any user with an
+   * active flow trace — and a trace is created for every user who connects
+   * Gmail, with a 24h TTL. Left on against a live deployment a beta tester is
+   * unguarded for their whole first day. Shipping it as "false" plus a runbook
+   * note is a procedure; this makes it structural.
+   */
+  it('returns false when ENVIRONMENT=production even with the flag on and a live trace', async () => {
+    const kv = makeKV();
+    await kv.put(`flow:u1`, JSON.stringify({ stages: {} }));
+    const bypass = await isFlowTestBypassActive(
+      { KV: kv, FLOW_TEST_MODE: 'true', ENVIRONMENT: 'production' },
+      'u1'
+    );
+    expect(bypass).toBe(false);
+  });
+
+  it('still works outside production, so the operator runbook is unaffected', async () => {
+    const kv = makeKV();
+    await kv.put(`flow:u1`, JSON.stringify({ stages: {} }));
+    const bypass = await isFlowTestBypassActive(
+      { KV: kv, FLOW_TEST_MODE: 'true', ENVIRONMENT: 'development' },
+      'u1'
+    );
+    expect(bypass).toBe(true);
+  });
+});
