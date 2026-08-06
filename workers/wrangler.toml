@@ -70,7 +70,18 @@ POWERSWITCH_SCRAPER_ENABLED = "false"
 # docs/TESTING_RUN.md. Hard rules (ICP never submitted, budget, etiquette,
 # canary) unchanged.
 POWERSWITCH_LIVE = "true"
-FLOW_TEST_MODE = "true"
+# FLOW_TEST_MODE must stay "false" for any deployment real users can reach.
+#
+# It bypasses the notification threshold, the 1h send-dedup AND the 7d cooldown
+# for any user with an active flow trace — and a trace is created for every
+# user who connects Gmail, with a 24h TTL. Left on, a beta tester is unguarded
+# for their entire first day: notified below their savings threshold, and
+# re-notified on every re-evaluation. Duplicate WhatsApp messages to a real
+# person is the worst failure this product can have.
+#
+# Set it to "true" only for a solo operator test run against a deployment no
+# real user can reach, and set it back immediately after (docs/TESTING_RUN.md).
+FLOW_TEST_MODE = "false"
 
 # Durable Object used by src/middleware/rateLimit.ts for atomic per-key rate
 # limiting.  One DO instance per rate-limit key serialises read-modify-write

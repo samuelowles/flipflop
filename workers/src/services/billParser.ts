@@ -12,7 +12,20 @@ interface ParseServiceRequest {
 }
 
 interface ParseServiceResponse {
-  readonly retailer_id?: string;
+  /**
+   * Retailer DISPLAY NAME as detected by the parser ("Mercury", "Electric
+   * Kiwi"). This is what the Python service actually returns — its
+   * ParserResult has no `retailer_id` field at all.
+   *
+   * It must NEVER be written to bills.retailer_id, which is a FOREIGN KEY to
+   * retailers(id) (a UUID). The response previously declared a phantom
+   * `retailer_id`, and the parse stage wrote it straight into that column; it
+   * survived only because Python never sent the field. Adding it — the obvious
+   * thing to do, since the parser knows the retailer — would have made every
+   * bill fail with `FOREIGN KEY constraint failed`, retry three times, and
+   * dead-end in the DLQ.
+   */
+  readonly retailer?: string;
   readonly plan_name?: string;
   readonly meter_type?: string;
   readonly period_start?: string;
@@ -252,7 +265,10 @@ export async function handleParseJob(
   //    the address is persisted encrypted on the user row below.
   const { address: extractedAddress, ...parseResultSansAddress } = parseResult;
   await updateBillParsedData(env.DB, billId, {
-    retailerId: parseResult.retailer_id ?? bill.retailerId ?? undefined,
+    // Ingest-time resolution (emailPipeline.matchRetailer) is the ONLY source
+    // of a real retailers.id. See ParseServiceResponse.retailer above: nothing
+    // from the parse response may reach this FK column.
+    retailerId: bill.retailerId ?? undefined,
     planName: parseResult.plan_name,
     meterType: validateMeterType(parseResult.meter_type),
     periodStart: parseResult.period_start,

@@ -2,6 +2,10 @@ import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   test: {
+    // The e2e suite needs migrations applied to a real D1 and has its own
+    // config (vitest.e2e.config.ts). Running it here would fail on an empty
+    // schema.
+    exclude: ["**/node_modules/**", "**/dist/**", "src/e2e/**"],
     pool: "@cloudflare/vitest-pool-workers",
     poolOptions: {
       workers: {

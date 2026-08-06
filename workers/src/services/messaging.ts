@@ -9,7 +9,32 @@ const SENT_API_BASE =
 
 interface SentMessageResponse {
   readonly id: string;
-  readonly channel: 'whatsapp' | 'sms';
+  /** Optional in practice — the API does not guarantee it. See resolveChannel. */
+  readonly channel?: 'whatsapp' | 'sms';
+}
+
+/**
+ * Decide the channel to RECORD for a send.
+ *
+ * The Sent API response is untrusted input. `channel` was previously taken
+ * verbatim from it and handed to createMessage, which binds it straight into
+ * D1 without a null guard — so a response that omitted the field threw
+ * `D1_TYPE_ERROR: Type 'undefined' not supported` *after the message had
+ * already been delivered*. In the parse stage that silently lost the message
+ * row; in the notify stage it marks a delivered notification as failed, and
+ * the dedup/cooldown rows that prevent a repeat send may never be written.
+ *
+ * We always know which channel we asked for, so the request is the reliable
+ * source and the response is only allowed to confirm it.
+ */
+function resolveChannel(
+  responseChannel: unknown,
+  requested: SentChannel | undefined
+): SentChannel {
+  if (responseChannel === 'whatsapp' || responseChannel === 'sms') {
+    return responseChannel;
+  }
+  return requested ?? 'whatsapp';
 }
 
 // Typed error classes for Sent API failures so callers (route handlers,
@@ -99,7 +124,7 @@ export async function sendText(
     // Never log phone number or message body
   }));
 
-  return { messageId: data.id, channel: data.channel };
+  return { messageId: data.id, channel: resolveChannel(data.channel, channel) };
 }
 
 export async function sendTemplate(
@@ -135,7 +160,7 @@ export async function sendTemplate(
     timestamp: new Date().toISOString(),
   }));
 
-  return { messageId: data.id, channel: data.channel };
+  return { messageId: data.id, channel: resolveChannel(data.channel, 'whatsapp') };
 }
 
 export async function downloadMedia(

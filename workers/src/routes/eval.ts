@@ -685,7 +685,11 @@ export async function evalUploadHandler(c: Context): Promise<Response> {
       : undefined;
 
     await updateBillParsedData(env.DB, bill.id, {
-      retailerId: parseResult.retailer_id,
+      // The parse response carries a retailer DISPLAY NAME, never a
+      // retailers.id — and bills.retailer_id is a FK to retailers(id).
+      // Writing the parser's value here fails the constraint. The bill's
+      // ingest-time retailer is the only valid source.
+      retailerId: bill.retailerId ?? undefined,
       planName: parseResult.plan_name,
       meterType,
       periodStart: parseResult.period_start,

@@ -14,7 +14,9 @@
     "migrate:local": "wrangler d1 execute flip-db --local --file",
     "migrate:remote": "wrangler d1 execute flip-db --remote --file",
     "test-run:reset": "node ../scripts/test-run-reset.mjs",
-    "powerswitch:smoke": "npx tsx ../scripts/powerswitch-smoke.mjs"
+    "powerswitch:smoke": "npx tsx ../scripts/powerswitch-smoke.mjs",
+    "test:e2e": "vitest run --config vitest.e2e.config.ts",
+    "test:all": "vitest run && vitest run --config vitest.e2e.config.ts"
   },
   "dependencies": {
     "hono": "^4.0.0"

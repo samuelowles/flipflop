@@ -10,6 +10,19 @@ after that §3 (the run) + §5 (reset) are all you need.
 > `POWERSWITCH_LIVE="true"` + `FLOW_TEST_MODE="true"` in `workers/wrangler.toml`
 > (this issue) **is** Gate 2. See §6 for the hard rules that still apply.
 
+> ### ⚠️ `FLOW_TEST_MODE` must be `"false"` before any real user reaches the deployment
+>
+> It bypasses the notification threshold, the 1h send-dedup **and** the 7d
+> cooldown for any user with an active flow trace — and a trace is created for
+> every user who connects Gmail, with a **24-hour TTL**. Left on, a beta tester
+> is unguarded for their whole first day: notified below their savings
+> threshold, and re-notified on every re-evaluation.
+>
+> It now ships as `"false"`. Flip it to `"true"` **only** for a solo operator
+> run against a deployment no real user can reach, and set it back immediately
+> afterwards. `workers/src/e2e/pipeline.e2e.test.ts` asserts the guards hold
+> with the production value.
+
 All commands assume your shell is at the repo root unless noted (`cd workers` is
 called out where needed). Replace `<WORKER_URL>` with your deployed origin, e.g.
 `https://flip-api.<your-subdomain>.workers.dev`.
@@ -129,7 +142,7 @@ cd workers && npx wrangler deploy --dry-run --outdir /tmp/dryrun && cd ..   # mu
 | 3 | `parse` | `ok — confidence ≥ threshold` | Threshold = `F1_HINT_CONFIDENCE_THRESHOLD` (0.85). Below → routed to manual review. |
 | 4 | `powerswitch` | `ok — ≥5 plans` | **Live.** The capture returned 15 plans across 9 retailers. ICP is never submitted. |
 | 5 | `compare` | `ok — recommendation switch\|stay_put` | Python comparator vs the live plan set. |
-| 6 | `notify` | `ok — WhatsApp received on the test phone` | `FLOW_TEST_MODE` bypasses cooldown/threshold so the send always fires while a trace is active. |
+| 6 | `notify` | `ok — WhatsApp received on the test phone` | Requires `FLOW_TEST_MODE="true"` (temporarily) to bypass cooldown/threshold so the send always fires while a trace is active. **Set it back to `"false"` before any real user reaches this deployment** — see the warning in §0. With it off, expect `notify_skip` unless the saving genuinely clears the user's threshold. |
 | 7 | `switch` | `skipped` | Switch only runs on an explicit `POST /api/switch`. By design. |
 
 The trace reaches **`notify ok`** — the success criterion for this run. The
