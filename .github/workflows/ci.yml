@@ -2,6 +2,13 @@ name: CI
 
 on:
   pull_request:
+  # Manual re-run. PR events are not always delivered — during the beta review
+  # of 2026-08-06, CI fired for six consecutive PRs and then silently stopped
+  # for the next three, with the workflow active, Actions enabled and the repo
+  # public (so minutes are free). Closing and reopening a PR did not re-trigger
+  # it either. Without a dispatch trigger there is NO way to ask for a run, and
+  # a PR that cannot be checked cannot be merged with confidence.
+  workflow_dispatch:
   # Master pushes are gated too: squash-merges land without re-running the PR
   # checks against the merged tree, and deploys are Cloudflare's Git
   # integration (Workers Builds, production branch = master), which deploys
