@@ -97,7 +97,24 @@ From the repo root:
 > ```bash
 > cd workers && npx wrangler d1 execute flip-db --remote --command >   "SELECT COUNT(*) FROM pragma_table_info('users') WHERE name='powerswitch_pxid'"
 > ```
-> For FUTURE migrations (0019+), apply each with
+> ### Migrations 0020 + 0021 must land WITH their code, not before or long after
+>
+> Neither half works alone, and the failure is silent in both directions:
+>
+> - **Migrations before the merge** — 0020 expires the fabricated seed plans while
+>   the deployed code still falls back to them, so a Powerswitch failure yields no
+>   comparison at all instead of a (wrong) one.
+> - **Merge before the migrations** — two fixes are INERT. #268 changes the
+>   threshold constant, but  reads the per-user
+>    column, which still holds 5000: every existing
+>   user keeps being notified at $50/yr. And #263 is migration-only, so the 39
+>   fabricated plans stay live and keep outranking real scraped data.
+>
+> Correct order: **merge, then immediately apply both**, then re-run 2c.
+>
+> 
+>
+> For FUTURE migrations (0022+), apply each with
 > `npx wrangler d1 execute flip-db --remote --file migrations/00NN_name.sql`
 > (mind the FK gotcha: wrap table rebuilds in PRAGMA foreign_keys=OFF/ON).
 
