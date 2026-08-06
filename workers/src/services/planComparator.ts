@@ -11,6 +11,7 @@ import { getCanonicalPlans } from './planAggregator';
 import { createComparison } from '../models/comparisons';
 import { getLatestSwitchForUser } from '../models/switches';
 import { meetsThreshold } from './notificationEngine';
+import { detectRatesGstInclusive } from './gstBasis';
 import type {
   ComparisonBillSummary,
   ComparisonCurrentPlan,
@@ -240,6 +241,9 @@ export async function runComparison(
     retailer_id: latestBill.retailerId ?? '',
     c_per_kwh: latestBill.cPerKwh ?? undefined,
     c_per_day: latestBill.cPerDay ?? undefined,
+    // A bill's rates may be printed incl or excl GST (NZ retailers use both).
+    // Declare which so the comparator can put every plan on one basis.
+    gst_inclusive: detectRatesGstInclusive(latestBill),
     break_fee_cents: latestBill.breakFeeCents ?? undefined,
     fixed_term_expiry: latestBill.fixedTermExpiry ?? undefined,
   };
