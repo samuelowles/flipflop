@@ -121,7 +121,21 @@ If Gate 1 cannot be satisfied (Consumer NZ declines or is unresponsive within th
 
 ## Consent copy (draft)
 
-> **Note:** This is draft copy for the WhatsApp onboarding flow. It is **not wired into code here** — the onboarding-flow issue owns implementation. It is recorded here so the compliance decision and the consent language are reviewable together.
+> **Status:** the DISCLOSURE is now wired (`routes/gmail.ts` — the connect page and
+> the post-connect message), because `POWERSWITCH_LIVE="true"` means a real
+> user's address reaches a third party and they were being told nothing.
+> Tests in `gmail.test.ts` assert the page names Powerswitch, the ICP guarantee
+> and the 7-day cache, and that it appears BEFORE any address is collected.
+>
+> What is still NOT wired is the blocking **consent gate** ("Reply YES to
+> continue"). That changes onboarding materially — it stops the pipeline until
+> the user answers — so it is a product decision rather than a compliance fix,
+> and is left for the onboarding-flow issue. Template 2 (re-consent on address
+> change) is likewise unwired.
+>
+> The emoji in the draft copy below is deliberately NOT carried into the wired
+> version: these messages are SMS-eligible and the project strips emoji from
+> those (see `bugs.md`).
 
 ### Template 1 — Onboarding disclosure (first comparison)
 

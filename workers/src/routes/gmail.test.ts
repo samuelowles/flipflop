@@ -777,3 +777,41 @@ describe('status endpoints reject anything but a valid signature (access control
     expect(await bad.text()).toBe(await swapped.text());
   });
 });
+
+describe('Powerswitch disclosure (POWERSWITCH_COMPLIANCE.md)', () => {
+  /**
+   * `POWERSWITCH_LIVE="true"`, so the compare stage sends a real user's address
+   * to a third party. The compliance doc specifies the disclosure copy but
+   * records it as "draft ... not wired into code here", so users were told
+   * nothing — the connect page mentioned only Gmail. Telling someone their data
+   * goes to a named third party, before it does, is IPP 3, not politeness.
+   */
+  it('names Powerswitch and the ICP guarantee on the connect page', async () => {
+    const app = createTestApp();
+    const res = await app.request('/auth/gmail', {}, makeEnv());
+    const html = await res.text();
+
+    expect(html).toContain('Powerswitch.org.nz');
+    expect(html, 'the ICP guarantee is the keystone privacy claim').toMatch(/ICP number is never shared/i);
+    expect(html, 'the 7-day cache window is disclosed').toMatch(/7 days/);
+  });
+
+  it('discloses before the address is ever collected', async () => {
+    // The connect page runs before OAuth, before any bill is parsed, and so
+    // before any address exists to send. Disclosure after the fact is not
+    // disclosure.
+    const app = createTestApp();
+    const res = await app.request('/auth/gmail', {}, makeEnv());
+    expect(res.status).toBe(200);
+    expect(await res.text()).toContain('Powerswitch.org.nz');
+  });
+
+  it('carries no emoji — these messages are SMS-eligible', () => {
+    // The compliance doc's draft copy opens with an emoji, which contradicts the
+    // project's own SMS rule (see bugs.md: emojis stripped from SMS-eligible
+    // messages). The wired copy follows the rule, not the draft.
+    // eslint-disable-next-line no-control-regex
+    const emoji = /[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/u;
+    expect(emoji.test('Cheers! Flip\u2019s hooked up')).toBe(false);
+  });
+});
