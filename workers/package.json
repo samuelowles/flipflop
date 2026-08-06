@@ -10,6 +10,7 @@
     "test:coverage": "vitest run --coverage",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit",
+    "check:env-docs": "node ../scripts/check-env-docs.mjs",
     "lint": "eslint .",
     "migrate:local": "wrangler d1 execute flip-db --local --file",
     "migrate:remote": "wrangler d1 execute flip-db --remote --file",

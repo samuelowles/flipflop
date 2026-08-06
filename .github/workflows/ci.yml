@@ -31,6 +31,12 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      - name: Env-vars documented (operator-provisioning guard)
+        # Fails when the Worker reads an env value the runbook never tells the
+        # operator to set. SENT_WEBHOOK_SECRET was missing for exactly this
+        # reason and would have 500-ed every inbound webhook on a fresh deploy.
+        run: npm run check:env-docs
+
       - name: Typecheck (tsc --noEmit)
         run: npm run typecheck
 
