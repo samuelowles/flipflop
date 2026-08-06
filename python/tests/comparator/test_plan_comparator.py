@@ -477,3 +477,73 @@ class TestStayPutRecommendation:
             assert r["recommendation"] == "stay_put"
             assert r["reason"] == "no_savings"
 
+
+
+# ---------------------------------------------------------------------------
+# Unpriceable current plan (insufficient_data)
+# ---------------------------------------------------------------------------
+#
+# The savings figure is driven entirely by the CURRENT plan's rates, which come
+# from the user's most recent bill. When the parser fails to extract those
+# rates the current plan prices to $0, every alternative then shows a negative
+# saving, and the engine used to conclude "stay_put / no_savings" — telling the
+# user they are already on the best deal when in truth we could not price them.
+# "Stay where you are" is a first-class recommendation here, so that false
+# stay_put was indistinguishable from a real one.
+
+from comparator.plan_comparator import can_price_plan  # noqa: E402
+
+
+class TestCanPricePlan:
+    def test_plan_with_rates_is_priceable(self):
+        assert can_price_plan({"c_per_kwh": 28.0, "c_per_day": 90.0})
+
+    def test_either_rate_alone_is_enough(self):
+        assert can_price_plan({"c_per_kwh": 28.0})
+        assert can_price_plan({"c_per_day": 90.0})
+
+    def test_tiered_plan_is_priceable_without_flat_rates(self):
+        assert can_price_plan({"tier_thresholds_json": '[{"limit": 100, "rate": 20}]'})
+
+    def test_plan_with_no_rates_is_not_priceable(self):
+        assert not can_price_plan({"plan_name": "Unknown", "retailer_id": ""})
+        assert not can_price_plan({"c_per_kwh": 0, "c_per_day": 0})
+
+    def test_non_numeric_rates_are_not_priceable(self):
+        assert not can_price_plan({"c_per_kwh": "n/a"})
+
+
+class TestInsufficientData:
+    def _alternatives(self):
+        return [{
+            "plan_id": "p1", "plan_name": "Cheap", "retailer_id": "r",
+            "retailer_name": "R", "c_per_kwh": 20.0, "c_per_day": 100.0,
+            "meter_type": "standard",
+        }]
+
+    def test_unpriceable_current_plan_reports_insufficient_data(self, usage_profile):
+        results = compare(
+            usage_profile=usage_profile,
+            current_plan={"plan_name": "Unknown", "retailer_id": ""},
+            available_plans=self._alternatives(),
+            bill_history=[],
+        )
+        assert results, "comparator must still return the ranked plans"
+        for r in results:
+            assert r["recommendation"] == "stay_put"
+            assert r["reason"] == "insufficient_data", (
+                "an unpriceable current plan must NOT be reported as no_savings — "
+                "that is a false 'you are on the best plan'"
+            )
+
+    def test_priceable_current_plan_still_reports_a_real_verdict(self, usage_profile):
+        results = compare(
+            usage_profile=usage_profile,
+            current_plan={
+                "plan_name": "Current", "retailer_id": "c",
+                "c_per_kwh": 28.0, "c_per_day": 150.0,
+            },
+            available_plans=self._alternatives(),
+            bill_history=[],
+        )
+        assert all(r["reason"] != "insufficient_data" for r in results)

@@ -146,7 +146,8 @@ def compare(
     # "stay" verdict) is applied in TS because it requires a DB read.
     # -----------------------------------------------------------------------
     recommendation, reason = _derive_recommendation(
-        results, break_fee_cents, fixed_term_expiry
+        results, break_fee_cents, fixed_term_expiry,
+        current_plan_priceable=can_price_plan(current_plan),
     )
     for r in results:
         r["recommendation"] = recommendation
@@ -155,17 +156,47 @@ def compare(
     return results
 
 
+def can_price_plan(plan: dict) -> bool:
+    """True when *plan* carries enough tariff detail to cost a bill.
+
+    A plan with neither a per-kWh rate nor a daily charge prices to $0. For an
+    ALTERNATIVE plan that is harmless (it is already marked unsupported), but
+    for the CURRENT plan it is silently catastrophic: the user's current annual
+    cost computes as 0, every alternative therefore shows a negative saving,
+    and the engine concludes "stay_put / no_savings" — telling the user they
+    are on the best deal when the truth is that we could not price them at all.
+
+    A tiered plan carries its rates inside tier_thresholds_json, so that counts
+    too.
+    """
+    if plan.get("tier_thresholds_json"):
+        return True
+    try:
+        return float(plan.get("c_per_kwh", 0) or 0) > 0 or float(plan.get("c_per_day", 0) or 0) > 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _derive_recommendation(
     results: list[dict],
     break_fee_cents: int,
     fixed_term_expiry: str | None,
+    current_plan_priceable: bool = True,
 ) -> tuple[str, str | None]:
     """Return (recommendation, reason) per AC #72.
 
     recommendation is "switch" or "stay_put"; reason is None for "switch" and
-    one of {no_savings, low_savings, contract_constraints, lock_in_too_high}
-    for "stay_put". recent_switch is applied TS-side (DB read).
+    one of {insufficient_data, no_savings, low_savings, contract_constraints,
+    lock_in_too_high} for "stay_put". recent_switch is applied TS-side.
     """
+    # An unpriceable current plan cannot produce a meaningful saving. This must
+    # be distinguishable from a genuine "you are already on the best plan" —
+    # "stay where you are" is a first-class recommendation in this product, so
+    # a silent false stay_put is indistinguishable from a real one and is the
+    # worst failure the engine can have.
+    if not current_plan_priceable:
+        return "stay_put", "insufficient_data"
+
     # Best supported alternative (unsupported plans must never be recommended).
     alternatives = [
         r for r in results

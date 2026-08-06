@@ -93,8 +93,20 @@ export async function getBillsByUserId(
   db: D1Database,
   userId: string
 ): Promise<readonly Bill[]> {
+  // Ordered by BILLING PERIOD, not ingestion time. Every caller treats
+  // `[0]` as "the user's current bill" and reads the current plan's rates
+  // off it — and the whole savings figure is driven by those rates.
+  //
+  // `created_at DESC` was ingestion order, which is not the same thing and is
+  // frequently the exact REVERSE: the initial Gmail scan walks search results
+  // newest-first, so the oldest bill is inserted last and sorted first. The
+  // current plan was therefore being read off the OLDEST bill in the scan.
+  //
+  // SQLite sorts NULLs below all values, so unparsed bills (period_end NULL)
+  // land last under DESC — which is what callers want, since they all filter
+  // to status='parsed'. created_at breaks ties for bills sharing a period.
   const stmt = db.prepare(
-    'SELECT * FROM bills WHERE user_id = ?1 ORDER BY created_at DESC'
+    'SELECT * FROM bills WHERE user_id = ?1 ORDER BY period_end DESC, created_at DESC'
   );
   const results = await stmt.bind(userId).all<Record<string, unknown>>();
 

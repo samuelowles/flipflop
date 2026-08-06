@@ -73,6 +73,11 @@ export type Recommendation = 'switch' | 'stay_put';
 // Reasons the AC (#72) names. recent_switch is applied TS-side after a DB read;
 // the others come from Python's money-derived verdict.
 export type RecommendationReason =
+  // The current plan could not be priced (the latest bill yielded no usable
+  // rates), so no saving can be computed. Distinct from `no_savings`, which
+  // is a real verdict — this one means "we do not know", and must never be
+  // presented to the user as "you are already on the best plan".
+  | 'insufficient_data'
   | 'no_savings'
   | 'low_savings'
   | 'contract_constraints'
