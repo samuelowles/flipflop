@@ -33,6 +33,8 @@ interface NotifyEnv {
    * and read as failure on the trace page). NEVER bypasses switch dedup.
    */
   readonly FLOW_TEST_MODE?: string;
+  /** wrangler.toml [vars]. 'production' hard-disables the FLOW_TEST_MODE bypass. */
+  readonly ENVIRONMENT?: string;
 }
 
 /**
@@ -107,9 +109,25 @@ export function isWithinCooldownWindow(cooldownKeyExists: boolean): boolean {
  * Pure + async-safe: a KV read failure returns false (fail-closed).
  */
 export async function isFlowTestBypassActive(
-  env: { readonly KV: KVNamespace; readonly FLOW_TEST_MODE?: string },
+  env: {
+    readonly KV: KVNamespace;
+    readonly FLOW_TEST_MODE?: string;
+    readonly ENVIRONMENT?: string;
+  },
   userId: string
 ): Promise<boolean> {
+  // Production lockout. FLOW_TEST_MODE disarms the threshold and BOTH cooldowns
+  // for any user with an active flow trace — and a trace is created for every
+  // user who connects Gmail, with a 24-hour TTL. Left on against a live
+  // deployment, a beta tester is unguarded for their entire first day:
+  // notified below their threshold, and re-notified on every re-evaluation.
+  //
+  // It ships as "false" and docs/TESTING_RUN.md says to flip it only against a
+  // deployment no real user can reach. That is a procedure, and procedures get
+  // skipped at 2am. This makes it structural: on a Worker deployed with
+  // ENVIRONMENT=production (wrangler.toml), the flag cannot take effect at all,
+  // so setting it by mistake is inert rather than catastrophic.
+  if (env.ENVIRONMENT === 'production') return false;
   if (env.FLOW_TEST_MODE !== 'true') return false;
   const trace = await readFlowTrace(env.KV, userId);
   return trace !== null;

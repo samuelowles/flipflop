@@ -274,6 +274,7 @@ async function queue(
           ENCRYPTION_KEY: env.ENCRYPTION_KEY as string,
           DEEPSEEK_API_KEY: env.DEEPSEEK_API_KEY as string | undefined,
           FLOW_TEST_MODE: env.FLOW_TEST_MODE as string | undefined,
+          ENVIRONMENT: env.ENVIRONMENT as string | undefined,
         });
         message.ack();
       } else {
