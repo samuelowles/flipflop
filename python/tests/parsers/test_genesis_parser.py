@@ -76,11 +76,11 @@ Billing period: 14 May 2026 to 13 Jun 2026
 Electricity used: 612 kWh
 
 Charges
-Daily charge 31 days @ 152.00 c/day = $228.00
+Daily charge 31 days @ 152.00 c/day = $47.12
 Variable usage 612 kWh @ 28.500 cents per kWh = $174.42
 
-Total amount due: $402.42
-Includes GST of $52.40
+Total amount due: $221.54
+Includes GST of $28.90
 """
 
 # 3. Low-user bill (explicit Low User plan, small daily charge).
@@ -127,11 +127,11 @@ Your usage
 Total units: 425 kWh
 
 Your charges
-Daily charge 28 days @ 200.000 c/day = $280.00
+Daily charge 28 days @ 200.000 c/day = $56.00
 Energy Charge 30.100 cents per kWh
 
-Total charges: $407.93
-GST $53.12
+Total charges: $183.93
+GST $23.99
 """
 
 # 5. Edge / missing-field case: a bare bill with a total and a plan name but
@@ -183,7 +183,7 @@ class TestGenesisParser:
         assert result.retailer == "Genesis Energy"
         assert result.icp_number == "0000111222333AB"
         assert result.usage_kwh == 612.0
-        assert result.total_cents == 40242
+        assert result.total_cents == 22154
         assert result.period_start == "2026-05-14"
         assert result.period_end == "2026-06-13"
         assert result.days == 31

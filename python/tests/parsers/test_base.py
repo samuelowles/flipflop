@@ -209,7 +209,7 @@ class TestParserResult:
             period_end="2026-05-14T00:00:00",
             days=30,
             usage_kwh=500.0,
-            total_cents=12500,
+            total_cents=15200,
             c_per_kwh=25.0,
             c_per_day=90.0,
             fixed_term_expiry=None,
@@ -218,7 +218,7 @@ class TestParserResult:
             raw_json='{"test": true}',
         )
         assert result.retailer == "Test Energy"
-        assert result.total_cents == 12500
+        assert result.total_cents == 15200
         assert result.days == 30
         assert result.plan_name == "Basic Plan"
         assert result.meter_type == "standard"
@@ -242,7 +242,7 @@ class TestParserResult:
             period_end="2026-05-14T00:00:00",
             days=30,
             usage_kwh=500.0,
-            total_cents=12500,
+            total_cents=15200,
             c_per_kwh=25.0,
             c_per_day=90.0,
             fixed_term_expiry="2027-04-14T00:00:00",
@@ -263,7 +263,7 @@ class TestParserResult:
             period_end="2026-05-14T00:00:00",
             days=30,
             usage_kwh=500.0,
-            total_cents=12500,
+            total_cents=15200,
             c_per_kwh=25.0,
             c_per_day=90.0,
             fixed_term_expiry=None,
@@ -275,7 +275,7 @@ class TestParserResult:
         # Should be valid JSON
         parsed = json.loads(json_str)
         assert parsed["retailer"] == "Test"
-        assert parsed["total_cents"] == 12500
+        assert parsed["total_cents"] == 15200
         assert parsed["days"] == 30
         # raw_json is included as a field
         assert "raw_json" in parsed
@@ -292,7 +292,7 @@ class TestParserResult:
                 period_end="2026-05-14T00:00:00",
                 days=30,
                 usage_kwh=500.0,
-                total_cents=12500,
+                total_cents=15200,
                 c_per_kwh=25.0,
                 c_per_day=90.0,
                 fixed_term_expiry=None,
@@ -377,3 +377,84 @@ class TestParserForRetailer:
         assert result1 is not None
         assert result2 is not None
         assert result1 is not result2
+
+
+# ---------------------------------------------------------------------------
+# Reconciliation gate (the correctness signal)
+# ---------------------------------------------------------------------------
+#
+# `confidence` counts how many fields were FOUND, not whether they are RIGHT.
+# A real Mercury bill scored 0.818 while its rate, daily charge and total were
+# all wrong. These cover the check that closes that gap.
+
+from parsers.base import (  # noqa: E402
+    RECONCILE_FAIL_CONFIDENCE,
+    RECONCILE_TOLERANCE,
+    reconcile_total,
+)
+
+
+def _result(**overrides):
+    """A self-consistent ParserResult: 500 kWh x 25c + 30 x 90c = $152.00."""
+    kwargs = dict(
+        retailer="Test", plan_name="P", meter_type="standard",
+        icp_number="1234567890ABCDE", period_start="2026-04-01",
+        period_end="2026-04-30", days=30, usage_kwh=500.0, total_cents=15200,
+        c_per_kwh=25.0, c_per_day=90.0, fixed_term_expiry=None,
+        break_fee_cents=0, confidence=0.95, raw_json="{}",
+    )
+    kwargs.update(overrides)
+    return ParserResult(**kwargs)
+
+
+class TestReconcileTotal:
+    def test_none_when_bill_states_too_little(self):
+        assert reconcile_total(None, 25.0, 30, 90.0, 15200) is None
+        assert reconcile_total(500.0, 0, 30, 90.0, 15200) is None
+
+    def test_zero_total_never_reconciles(self):
+        # The real Mercury failure: line items present, total extracted as 0.
+        assert reconcile_total(1113.88, 22.49, 32, 291.0, 0) == 1.0
+
+    def test_gst_exclusive_rates_reconcile(self):
+        # Items x 1.15 == total.
+        assert reconcile_total(500.0, 25.0, 30, 90.0, round(15200 * 1.15)) < 0.01
+
+    def test_gst_inclusive_rates_reconcile(self):
+        assert reconcile_total(500.0, 25.0, 30, 90.0, 15200) < 0.01
+
+    def test_real_mercury_correct_values_reconcile(self):
+        assert reconcile_total(1113.88, 22.49, 32, 291.0, 39518) < 0.01
+
+    def test_real_mercury_broken_values_are_caught(self):
+        # The values the parser actually emitted before the fix.
+        delta = reconcile_total(1113.88, 329.07, 32, 32.0, 39518)
+        assert delta > RECONCILE_TOLERANCE
+
+    def test_peak_only_rate_on_a_tou_bill_is_caught(self):
+        # Electric Kiwi: peak 56.71 instead of the blended 43.71.
+        assert reconcile_total(298.49, 56.71, 9, 110.0, 14036) > RECONCILE_TOLERANCE
+        assert reconcile_total(298.49, 43.71, 9, 110.0, 14036) < 0.01
+
+
+class TestReconciliationGate:
+    def test_consistent_bill_keeps_its_confidence(self):
+        r = _result()
+        assert r.confidence == 0.95
+        assert r.reconciliation_delta < RECONCILE_TOLERANCE
+
+    def test_inconsistent_bill_is_capped_below_auto_accept(self):
+        # Stated total is half what the line items produce.
+        r = _result(total_cents=7600)
+        assert r.confidence == RECONCILE_FAIL_CONFIDENCE
+        assert r.confidence < 0.85, "must route to needs_review"
+
+    def test_gate_never_raises_confidence(self):
+        r = _result(confidence=0.2)
+        assert r.confidence == 0.2
+
+    def test_unverifiable_bill_is_left_alone(self):
+        # Nothing to check against — must not be punished for it.
+        r = _result(c_per_kwh=0.0, confidence=0.9)
+        assert r.reconciliation_delta is None
+        assert r.confidence == 0.9

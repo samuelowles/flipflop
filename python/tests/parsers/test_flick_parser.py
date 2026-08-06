@@ -97,7 +97,7 @@ Period 01 Apr 2026 - 30 Apr 2026
 Fixed charge 90.000 c/day
 Energy charge 25.00 c/kWh
 
-Total amount due $164.50
+Total amount due $157.00
 """
 
 # 4. Edge / missing-field case — minimal text, no ICP, no dates.
@@ -186,7 +186,7 @@ class TestFlickParser:
         assert result.icp_number == "000123456789FL2"
         assert len(result.icp_number) == 15
         assert result.usage_kwh == 520.0
-        assert result.total_cents == 16450
+        assert result.total_cents == 15700
         assert result.period_start == "2026-04-01"
         assert result.period_end == "2026-04-30"
         assert result.days == 30

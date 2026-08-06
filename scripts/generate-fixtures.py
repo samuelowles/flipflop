@@ -239,7 +239,7 @@ FIXTURES: list[dict] = [
      "expected": {"retailer": "Flick Electric", "plan_name": "",
       "meter_type": "controlled", "icp_number": "000123456789FL2",
       "period_start": "2026-04-01", "period_end": "2026-04-30", "days": 30,
-      "usage_kwh": 520.0, "total_cents": 16450, "c_per_kwh": 25.00,
+      "usage_kwh": 520.0, "total_cents": 15700, "c_per_kwh": 25.00,
       "c_per_day": 90.0, "fixed_term_expiry": None, "break_fee_cents": 0,
       "address": '3 Demo Lane, Dunedin'}},
 
@@ -255,7 +255,7 @@ FIXTURES: list[dict] = [
      "expected": {"retailer": "Genesis Energy", "plan_name": "Energy Online",
       "meter_type": "standard", "icp_number": "0000111222333AB",
       "period_start": "2026-05-14", "period_end": "2026-06-13", "days": 31,
-      "usage_kwh": 612.0, "total_cents": 40242, "c_per_kwh": 28.50,
+      "usage_kwh": 612.0, "total_cents": 22154, "c_per_kwh": 28.50,
       "c_per_day": 152.0, "fixed_term_expiry": None, "break_fee_cents": 0,
       "address": '12 Kokiri Street, Hataitai, Wellington 6021'}},
     {"retailer_id": "genesis", "retailer_name": "Genesis Energy", "text": GENESIS_3,
@@ -294,33 +294,33 @@ FIXTURES: list[dict] = [
      "expected": {"retailer": "Meridian Energy", "plan_name": "Energy Online",
       "meter_type": "standard", "icp_number": "000123456789ABC",
       "period_start": "2026-05-14", "period_end": "2026-06-13", "days": 31,
-      "usage_kwh": 612.0, "total_cents": 40242, "c_per_kwh": 28.50,
+      "usage_kwh": 612.0, "total_cents": 22154, "c_per_kwh": 28.50,
       "c_per_day": 152.0, "fixed_term_expiry": None, "break_fee_cents": 0,
       "address": '12 Kokiri Street, Hataitai, Wellington 6021'}},
     {"retailer_id": "meridian", "retailer_name": "Meridian Energy", "text": MERIDIAN_2,
      "expected": {"retailer": "Meridian Energy", "plan_name": "Good Energy",
       "meter_type": "standard", "icp_number": "0000987654321XY",
       "period_start": "2026-04-14", "period_end": "2026-05-13", "days": 30,
-      "usage_kwh": 450.0, "total_cents": 27030, "c_per_kwh": 25.40,
+      "usage_kwh": 450.0, "total_cents": 15330, "c_per_kwh": 25.40,
       "c_per_day": 130.0, "fixed_term_expiry": None, "break_fee_cents": 0,
       "address": '78 Seahorse Terrace, Sumner, Christchurch 8081'}},
     {"retailer_id": "meridian", "retailer_name": "Meridian Energy", "text": MERIDIAN_3,
      "expected": {"retailer": "Meridian Energy", "plan_name": "SimpleSaver",
       "meter_type": "standard", "icp_number": "0000456789012QR",
       "period_start": "2026-03-14", "period_end": "2026-04-13", "days": 31,
-      "usage_kwh": 380.0, "total_cents": 18904, "c_per_kwh": 26.30,
+      "usage_kwh": 380.0, "total_cents": 12784, "c_per_kwh": 26.30,
       "c_per_day": 90.0, "fixed_term_expiry": None, "break_fee_cents": 0,
       "address": '3 Pohutukawa Drive, Mission Bay, Auckland 1071'}},
 
     # --- Nova Energy ---
     # nova_1 text contains Day Rate + Night Rate; the parser correctly detects
-    # meter_type=day_night and surfaces the Day rate (28.10) as c_per_kwh
+    # meter_type=day_night; c_per_kwh is the volume-weighted BLENDED rate
     # (documented by the existing test_canonical_bill_all_fields assertion).
     {"retailer_id": "nova", "retailer_name": "Nova Energy", "text": NOVA_1,
      "expected": {"retailer": "Nova Energy", "plan_name": "Stay Ahead",
       "meter_type": "day_night", "icp_number": "000111222333ABC",
       "period_start": "2026-05-14", "period_end": "2026-06-13", "days": 31,
-      "usage_kwh": 480.0, "total_cents": 15570, "c_per_kwh": 28.10,
+      "usage_kwh": 480.0, "total_cents": 14687, "c_per_kwh": 24.46,
       "c_per_day": 95.0, "fixed_term_expiry": None, "break_fee_cents": 0,
       "address": '12 Example Lane, Wellington'}},
     {"retailer_id": "nova", "retailer_name": "Nova Energy", "text": NOVA_2,
@@ -334,7 +334,7 @@ FIXTURES: list[dict] = [
      "expected": {"retailer": "Nova Energy", "plan_name": "Standard",
       "meter_type": "day_night", "icp_number": "000777888999QQQ",
       "period_start": "2026-04-01", "period_end": "2026-04-30", "days": 30,
-      "usage_kwh": 620.0, "total_cents": 17300, "c_per_kwh": 28.90,
+      "usage_kwh": 620.0, "total_cents": 17300, "c_per_kwh": 23.79,
       "c_per_day": 85.0, "fixed_term_expiry": None, "break_fee_cents": 0,
       "address": '3 Sample Road, Christchurch'}},
 
@@ -359,7 +359,7 @@ FIXTURES: list[dict] = [
      "expected": {"retailer": "Powershop", "plan_name": "",
       "meter_type": "standard", "icp_number": "000123456789PS3",
       "period_start": "2026-04-01", "period_end": "2026-04-30", "days": 30,
-      "usage_kwh": 540.0, "total_cents": 17160, "c_per_kwh": 24.00,
+      "usage_kwh": 540.0, "total_cents": 15660, "c_per_kwh": 24.00,
       "c_per_day": 90.0, "fixed_term_expiry": None, "break_fee_cents": 0,
       "address": '3 Demo Lane, Dunedin'}},
 
@@ -383,7 +383,7 @@ FIXTURES: list[dict] = [
      "expected": {"retailer": "Pulse Energy", "plan_name": "",
       "meter_type": "standard", "icp_number": "000444555666PU2",
       "period_start": "2026-06-01", "period_end": "2026-06-30", "days": 30,
-      "usage_kwh": 610.0, "total_cents": 18855, "c_per_kwh": 25.50,
+      "usage_kwh": 610.0, "total_cents": 18255, "c_per_kwh": 25.50,
       "c_per_day": 90.0, "fixed_term_expiry": None, "break_fee_cents": 0,
       "address": '12 Demo Street, Auckland'}},
 
@@ -426,9 +426,57 @@ def render_pdf(text: str, out_path: Path) -> None:
     c.save()
 
 
+# Line items may miss the stated total by this much and still be believable:
+# rounding, and small real-bill extras (levies, prompt-payment credits).
+CONSISTENCY_TOLERANCE = 0.02
+
+
+def check_internal_consistency(specs: list[dict]) -> list[str]:
+    """Reject fixtures whose own line items contradict their own total.
+
+    A golden fixture IS the oracle. Nine of the original thirty stated totals
+    that their own stated rates could not produce (meridian_1 claimed
+    "30 days @ 152.00 c/day = $228.00" — that is $45.60), so the eval harness
+    was grading against bills that cannot exist and could never detect a
+    mis-extracted rate or total. This runs at generation time so an impossible
+    fixture can never be committed again.
+
+    Accepts either GST convention: rates quoted GST-exclusive (total = items x
+    1.15) or GST-inclusive (total = items).
+    """
+    failures: list[str] = []
+    counter: dict[str, int] = {}
+    for spec in specs:
+        rid = spec["retailer_id"]
+        counter[rid] = counter.get(rid, 0) + 1
+        stem = f"{rid}_{counter[rid]}"
+        e = spec["expected"]
+        parts = [e.get(k) for k in ("usage_kwh", "c_per_kwh", "days", "c_per_day")]
+        total = e.get("total_cents")
+        if not total or any(v in (None, 0) for v in parts):
+            continue  # not enough stated figures to check
+        kwh, rate, days, daily = parts
+        items = kwh * rate + days * daily
+        best = min(abs(items - total), abs(items * 1.15 - total))
+        if best / total > CONSISTENCY_TOLERANCE:
+            failures.append(
+                f"{stem}: line items {items / 100:.2f} (or {items * 1.15 / 100:.2f} "
+                f"incl GST) != stated total {total / 100:.2f} "
+                f"— off by {best / total * 100:.1f}%"
+            )
+    return failures
+
+
 def main() -> int:
     fixtures_dir = REPO_ROOT / "python" / "fixtures"
     fixtures_dir.mkdir(parents=True, exist_ok=True)
+
+    problems = check_internal_consistency(FIXTURES)
+    if problems:
+        print("REFUSING to generate — these fixtures contradict their own arithmetic:")
+        for p in problems:
+            print(f"  {p}")
+        return 1
 
     # Track per-retailer counter for naming: <retailer>_<n>.pdf
     counter: dict[str, int] = {}

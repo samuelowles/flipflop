@@ -313,8 +313,11 @@ class TestElectricKiwiParser:
         # Usage = Peak + Off-peak + Hour of Power (free kWh is consumption).
         assert result.usage_kwh == pytest.approx(298.49)
 
-        # $-denominated peak rate -> cents.
-        assert result.c_per_kwh == pytest.approx(56.71)
+        # Volume-weighted BLENDED rate, not the peak rate. This assertion used
+        # to expect 56.71 — the $-denominated PEAK rate — which overstated the
+        # customer's real cost by ~30% and skewed every plan comparison built
+        # on it. ($55.75 + $74.71 + $0.00) / 298.49 kWh = 43.71 c/kWh.
+        assert result.c_per_kwh == pytest.approx(43.71)
         assert result.c_per_day == pytest.approx(110.0)
 
         # Power charges, not the card-surcharge-inflated statement total.

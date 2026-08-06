@@ -49,8 +49,31 @@ class ParserResult:
     parser_used: Optional[str] = None  # id of parser that produced this result
     # Supply/installation address, one normalised autocomplete-friendly line
     # ("1 Queen Street, Auckland Central, Auckland 1010"), or None when not
-    # confidently extractable. Deliberately excluded from confidence scoring.
+    # confidently extractable.
     address: Optional[str] = None
+    # Relative disagreement between the bill's line items and its stated total
+    # (see reconcile_total). None when the bill states too little to check.
+    # Diagnostic only — the enforcement is the confidence cap in __post_init__.
+    reconciliation_delta: Optional[float] = None
+
+    def __post_init__(self) -> None:
+        """Gate confidence on whether the extracted fields agree with each other.
+
+        `confidence` alone counts how many fields were FOUND, not whether they
+        are RIGHT — a real Mercury bill scored 0.818 while its rate, daily
+        charge and total were all wrong. Reconciliation is the missing
+        correctness signal: a bill whose own line items cannot produce its own
+        stated total has at least one mis-extracted field, so it must not be
+        auto-accepted no matter how many fields were populated.
+        """
+        self.reconciliation_delta = reconcile_total(
+            self.usage_kwh, self.c_per_kwh, self.days, self.c_per_day, self.total_cents
+        )
+        if (
+            self.reconciliation_delta is not None
+            and self.reconciliation_delta > RECONCILE_TOLERANCE
+        ):
+            self.confidence = min(self.confidence, RECONCILE_FAIL_CONFIDENCE)
 
     VALID_METER_TYPES = frozenset(
         {"standard", "low_user", "day_night", "controlled"}
@@ -139,6 +162,57 @@ def validate_c_per_kwh(rate: float) -> bool:
 def validate_c_per_day(rate: float) -> bool:
     """Return ``True`` if *rate* is in [0, 500] (cents per day)."""
     return 0.0 <= rate <= 500.0
+
+
+# ---------------------------------------------------------------------------
+# Self-consistency (the correctness gate)
+# ---------------------------------------------------------------------------
+
+# How far the line items may miss the stated total before the parse is
+# untrustworthy. Every field-level extraction error observed so far landed
+# 18-37% out, while correctly-parsed real bills land under 1%, so 10% catches
+# the whole observed failure class with room for real-bill noise: EA levies,
+# prompt-payment credits, mid-period rate changes and rounding.
+RECONCILE_TOLERANCE = 0.10
+
+# Confidence assigned when reconciliation fails. Must sit below the Worker's
+# auto-accept threshold (F1_HINT_CONFIDENCE_THRESHOLD, default 0.85) so the
+# bill routes to needs_review instead of producing a wrong recommendation.
+RECONCILE_FAIL_CONFIDENCE = 0.5
+
+
+def reconcile_total(
+    usage_kwh: Optional[float],
+    c_per_kwh: Optional[float],
+    days: Optional[int],
+    c_per_day: Optional[float],
+    total_cents: Optional[int],
+) -> Optional[float]:
+    """Relative disagreement between a bill's line items and its stated total.
+
+    ``usage_kwh x c_per_kwh + days x c_per_day`` should reproduce
+    ``total_cents``. Both GST conventions are accepted — rates quoted
+    GST-exclusive (total = items x 1.15) or GST-inclusive (total = items) —
+    and the closer of the two is used, because which one a bill uses is not
+    reliably stated.
+
+    Returns ``None`` when the bill states too little to check (any input
+    missing or zero), ``1.0`` when line items exist but the total is zero or
+    negative (a zero total is never trustworthy), otherwise the relative error
+    as a fraction of the stated total.
+    """
+    parts = (usage_kwh, c_per_kwh, days, c_per_day)
+    if any(p is None or p == 0 for p in parts):
+        return None
+
+    items = usage_kwh * c_per_kwh + days * c_per_day  # type: ignore[operator]
+    if items <= 0:
+        return None
+    if total_cents is None or total_cents <= 0:
+        return 1.0
+
+    closest = min(abs(items - total_cents), abs(items * 1.15 - total_cents))
+    return closest / total_cents
 
 
 # ---------------------------------------------------------------------------

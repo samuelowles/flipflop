@@ -7,7 +7,7 @@
   "period_end": "2026-04-30",
   "days": 30,
   "usage_kwh": 540.0,
-  "total_cents": 17160,
+  "total_cents": 15660,
   "c_per_kwh": 24.0,
   "c_per_day": 90.0,
   "fixed_term_expiry": null,

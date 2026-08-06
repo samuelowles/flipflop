@@ -43,11 +43,11 @@ Your electricity usage
 Total units: 612 kWh
 
 Charges
-Daily charge: 30 days @ 152.00 c/day = $228.00
+Daily charge: 31 days @ 152.00 c/day = $47.12
 Variable charge: 612 kWh @ 28.500 c/kWh = $174.42
 
-Total to pay: $402.42
-Includes GST of $52.40
+Total to pay: $221.54
+Includes GST of $28.90
 """
 
 
@@ -67,11 +67,11 @@ Usage summary
 Total usage 450 kWh
 
 Charges
-Fixed daily charge 30 days @ 130.00 c/day = $156.00
+Fixed daily charge 30 days @ 130.00 c/day = $39.00
 Variable usage charge 450 kWh @ 25.40 c/kWh = $114.30
 
-Total to pay: $270.30
-GST $35.26
+Total to pay: $153.30
+GST $20.00
 """
 
 
@@ -90,11 +90,11 @@ Billing period 14 Mar 2026 to 13 Apr 2026
 Electricity used: 380 kWh
 
 Charges
-Daily charge 31 days @ 90.00 c/day = $89.10
+Daily charge 31 days @ 90.00 c/day = $27.90
 Variable usage 380 kWh @ 26.30 c/kWh = $99.94
 
-Total amount due: $189.04
-GST included: $24.66
+Total amount due: $127.84
+GST included: $16.67
 """
 
 
@@ -114,11 +114,11 @@ Your usage
 Total units: 825 kWh
 
 Your charges
-Daily charge 28 days @ 200.000 c/day = $280.00
+Daily charge 28 days @ 200.000 c/day = $56.00
 Variable usage charge 825 kWh @ 30.10 c/kWh = $248.33
 
-Total to pay: $528.33
-GST $68.87
+Total to pay: $304.33
+GST $39.70
 """
 
 
@@ -138,11 +138,11 @@ Usage
 Consumption: 290 kWh
 
 Charges
-Daily charge 31 days @ 150.00 c/day = $186.00
+Daily charge 31 days @ 150.00 c/day = $46.50
 Variable charge 290 kWh @ 27.800 c/kWh = $80.62
 
-Total to pay: $266.62
-GST $34.78
+Total to pay: $127.12
+GST $16.58
 """
 
 
@@ -163,12 +163,12 @@ Night units: 195 kWh
 Total units: 605 kWh
 
 Charges
-Daily charge 31 days @ 180.00 c/day = $223.20
-Day rate 410 kWh @ 29.500 c/kWh = $240.95
-Night rate 195 kWh @ 14.200 c/kWh = $55.42
+Daily charge 31 days @ 180.00 c/day = $55.80
+Day rate 410 kWh @ 29.500 c/kWh = $120.95
+Night rate 195 kWh @ 14.200 c/kWh = $27.69
 
-Total to pay: $519.57
-GST $67.71
+Total to pay: $204.44
+GST $26.67
 """
 
 
@@ -200,7 +200,7 @@ class TestMeridianParser:
         assert result.retailer == "Meridian Energy"
         assert result.icp_number == "000123456789ABC"
         assert result.usage_kwh == 612.0
-        assert result.total_cents == 40242
+        assert result.total_cents == 22154
         assert result.period_start == "2026-05-14"
         assert result.period_end == "2026-06-13"
         assert result.days == 31
@@ -218,7 +218,7 @@ class TestMeridianParser:
         assert result.retailer == "Meridian Energy"
         assert result.icp_number == "0000987654321XY"
         assert result.usage_kwh == 450.0
-        assert result.total_cents == 27030
+        assert result.total_cents == 15330
         assert result.period_start == "2026-04-14"
         assert result.period_end == "2026-05-13"
         assert result.c_per_kwh == 25.40
@@ -235,7 +235,7 @@ class TestMeridianParser:
 
         assert result.icp_number == "0000456789012QR"
         assert result.usage_kwh == 380.0
-        assert result.total_cents == 18904
+        assert result.total_cents == 12784
         assert result.period_end == "2026-04-13"
         assert result.c_per_kwh == 26.30
         assert result.c_per_day == 90.0
@@ -250,7 +250,7 @@ class TestMeridianParser:
 
         assert result.icp_number == "0000789012345LM"
         assert result.usage_kwh == 825.0
-        assert result.total_cents == 52833
+        assert result.total_cents == 30433
         assert result.period_start == "2026-02-14"
         assert result.period_end == "2026-03-13"
         assert result.c_per_kwh == 30.10
@@ -266,7 +266,7 @@ class TestMeridianParser:
 
         assert result.icp_number == "0000345678901ST"
         assert result.usage_kwh == 290.0
-        assert result.total_cents == 26662
+        assert result.total_cents == 12712
         assert result.period_start == "2026-01-14"
         assert result.period_end == "2026-02-13"
         assert result.c_per_kwh == 27.80
@@ -283,7 +283,7 @@ class TestMeridianParser:
 
         assert result.icp_number == "0000210987654UV"
         assert result.usage_kwh == 605.0
-        assert result.total_cents == 51957
+        assert result.total_cents == 20444
         assert result.period_end == "2026-01-13"
         assert result.c_per_day == 180.0
         assert result.meter_type == "day_night"

@@ -30,14 +30,13 @@ Billing period: 14 May 2026 to 13 Jun 2026
 Total energy used: 480 kWh
 
 Charges:
-Daily charge: 30 days @ 95.00 c/day = $28.50
+Daily charge: 31 days @ 95.00 c/day = $29.45
 Day Rate: 300 kWh @ 28.10 c/kWh = $84.30
 Night Rate: 180 kWh @ 18.40 c/kWh = $33.12
-Variable charge: 480 kWh @ 26.50 c/kWh = $127.20
 
-Amount to pay: $155.70
+Amount to pay: $146.87
 
-GST included: $20.30
+GST included: $19.16
 """
 
 BILL_LOW_USER = """
@@ -161,13 +160,16 @@ class TestNovaParser:
         # Usage
         assert result.usage_kwh == 480.0
         # Total (Nova "Amount to pay")
-        assert result.total_cents == 15570
+        assert result.total_cents == 14687
         # Period dates (ISO 8601)
         assert result.period_start == "2026-05-14"
         assert result.period_end == "2026-06-13"
         assert result.days == 31  # inclusive May 14 -> Jun 13
-        # Rates (day rate surfaces as the headline c_per_kwh on a day/night bill)
-        assert result.c_per_kwh == 28.10
+        # Volume-weighted BLENDED rate on a day/night bill, not the day rate.
+        # ($84.30 + $33.12) / 480 kWh = 24.46 c/kWh. Reporting the day rate
+        # (28.10) overstated the customer's real cost and could not reconcile
+        # against the bill's own total.
+        assert result.c_per_kwh == 24.46
         assert result.c_per_day == 95.0
         # Plan
         assert "Stay Ahead" in result.plan_name

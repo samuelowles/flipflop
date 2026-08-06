@@ -77,18 +77,22 @@ class NovaParser(BaseParser):
 
         # --- Usage kWh ---
         usage_kwh = self._extract_nova_kwh(full_text)
-        if usage_kwh is not None:
-            if validate_kwh_range(usage_kwh):
-                fields_found += 1
+        if usage_kwh is not None and validate_kwh_range(usage_kwh):
+            fields_found += 1
         else:
+            # Out of range is not a value: an unvalidated usage_kwh must
+            # never leave the parser (a real Mercury bill emitted
+            # 329.07 c/kWh this way).
             usage_kwh = 0.0
 
         # --- Total in cents ---
         total_cents = self._extract_nova_total(full_text)
-        if total_cents is not None:
-            if validate_cents_range(total_cents):
-                fields_found += 1
+        if total_cents is not None and validate_cents_range(total_cents):
+            fields_found += 1
         else:
+            # Out of range is not a value: an unvalidated total_cents must
+            # never leave the parser (a real Mercury bill emitted
+            # 329.07 c/kWh this way).
             total_cents = 0
 
         # --- Dates ---
@@ -101,18 +105,22 @@ class NovaParser(BaseParser):
 
         # --- Daily charge ---
         c_per_day = extract_daily_charge(full_text)
-        if c_per_day is not None:
-            if validate_c_per_day(c_per_day):
-                fields_found += 1
+        if c_per_day is not None and validate_c_per_day(c_per_day):
+            fields_found += 1
         else:
+            # Out of range is not a value: an unvalidated c_per_day must
+            # never leave the parser (a real Mercury bill emitted
+            # 329.07 c/kWh this way).
             c_per_day = 0.0
 
         # --- Per-kWh rate ---
         c_per_kwh = extract_per_kwh(full_text)
-        if c_per_kwh is not None:
-            if validate_c_per_kwh(c_per_kwh):
-                fields_found += 1
+        if c_per_kwh is not None and validate_c_per_kwh(c_per_kwh):
+            fields_found += 1
         else:
+            # Out of range is not a value: an unvalidated c_per_kwh must
+            # never leave the parser (a real Mercury bill emitted
+            # 329.07 c/kWh this way).
             c_per_kwh = 0.0
 
         # --- Plan name ---
@@ -139,6 +147,15 @@ class NovaParser(BaseParser):
         break_fee_cents = self._extract_break_fee(full_text)
 
         # --- Confidence ---
+        # --- Address ---
+        # Scored: it is extracted from the bill and is what resolves the
+        # Powerswitch lookup downstream. Excluding it while total_fields
+        # counted 11 capped every bill that names no plan at 0.818 —
+        # below the worker's 0.85 auto-accept threshold.
+        address = extract_address(full_text)
+        if address:
+            fields_found += 1
+
         confidence = min(1.0, fields_found / total_fields)
 
         return ParserResult(
@@ -156,7 +173,7 @@ class NovaParser(BaseParser):
             fixed_term_expiry=fixed_term_expiry,
             break_fee_cents=break_fee_cents,
             confidence=confidence,
-            address=extract_address(full_text),
+            address=address,
             raw_json=json.dumps({"retailer_id": self.RETAILER_ID, "text_length": len(full_text)}),
         )
 

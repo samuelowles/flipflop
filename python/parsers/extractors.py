@@ -50,10 +50,13 @@ def extract_icp(text: str) -> Optional[str]:
 
 # Labelled address line: "Supply Address: 456 Queen Street, Auckland".
 # "Supply at:" is Genesis Energy's label variant.
+# "Location" is Mercury's label; anchored to line start so the common noun
+# elsewhere in prose cannot match.
 _ADDRESS_LABEL_PATTERN = re.compile(
-    r"(?:(?:Supply|Installation|Site|Premises|Property)\s*[Aa]ddress|Supply\s+at)"
+    r"(?:(?:Supply|Installation|Site|Premises|Property)\s*[Aa]ddress|Supply\s+at"
+    r"|^[ \t]*Location)"
     r"\s*[:#\-]?\s*(.+)",
-    re.IGNORECASE,
+    re.IGNORECASE | re.MULTILINE,
 )
 
 # Leading unit noise the Powerswitch autocomplete chokes on: "Unit 5, ..." /
@@ -76,6 +79,23 @@ _POSTCODE_PATTERN = re.compile(r"\b\d{4}\b\s*$")
 _POSTCODE_CUT_PATTERN = re.compile(r"^(.*?,[^,]*?\b\d{4})\b")
 _TRAILING_JUNK_PATTERN = re.compile(
     r"\s+(?:ICP|I\.C\.P\.?|Account|Customer|GST|Invoice)\b.*$", re.IGNORECASE
+)
+
+# NZ addressing attaches a unit letter to the street number ("129B Rangatira
+# Road"). Bills print it detached ("129 B RANGATIRA ROAD") and the Powerswitch
+# autocomplete then returns ZERO completions, so the whole comparison falls
+# back to seeded plans. Only collapses a SINGLE letter that is itself followed
+# by the street name.
+_DETACHED_UNIT_LETTER_PATTERN = re.compile(r"^(\d+)\s+([A-Za-z])\s+(?=\S)")
+
+# Street-type token, required on the mid-line fallback path only. Without it a
+# phone-number run ("...call 0800 10 18 10. on electricity and gas, contact:
+# Utilities Disputes on 0800") satisfies every other address check.
+_STREET_TYPE_PATTERN = re.compile(
+    r"\b(?:Street|St|Road|Rd|Avenue|Ave|Drive|Dr|Lane|Ln|Place|Pl|Terrace|Tce"
+    r"|Crescent|Cres|Way|Grove|Close|Court|Ct|Parade|Quay|Highway|Hwy"
+    r"|Boulevard|Rise|Heights|Bay|Mews|Esplanade)\b",
+    re.IGNORECASE,
 )
 
 # Main NZ urban centres. Smaller towns are accepted via the postcode signal
@@ -103,6 +123,7 @@ def _normalise_address(raw: str) -> Optional[str]:
     """
     addr = re.sub(r"\s+", " ", raw).strip().strip(".,;")
     addr = _UNIT_PREFIX_PATTERN.sub("", addr)
+    addr = _DETACHED_UNIT_LETTER_PATTERN.sub(r"\1\2 ", addr)
     cut = _POSTCODE_CUT_PATTERN.match(addr)
     if cut:
         addr = cut.group(1)
@@ -110,6 +131,10 @@ def _normalise_address(raw: str) -> Optional[str]:
     if not addr or len(addr) > 120:
         return None
     if not _STREET_NUMBER_PATTERN.match(addr):
+        return None
+    # No NZ street number starts with 0 — a leading zero means we latched onto
+    # a phone number ("0800 ...") or a postcode, not an address.
+    if addr[0] == "0":
         return None
     if "," not in addr:
         return None
@@ -128,7 +153,13 @@ def extract_address(text: str) -> Optional[str]:
     name). Returns None rather than a low-confidence guess.
     """
     for match in _ADDRESS_LABEL_PATTERN.finditer(text):
-        addr = _normalise_address(match.group(1))
+        candidate = match.group(1).rstrip()
+        # Mercury prints "Location 14 KOWHAI STREET, BIRKDALE," then "AUCKLAND"
+        # on the next line — a trailing comma means the address continues.
+        if candidate.endswith(","):
+            nxt = text[match.end():].lstrip("\n").split("\n", 1)[0]
+            candidate = f"{candidate} {nxt.strip()}"
+        addr = _normalise_address(candidate)
         if addr:
             return addr
 
@@ -139,10 +170,14 @@ def extract_address(text: str) -> Optional[str]:
         # Mid-line candidate: PDF row extraction can glue a leading cell onto
         # the address ("Tax Invoice 129 B RANGATIRA ROAD, BEACH HAVEN, ..."
         # — real Electric Kiwi layout). Retry from each street-number-looking
-        # token; validation still rejects non-address digit runs (phone
-        # numbers and invoice ids carry no comma-separated locality).
+        # token. A street-type token is REQUIRED here: without it a phone-number
+        # run satisfies every other check (real Mercury footer, see
+        # _STREET_TYPE_PATTERN).
         for m in re.finditer(r"\b\d{1,4}[A-Za-z]?\b", line):
-            addr = _normalise_address(line[m.start():])
+            fragment = line[m.start():]
+            if not _STREET_TYPE_PATTERN.search(fragment):
+                continue
+            addr = _normalise_address(fragment)
             if addr:
                 return addr
 
@@ -186,16 +221,31 @@ def extract_kwh(text: str) -> Optional[float]:
 # glues left-column cells onto table rows ("AUCKLAND 0626 Peak Charges ...").
 _TOU_PEAK_PATTERN = re.compile(r"(?<!-)(?<!f )\bPeak\s+Charges\b[^\n]*?kWh", re.IGNORECASE)
 _TOU_OFFPEAK_PATTERN = re.compile(r"\bOff[- ]?peak\s+Charges\b[^\n]*?kWh", re.IGNORECASE)
+# The other NZ TOU family: "Day Rate: 300 kWh @ ..." / "Night rate usage: 180
+# kWh" (Nova, Mercury, Electric Kiwi day/night plans). Same meaning as
+# Peak/Off-peak, different vocabulary.
+_TOU_DAY_PATTERN = re.compile(r"\bDay\s+Rate(?:\s+usage)?\b[^\n]*?kWh", re.IGNORECASE)
+_TOU_NIGHT_PATTERN = re.compile(r"\bNight\s+Rate(?:\s+usage)?\b[^\n]*?kWh", re.IGNORECASE)
+
+# Shared component label for both families.
+_TOU_LABEL = (
+    r"(?:(?:Peak|Off[- ]?peak|Day|Night)\s+(?:Charges|Rate(?:\s+usage)?)"
+    r"|Hour of Power\s+Savings)"
+)
 _TOU_COMPONENT_PATTERN = re.compile(
-    r"\b(?:(?:Peak|Off[- ]?peak|Day|Night)\s+Charges|Hour of Power\s+Savings)"
-    r"[^\n]*?([\d,]+(?:\.\d+)?)\s*kWh",
+    _TOU_LABEL + r"[^\n]*?([\d,]+(?:\.\d+)?)\s*kWh",
     re.IGNORECASE,
 )
 
 
 def has_tou_charges(text: str) -> bool:
-    """True when the bill itemises Peak + Off-peak charge lines (TOU meter)."""
-    return bool(_TOU_PEAK_PATTERN.search(text) and _TOU_OFFPEAK_PATTERN.search(text))
+    """True when the bill itemises time-of-use component lines.
+
+    Either family counts: Peak + Off-peak, or Day + Night.
+    """
+    peak_offpeak = _TOU_PEAK_PATTERN.search(text) and _TOU_OFFPEAK_PATTERN.search(text)
+    day_night = _TOU_DAY_PATTERN.search(text) and _TOU_NIGHT_PATTERN.search(text)
+    return bool(peak_offpeak or day_night)
 
 
 def extract_tou_usage(text: str) -> Optional[float]:
@@ -211,6 +261,54 @@ def extract_tou_usage(text: str) -> Optional[float]:
         return round(sum(float(c.replace(",", "")) for c in components), 2)
     except ValueError:
         return None
+
+
+# Same component lines as _TOU_COMPONENT_PATTERN, but also capturing the rest
+# of the line so the component's dollar total can be read off the end.
+_TOU_COMPONENT_LINE_PATTERN = re.compile(
+    _TOU_LABEL + r"[^\n]*?([\d,]+(?:\.\d+)?)\s*kWh([^\n]*)",
+    re.IGNORECASE,
+)
+_DOLLAR_AMOUNT_PATTERN = re.compile(r"\$\s*([\d,]+(?:\.\d{2})?)")
+
+
+def extract_tou_blended_rate(text: str) -> Optional[float]:
+    """Volume-weighted effective c/kWh across the TOU component lines.
+
+    A TOU bill itemises Peak and Off-peak at different rates, so the single
+    rate ``extract_per_kwh`` finds is whichever appears first — in practice the
+    PEAK rate, which overstates the customer's real cost and skews every plan
+    comparison. This blends them: total component dollars / total component
+    kWh. Free kWh (Electric Kiwi's "Hour of Power") counts as consumption at
+    $0, which is exactly the point of blending.
+
+    Returns None when the bill is not TOU or the component totals cannot be
+    read.
+    """
+    if not has_tou_charges(text):
+        return None
+
+    total_kwh = 0.0
+    total_cents = 0.0
+    found = 0
+    for match in _TOU_COMPONENT_LINE_PATTERN.finditer(text):
+        amounts = _DOLLAR_AMOUNT_PATTERN.findall(match.group(2))
+        if not amounts:
+            return None
+        try:
+            kwh = float(match.group(1).replace(",", ""))
+            # The component's own total is the LAST dollar figure on the line
+            # (the ones before it are the unit rate, e.g. "$0.5671/kWh $55.75").
+            dollars = float(amounts[-1].replace(",", ""))
+        except ValueError:
+            return None
+        total_kwh += kwh
+        total_cents += dollars * 100
+        found += 1
+
+    if found < 2 or total_kwh <= 0:
+        return None
+    return round(total_cents / total_kwh, 2)
 
 
 # ---------------------------------------------------------------------------
@@ -233,6 +331,32 @@ _DOLLAR_PATTERNS = [
         ),
         12,
     ),
+    # Priority 0.5: a labelled ELECTRICITY section total. Bundled bills
+    # (Mercury bills electricity + mobile on one invoice) carry several section
+    # totals; the electricity one is the only figure the electricity-only
+    # schema wants, and leaving it to generic scoring made it a coin-flip
+    # against "MOBILE TOTAL".
+    (
+        re.compile(
+            r"ELECTRICITY\s+TOTAL[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)",
+            re.IGNORECASE,
+        ),
+        11,
+    ),
+    # Priority 0.6: the "to pay" / "payable" family — "Total to pay: $X"
+    # (Meridian), "Amount to pay: $X" (Nova), "Total payable: $X" (Powershop),
+    # "TOTAL TO PAY $X" (Electric Kiwi). The "due"-anchored pattern below
+    # cannot reach any of them, and with no label matched extract_dollars falls
+    # through to first-dollar-wins — which returned the DAILY CHARGE line
+    # ($47.12) as a Meridian bill's total. Scored below the current-charges
+    # labels (12) so a bill carrying both still prefers current charges.
+    (
+        re.compile(
+            r"(?:Total|Amount)\s*(?:to\s*pay|payable)[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)",
+            re.IGNORECASE,
+        ),
+        10,
+    ),
     # Priority 1 (highest): "Total amount due $X", "Amount due $X", or
     # "Total due $X" (Contact Energy phrasing). The literal "due" bridges
     # the label and the colon before the $ figure.
@@ -249,7 +373,9 @@ _DOLLAR_PATTERNS = [
     (re.compile(r"[Yy]our\s*[Bb]ill[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"), 8),
     # Priority 4: "Total: $X" (exclude "Total amount due" / "Total due",
     # which are already captured by Priority 1).
-    (re.compile(r"(?<!\bAmount\s)(?<!\bamount\s)(?<!\bDue\s)(?<!\bdue\s)[Tt]otal[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"), 7),
+    # `\b` before Total: without it this matched inside "Subtotal" and scored
+    # the ex-GST subtotal as though it were the bill total (real Mercury bill).
+    (re.compile(r"(?<!\bAmount\s)(?<!\bamount\s)(?<!\bDue\s)(?<!\bdue\s)\b[Tt]otal[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"), 7),
     # Priority 5: Generic "$X.XX" dollar amounts (catch-all)
     (re.compile(r"\$\s*([\d,]+(?:\.\d{2})?)"), 1),
     # Priority 6 (lowest): "Balance $X" (can be opening/previous balance, not current)
@@ -260,7 +386,8 @@ _DOLLAR_PATTERNS = [
 
 # Label keywords that indicate this is NOT the bill total
 _NON_TOTAL_LABELS = re.compile(
-    r"(?:[Oo]pening\s*[Bb]alance|[Pp]revious\s*[Bb]alance|[Ll]ast\s*[Bb]ill)",
+    r"(?:[Oo]pening\s*[Bb]alance|[Pp]revious\s*[Bb]alance|[Ll]ast\s*[Bb]ill"
+    r"|[Ss]ubtotal)",
 )
 
 
@@ -283,9 +410,15 @@ def extract_dollars(text: str) -> Optional[int]:
             raw = match.group(1).replace(",", "")
             try:
                 cents = int(round(float(raw) * 100))
-                scored[cents] = scored.get(cents, 0) + weight
             except ValueError:
                 continue
+            # A bill total of $0.00 is never the answer. Without this the
+            # Mercury layout returned 0: "Opening balance total $0.00" and the
+            # mobile section's "TOTAL $0.00" both scored as totals and
+            # out-weighed the real figure.
+            if cents == 0:
+                continue
+            scored[cents] = scored.get(cents, 0) + weight
 
     if not scored:
         return None
@@ -367,6 +500,9 @@ def extract_dates(text: str) -> tuple[Optional[str], Optional[str]]:
 # ---------------------------------------------------------------------------
 
 _DAILY_CHARGE_PATTERNS = [
+    # "32 Days x 291.00 cents" — Mercury/Genesis/Contact table layout. Captures
+    # the RATE, not the day count. First for the same reason as the kWh twin.
+    re.compile(r"\bDays?\s*[x×@]\s*([\d.]+)\s*c(?:ents?)?\b", re.IGNORECASE),
     # "Daily charge: 90.00 c/day" or "Fixed daily: $0.90/day"
     re.compile(
         r"(?:[Dd]aily\s*[Cc]harge|[Ff]ixed\s*[Dd]aily|[Dd]aily\s*[Ff]ixed)[\s:#$-]*([\d.]+)\s*(?:c|cents?)?\s*(?:/|per)\s*day",
@@ -379,8 +515,10 @@ _DAILY_CHARGE_PATTERNS = [
     re.compile(r"([\d.]+)\s*dollars?\s*(?:/|per)\s*day", re.IGNORECASE),
     # "Daily: 90.000 c" or "90.000 cents per day"
     re.compile(r"([\d.]+)\s*c(?:ents?)?\s*(?:/|per)\s*day", re.IGNORECASE),
-    # "fixed charge 90.00c"
-    re.compile(r"[Ff]ixed\s*[Cc]harge[\s:#$-]*\$?\s*([\d.]+)\s*c?", re.IGNORECASE),
+    # "fixed charge 90.00c". The cents unit is REQUIRED: when it was optional
+    # this matched the day count in "Daily Fixed Charge 32 Days x 291.00 cents"
+    # and returned 32.0 c/day on a real Mercury bill.
+    re.compile(r"[Ff]ixed\s*[Cc]harge[\s:#$-]*\$?\s*([\d.]+)\s*c(?:ents?)?\b", re.IGNORECASE),
 ]
 
 
@@ -405,12 +543,22 @@ def extract_daily_charge(text: str) -> Optional[float]:
 # ---------------------------------------------------------------------------
 
 _PER_KWH_PATTERNS = [
+    # "1113.88 kWh x 22.49 cents" — the usage x rate table layout used by
+    # Mercury, Genesis and Contact. Captures the RATE, not the usage. First
+    # because it is the most reliable signal on those layouts.
+    re.compile(
+        r"[\d,]+(?:\.\d+)?\s*kWh\s*[x×@]\s*([\d.]+)\s*c(?:ents?)?\b",
+        re.IGNORECASE,
+    ),
     # "25.50 c/kWh" or "25.50 c per kWh"
     re.compile(r"([\d.]+)\s*c(?:ents?)?\s*(?:/|per)\s*kWh", re.IGNORECASE),
-    # "Variable: 25.50 c/kWh"
-    re.compile(r"[Vv]ariable[\s:#$-]*([\d.]+)\s*c", re.IGNORECASE),
+    # "Variable: 25.50 c/kWh". `$` is deliberately NOT in the separator class
+    # and the unit is word-bounded: the old form matched "Variable $329.07
+    # credit" on a real Mercury bill (a customer PAYMENT, with the trailing `c`
+    # gluing onto "credit") and returned 329.07 as a cents-per-kWh rate.
+    re.compile(r"[Vv]ariable[\s:#-]*([\d.]+)\s*c(?:ents?)?\b", re.IGNORECASE),
     # "Energy charge: 25.500 c/kWh"
-    re.compile(r"[Ee]nergy\s*[Cc]harge[\s:#$-]*([\d.]+)\s*c", re.IGNORECASE),
+    re.compile(r"[Ee]nergy\s*[Cc]harge[\s:#-]*([\d.]+)\s*c(?:ents?)?\b", re.IGNORECASE),
     # "25.50 cents per unit"
     re.compile(r"([\d.]+)\s*c(?:ents?)?\s*(?:/|per)\s*unit", re.IGNORECASE),
 ]
@@ -422,7 +570,18 @@ _PER_KWH_DOLLAR_PATTERN = re.compile(r"\$\s*([\d.]+)\s*(?:/|per)\s*kWh", re.IGNO
 
 
 def extract_per_kwh(text: str) -> Optional[float]:
-    """Extract the per-kWh rate in cents from *text*."""
+    """Extract the effective per-kWh rate in cents from *text*.
+
+    On a time-of-use bill the itemised rates differ (Peak/Off-peak, Day/Night)
+    and picking whichever appears first returns the EXPENSIVE one, overstating
+    the customer's real cost. TOU bills therefore resolve to the
+    volume-weighted blended rate — the only figure that reconciles against the
+    bill's own total.
+    """
+    blended = extract_tou_blended_rate(text)
+    if blended is not None:
+        return blended
+
     candidates = []
     for match in _PER_KWH_DOLLAR_PATTERN.finditer(text):
         try:
@@ -440,12 +599,15 @@ def extract_per_kwh(text: str) -> Optional[float]:
     if not candidates:
         return None
 
-    # Return the most common NZ residential rate (typically 20-35 c/kWh)
-    # or the first found if none in that range
+    # Return the most common NZ residential rate (typically 20-35 c/kWh). If
+    # nothing lands in the plausible window, return None rather than the first
+    # candidate: the caller already handles a missing field, whereas a garbage
+    # rate silently corrupts every downstream plan comparison (a real Mercury
+    # bill yielded 329.07 c/kWh this way — it was a customer payment).
     residential_candidates = [c for c in candidates if 10.0 <= c <= 60.0]
     if residential_candidates:
         return residential_candidates[0]
-    return candidates[0]
+    return None
 
 
 # ---------------------------------------------------------------------------
@@ -458,8 +620,16 @@ _PLAN_NAME_PATTERNS = [
     # ("...check you are on the right plan for your needs" in the Billy
     # footer on real bills) and returned garbage plan names.
     re.compile(r"[Pp]lan\s*[:#-]\s*(\S[\s\S]{0,40}?)(?:\n|$)", re.IGNORECASE),
+    # Bare keyword, but ONLY in plan context. With the trailing "Plan"
+    # optional this matched the word "online" inside "Access your account
+    # online at:" on a real Mercury bill and returned it as the plan name.
+    # A wrong plan name is worse than none — it feeds the comparator.
     re.compile(
-        r"(?:Standard|Low\s*User|Day\s*Night|Controlled|Economy|Classic|Anytime|Online|Saver|Freedom|Basic|Everyday)(?:\s*Plan)?",
+        r"(?:Standard|Low\s*User|Day\s*Night|Controlled|Economy|Classic|Anytime"
+        r"|Online|Saver|Freedom|Basic|Everyday)\s*(?:Plan|Pricing|Tariff|Product)\b"
+        r"|(?:Plan|Pricing|Tariff|Product)\s*[:\-]?\s*"
+        r"(?:Standard|Low\s*User|Day\s*Night|Controlled|Economy|Classic|Anytime"
+        r"|Online|Saver|Freedom|Basic|Everyday)\b",
         re.IGNORECASE,
     ),
 ]
@@ -470,7 +640,11 @@ def extract_plan_name(text: str) -> Optional[str]:
     for pattern in _PLAN_NAME_PATTERNS:
         match = pattern.search(text)
         if match:
-            name = match.group(0).strip()
+            # Prefer the captured value over the whole match: the labelled
+            # patterns capture the plan in group 1, and group(0) dragged the
+            # label in with it ("Plan: Standard User" instead of "Standard
+            # User"), which is what then reached the user in messages.
+            name = (match.group(1) if match.groups() else match.group(0)).strip()
             # Clean up common suffixes
             name = re.sub(r"\s*(?:Plan|Product)\s*$", "", name, flags=re.IGNORECASE)
             if len(name) >= 3:
