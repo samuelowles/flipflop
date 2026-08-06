@@ -66,6 +66,7 @@ npx wrangler secret put GMAIL_CLIENT_ID            # Google OAuth client id
 npx wrangler secret put GMAIL_CLIENT_SECRET        # Google OAuth client secret
 npx wrangler secret put ENCRYPTION_KEY             # 32-byte hex; used for phone/token encryption
 npx wrangler secret put SENT_API_KEY               # Sent (WhatsApp) API key — drives the notify stage
+npx wrangler secret put SENT_WEBHOOK_SECRET        # Sent webhook signing secret — WITHOUT IT EVERY INBOUND MESSAGE 500s
 npx wrangler secret put DEEPSEEK_API_KEY           # DeepSeek NLU (classification in the parse stage)
 npx wrangler secret put PYTHON_SERVICE_URL         # Python comparator/parser service origin, e.g. https://<python-host>
 npx wrangler secret put PYTHON_SERVICE_AUTH_TOKEN  # bearer token the Worker sends to the Python service
@@ -77,7 +78,18 @@ Optional / currently inert:
 - `EIEP14A_API_KEY` — only required if you flip `EIF_EIEP14A_ENABLED="true"` (the
   EA feed lands ~October). Leave unset for this run.
 
-> Enumerated from `grep -rhoE "env\.[A-Z][A-Z0-9_]+" workers/src` — no hand-waving.
+> This list is enforced, not hand-maintained: `npm run check:env-docs` (a CI
+> gate) fails the build if the Worker reads an env value that appears neither
+> here nor in `wrangler.toml`.
+>
+> It replaced a hand-run `grep -rhoE "env\.[A-Z][A-Z0-9_]+" workers/src`, which
+> claimed to be exhaustive and was not: the pattern needs a literal `env.`, so it
+> missed `env?.SENT_WEBHOOK_SECRET` in `middleware/sentAuth.ts`. Following the
+> old list exactly produced a deployment where **every inbound webhook returned
+> 500** — no bill forwarded over WhatsApp received, no `stop`, no
+> `delete my data` — with nothing in the test suite noticing, because every test
+> supplies its own env.
+>
 > Bindings (`DB`, `KV`, `BILLS`, `PARSE_QUEUE`, `COMPARE_QUEUE`, `NOTIFY_QUEUE`,
 > `RATE_LIMITER`) come from `wrangler.toml`, not `secret put`.
 
