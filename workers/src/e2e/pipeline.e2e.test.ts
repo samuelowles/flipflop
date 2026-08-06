@@ -3,6 +3,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import worker from '../index';
 import { createUser, getUserById } from '../models/users';
 import { createBill, getBillById } from '../models/bills';
+import { activateSeedPlansForFixture, expireSeedPlansAfterFixture } from './apply-migrations';
 
 /**
  * End-to-end: parse -> compare -> notify, through the REAL queue consumers,
@@ -161,12 +162,17 @@ async function seedUserWithBill(): Promise<{ userId: string; billId: string }> {
 beforeEach(async () => {
   calls = [];
   stubFetch();
+  // This suite drives the seeded-plan path, so it opts the fixture plans back
+  // in. Migration 0020 expires them for production; see activateSeedPlansForFixture.
+  await activateSeedPlansForFixture();
   await buildCompareResponse();
 });
 
-afterEach(() => {
+afterEach(async () => {
   globalThis.fetch = realFetch;
   vi.restoreAllMocks();
+  // Paired with the activation above — every e2e file shares one database.
+  await expireSeedPlansAfterFixture();
 });
 
 describe('E2E: parse stage', () => {

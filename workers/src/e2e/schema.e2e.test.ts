@@ -49,3 +49,30 @@ describe('migration chain', () => {
     }
   });
 });
+
+describe('seed plans are not live data (migration 0020)', () => {
+  /**
+   * Migrations 0004/0008 seeded 39 plans with invented pricing. They must not
+   * survive into the set a real user is compared against: the comparator falls
+   * back to them when the Powerswitch bridge fails, and getCanonicalPlans ranks
+   * source='manual' ABOVE eiep14a and powerswitch, so they also displace real
+   * data for any colliding plan name.
+   */
+  it('leaves no active manual-source plans after the migration chain', async () => {
+    const active = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM plans " +
+      "WHERE source = 'manual' " +
+      "AND (effective_to IS NULL OR effective_to >= datetime('now'))"
+    ).first<{ n: number }>();
+    expect(active?.n).toBe(0);
+  });
+
+  it('keeps the rows present so plan_comparisons FKs still resolve', async () => {
+    // Expired, not deleted — plan_comparisons.plan_id references plans(id), and
+    // the audit trail of what was recommended must survive.
+    const total = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM plans WHERE source = 'manual'"
+    ).first<{ n: number }>();
+    expect(total?.n).toBeGreaterThan(0);
+  });
+});
