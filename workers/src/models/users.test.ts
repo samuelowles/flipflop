@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getUsersByRetailer, updatePowerswitchLocation } from './users';
+import { getUsersByRetailer, updatePowerswitchLocation, isUnsubscribed, UNSUBSCRIBED_STATE, getFreeTierUsers } from './users';
 
 /**
  * Issue #75 — getUsersByRetailer returns just the IDs of users whose
@@ -85,5 +85,68 @@ describe('updatePowerswitchLocation (issue #220)', () => {
     const { db, stmts } = captureDB();
     await updatePowerswitchLocation(db, 'u-1', { pxid: null, locationId: null });
     expect(stmts[0]!.params).toContain(null);
+  });
+});
+
+describe('isUnsubscribed — the opt-out guard for every proactive path', () => {
+  /**
+   * `stop` sets users.state = 'UNSUBSCRIBED' and we reply "You're all
+   * unsubscribed." Nothing read that state, so the notifier kept notifying and
+   * the Gmail cron kept polling. Under the Unsolicited Electronic Messages Act
+   * 2007 an unsubscribe request must be honoured.
+   */
+  function dbReturning(row: unknown, throws = false): D1Database {
+    return {
+      prepare: () => ({
+        bind: () => ({
+          first: async () => {
+            if (throws) throw new Error('D1 unavailable');
+            return row;
+          },
+        }),
+      }),
+    } as unknown as D1Database;
+  }
+
+  it('reports unsubscribed for a user in the UNSUBSCRIBED state', async () => {
+    expect(await isUnsubscribed(dbReturning({ state: 'UNSUBSCRIBED' }), 'u1')).toBe(true);
+  });
+
+  it.each(['NEW', 'ONBOARDING', 'ACTIVE', 'AWAITING_BILL', 'SWITCHING', 'INACTIVE'])(
+    'reports subscribed for state %s',
+    async (state) => {
+      expect(await isUnsubscribed(dbReturning({ state }), 'u1')).toBe(false);
+    }
+  );
+
+  it('fails CLOSED when the user row is missing', async () => {
+    // One missed notification costs nothing. One send to somebody who opted out
+    // is a breached promise, so an unknown user is treated as opted out.
+    expect(await isUnsubscribed(dbReturning(null), 'ghost')).toBe(true);
+  });
+
+  it('fails CLOSED when the database read throws', async () => {
+    expect(await isUnsubscribed(dbReturning(null, true), 'u1')).toBe(true);
+  });
+
+  it('the free-tier check-in query filters unsubscribed users', async () => {
+    // The monthly check-in is UNSOLICITED outreach and was the one proactive
+    // sender missed on the first pass: notify, the Gmail cron and fixed-term
+    // reminders were guarded, this was not. Assert the SQL, since the filter
+    // lives in the query rather than at the send site.
+    let boundSql = '';
+    const db = {
+      prepare: (sql: string) => { boundSql = sql; return {
+        bind: () => ({ all: async () => ({ results: [] }) }),
+      }; },
+    } as unknown as D1Database;
+    await getFreeTierUsers(db);
+    expect(boundSql).toContain('state !=');
+  });
+
+  it('matches the state the conversation machine actually writes', () => {
+    // Guards against the constant drifting from TRANSITIONS.stop in
+    // conversation.ts, which is what sets it.
+    expect(UNSUBSCRIBED_STATE).toBe('UNSUBSCRIBED');
   });
 });

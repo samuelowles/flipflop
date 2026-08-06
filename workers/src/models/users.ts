@@ -266,6 +266,40 @@ export async function updateUser(
  * Update a user's conversation state only.
  * This is the hot-path update for the KV-backed state machine.
  */
+/**
+ * The conversation state meaning "this person asked us to stop".
+ *
+ * `stop` sets it (conversation.ts TRANSITIONS) and we reply "You're all
+ * unsubscribed." Every PROACTIVE path must check it before acting: sending
+ * after an opt-out breaks that promise, and under the Unsolicited Electronic
+ * Messages Act 2007 an unsubscribe request must be honoured. Polling their
+ * Gmail after they have opted out keeps processing their data as well.
+ *
+ * It is NOT a gate on replies to inbound messages — an unsubscribed user can
+ * still text `help` and must get an answer (TRANSITIONS.UNSUBSCRIBED.help).
+ */
+export const UNSUBSCRIBED_STATE = 'UNSUBSCRIBED';
+
+/**
+ * Whether this user has opted out of proactive contact.
+ *
+ * Fails CLOSED: if the row cannot be read we report unsubscribed, because the
+ * cost of wrongly staying silent is one missed notification, and the cost of
+ * wrongly sending is a breached opt-out.
+ */
+export async function isUnsubscribed(db: D1Database, userId: string): Promise<boolean> {
+  try {
+    const row = await db
+      .prepare('SELECT state FROM users WHERE id = ?1')
+      .bind(userId)
+      .first<{ state: string }>();
+    if (!row) return true;
+    return row.state === UNSUBSCRIBED_STATE;
+  } catch {
+    return true;
+  }
+}
+
 export async function updateUserState(
   db: D1Database,
   id: string,
@@ -369,9 +403,12 @@ export async function getUsersByRetailer(
  * ponytail: same shape as getUsersByRetailer — IDs only, single column.
  */
 export async function getFreeTierUsers(db: D1Database): Promise<string[]> {
+  // Opt-out. The monthly check-in is UNSOLICITED outreach — the clearest case
+  // of something "stop" must silence. Filtered here rather than at the send
+  // site so an unsubscribed user is never even iterated.
   const result = await db
-    .prepare('SELECT id FROM users WHERE subscription_tier = ?1')
-    .bind('free')
+    .prepare('SELECT id FROM users WHERE subscription_tier = ?1 AND state != ?2')
+    .bind('free', UNSUBSCRIBED_STATE)
     .all<{ id: string }>();
   return (result.results ?? []).map(r => r.id);
 }

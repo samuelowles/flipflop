@@ -17,9 +17,12 @@
  * here). Reuses renderTemplate + sendText + createNotificationAudit so the
  * compliance audit row is still written on send/fail (#78 pattern).
  *
- * No `users.unsubscribe` / opt-out flag exists yet (verified in 0001_initial).
- * The UNSUBSCRIBED skip in the AC is moot until that column lands; noted in
- * the PR body.
+ * Opt-out: the AC's UNSUBSCRIBED skip is enforced in the QUERY
+ * (`getUpcomingFixedTermExpiries`), so an opted-out user is never even
+ * returned here. This note previously said no opt-out flag existed, "verified
+ * in 0001_initial" — that was wrong. There is no boolean `users.unsubscribe`
+ * column, which is what the check looked for, but 0001_initial line 18 puts
+ * 'UNSUBSCRIBED' in the `users.state` CHECK constraint, and `stop` sets it.
  */
 
 import {

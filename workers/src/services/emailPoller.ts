@@ -2,6 +2,7 @@ import type { PollResult, DecryptedGmailTokens, ScanProgress } from '../types/gm
 import { decrypt } from '../models/encryption';
 import { refreshAccessToken } from './gmailAuth';
 import { storeOAuthTokens } from '../models/oauth';
+import { UNSUBSCRIBED_STATE } from '../models/users';
 import { getAllRetailersForSearch } from '../models/retailers';
 import { buildLinkOnlySearchQuery, buildSearchQuery, processMessage, searchAllMessages } from './emailPipeline';
 import type { GmailPollingEnv, RetailerSearchEntry } from './emailPipeline';
@@ -27,10 +28,18 @@ async function getGmailUsers(
     expiry: string;
   }>
 > {
+  // Skip users who asked us to stop. This is the CRON path: without the join,
+  // "stop" left us polling their inbox daily forever, which is both a broken
+  // promise and continued processing of their mail after they opted out.
+  // (idx_users_state exists — 0001_initial.)
   const stmt = db.prepare(
-    'SELECT user_id, access_token_encrypted, refresh_token_encrypted, expiry FROM oauth_tokens WHERE provider = ?1'
+    `SELECT t.user_id, t.access_token_encrypted, t.refresh_token_encrypted, t.expiry
+       FROM oauth_tokens t
+       JOIN users u ON u.id = t.user_id
+      WHERE t.provider = ?1
+        AND u.state != ?2`
   );
-  const results = await stmt.bind('gmail').all<Record<string, unknown>>();
+  const results = await stmt.bind('gmail', UNSUBSCRIBED_STATE).all<Record<string, unknown>>();
 
   return (results.results ?? []).map((r) => ({
     userId: r['user_id'] as string,

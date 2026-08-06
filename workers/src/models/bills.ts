@@ -286,6 +286,12 @@ export async function getUpcomingFixedTermExpiries(
      WHERE b.fixed_term_expiry IS NOT NULL
        AND date(b.fixed_term_expiry) >= date('now')
        AND date(b.fixed_term_expiry) <= date('now', '+' || ?1 || ' days')
+       -- Opt-out. fixedTermExpiry.ts recorded that no opt-out flag existed
+       -- ("verified in 0001_initial") and dropped its UNSUBSCRIBED skip on that
+       -- basis. The flag does exist: 0001_initial line 18 puts 'UNSUBSCRIBED'
+       -- in the users.state CHECK. Filtered here so the reminder cron cannot
+       -- message someone who asked us to stop.
+       AND u.state IS NOT 'UNSUBSCRIBED'
      ORDER BY b.fixed_term_expiry ASC`
   );
   const result = await stmt.bind(withinDays).all<Record<string, unknown>>();
