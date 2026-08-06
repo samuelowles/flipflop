@@ -394,9 +394,12 @@ export async function getUsersByRetailer(
  * ponytail: same shape as getUsersByRetailer — IDs only, single column.
  */
 export async function getFreeTierUsers(db: D1Database): Promise<string[]> {
+  // Opt-out. The monthly check-in is UNSOLICITED outreach — the clearest case
+  // of something "stop" must silence. Filtered here rather than at the send
+  // site so an unsubscribed user is never even iterated.
   const result = await db
-    .prepare('SELECT id FROM users WHERE subscription_tier = ?1')
-    .bind('free')
+    .prepare('SELECT id FROM users WHERE subscription_tier = ?1 AND state != ?2')
+    .bind('free', UNSUBSCRIBED_STATE)
     .all<{ id: string }>();
   return (result.results ?? []).map(r => r.id);
 }

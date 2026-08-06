@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { getUsersByRetailer, updatePowerswitchLocation, isUnsubscribed, UNSUBSCRIBED_STATE } from './users';
+import { getUsersByRetailer, updatePowerswitchLocation, isUnsubscribed, UNSUBSCRIBED_STATE, getFreeTierUsers } from './users';
 
 /**
  * Issue #75 — getUsersByRetailer returns just the IDs of users whose
@@ -127,6 +127,21 @@ describe('isUnsubscribed — the opt-out guard for every proactive path', () => 
 
   it('fails CLOSED when the database read throws', async () => {
     expect(await isUnsubscribed(dbReturning(null, true), 'u1')).toBe(true);
+  });
+
+  it('the free-tier check-in query filters unsubscribed users', async () => {
+    // The monthly check-in is UNSOLICITED outreach and was the one proactive
+    // sender missed on the first pass: notify, the Gmail cron and fixed-term
+    // reminders were guarded, this was not. Assert the SQL, since the filter
+    // lives in the query rather than at the send site.
+    let boundSql = '';
+    const db = {
+      prepare: (sql: string) => { boundSql = sql; return {
+        bind: () => ({ all: async () => ({ results: [] }) }),
+      }; },
+    } as unknown as D1Database;
+    await getFreeTierUsers(db);
+    expect(boundSql).toContain('state !=');
   });
 
   it('matches the state the conversation machine actually writes', () => {
