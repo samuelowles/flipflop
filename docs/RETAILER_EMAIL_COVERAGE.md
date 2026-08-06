@@ -28,12 +28,23 @@ which retailers are **PDF-attached** (ingested today) vs **link-only**
   downloads the PDF, stores it in R2, creates a `bills` row, and enqueues a
   PARSE_QUEUE job.
 - **Link-only** retailers (Electric Kiwi, Powershop) email a "view your bill"
-  link rather than attaching a PDF. They are matched by sender domain and
-  logged, but no bill is ingested until the HTML-body / link-following
-  fallback lands (**blocked-on #114**). The `has:attachment` clause in the
-  Gmail search currently suppresses these entirely — the domain match exists
-  so #114 can drop `has:attachment` for these two retailers without further
-  schema work.
+  link rather than attaching a PDF. No bill is ingested from Gmail until the
+  HTML-body / link-following fallback lands (**blocked-on #114**), because the
+  `has:attachment` clause in the main search suppresses these messages
+  entirely.
+
+  They are, however, **detected**. `LINK_ONLY_RETAILER_NAMES` in
+  `services/emailPipeline.ts` is the machine-readable form of this column, and
+  `buildLinkOnlySearchQuery` re-runs each one's sender terms without
+  `has:attachment`. When a post-connect scan finds zero bills,
+  `detectLinkOnlyRetailers` establishes whether that is because the customer is
+  with a retailer we cannot read, and the confirmation message asks them to
+  send the PDF over WhatsApp — an ingestion path that already works
+  (`routes/messaging.ts`). Without this, a link-only customer is told "we'll
+  catch the next one" after every scan, forever; the next one is identical.
+
+  Keep this column and `LINK_ONLY_RETAILER_NAMES` in sync — a test asserts the
+  constant contains exactly Electric Kiwi and Powershop.
 
 ## Research notes / uncertainty
 

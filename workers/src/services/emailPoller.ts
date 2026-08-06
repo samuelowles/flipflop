@@ -3,7 +3,7 @@ import { decrypt } from '../models/encryption';
 import { refreshAccessToken } from './gmailAuth';
 import { storeOAuthTokens } from '../models/oauth';
 import { getAllRetailersForSearch } from '../models/retailers';
-import { buildSearchQuery, processMessage, searchAllMessages } from './emailPipeline';
+import { buildLinkOnlySearchQuery, buildSearchQuery, processMessage, searchAllMessages } from './emailPipeline';
 import type { GmailPollingEnv, RetailerSearchEntry } from './emailPipeline';
 
 // Re-exported so existing callers (routes/gmail.ts: `import type { GmailPollingEnv }`)
@@ -447,4 +447,63 @@ export async function pollSingleUser(
   }));
 
   return { userId, billsFound, errors };
+}
+
+/**
+ * Which link-only retailers this user receives bill mail from.
+ *
+ * Electric Kiwi and Powershop email a "view your bill" link, never a PDF, so
+ * the main scan's `has:attachment` clause can never match them. Their customers
+ * currently get "didn't spot any power bills in your inbox" after connecting
+ * Gmail and after every daily poll — permanently, with nothing they can do
+ * about it, because nothing they can do would change the result.
+ *
+ * This looks for the same senders WITHOUT that clause. It ingests nothing (there
+ * is no attachment to ingest); it answers one question — "is this customer with
+ * a retailer we cannot read?" — so the caller can ask them to send the PDF over
+ * WhatsApp, which is already a supported ingestion path.
+ *
+ * Best-effort by construction: any failure returns the names found so far. A
+ * detection problem must never degrade a scan that otherwise succeeded.
+ */
+export async function detectLinkOnlyRetailers(
+  env: GmailPollingEnv,
+  userId: string,
+  afterDate?: string
+): Promise<readonly string[]> {
+  const found: string[] = [];
+  try {
+    const tokenRow = await getGmailTokenForUser(env.DB, userId);
+    if (!tokenRow) return found;
+
+    const tokens = await getValidTokens(tokenRow, env);
+    if (tokens instanceof Error) return found;
+
+    const retailers = await getAllRetailersForSearch(env.DB);
+    const since =
+      afterDate ??
+      new Date(Date.now() - INITIAL_LOOKBACK_DAYS * 24 * 60 * 60 * 1000).toISOString();
+
+    for (const retailer of retailers) {
+      const query = buildLinkOnlySearchQuery(retailer, since);
+      if (query === null) continue; // not link-only — the main scan covers it
+
+      const messages = await searchAllMessages({
+        accessToken: tokens.accessToken,
+        query,
+      });
+      if (messages.length > 0) {
+        found.push(retailer.name);
+      }
+    }
+  } catch (err) {
+    console.log(JSON.stringify({
+      level: 'warn',
+      type: 'link_only_detect_failed',
+      userId,
+      error: (err as Error).message,
+      timestamp: new Date().toISOString(),
+    }));
+  }
+  return found;
 }

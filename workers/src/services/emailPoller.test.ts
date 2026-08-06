@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { pollAllUsers, pollSingleUser } from './emailPoller';
-import { buildSearchQuery, matchRetailer, processMessage } from './emailPipeline';
+import { buildLinkOnlySearchQuery, buildSearchQuery, matchRetailer, processMessage, LINK_ONLY_RETAILER_NAMES } from './emailPipeline';
 
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
@@ -1651,5 +1651,51 @@ describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
     expect(result.billsFound).toBe(0);
     expect(result.skipReason).toBe('skipped_no_retailer_match');
     expect(createBill).not.toHaveBeenCalled();
+  });
+});
+
+describe('link-only retailers (Electric Kiwi, Powershop)', () => {
+  const EK_ENTRY = {
+    id: 'r-ek',
+    name: 'Electric Kiwi',
+    emailDomains: ['electrickiwi.co.nz'],
+  };
+  const MERCURY = { id: 'r-mercury', name: 'Mercury', emailDomains: ['mercury.co.nz'] };
+
+  it('omits has:attachment — the clause that hides these bills from the main scan', () => {
+    const query = buildLinkOnlySearchQuery(EK_ENTRY);
+    expect(query).not.toBeNull();
+    expect(query).not.toContain('has:attachment');
+  });
+
+  it('searches the same senders the main query would', () => {
+    const query = buildLinkOnlySearchQuery(EK_ENTRY)!;
+    expect(query).toContain('from:electrickiwi.co.nz');
+    expect(query).toContain('from:"Electric Kiwi"');
+    expect(query).toContain('subject:"Electric Kiwi"');
+  });
+
+  it('returns null for a PDF-attaching retailer so no extra Gmail call is made', () => {
+    // Mercury attaches a PDF; the main scan already finds it. Detecting it here
+    // would spend a round-trip to learn nothing.
+    expect(buildLinkOnlySearchQuery(MERCURY)).toBeNull();
+  });
+
+  it('scopes the query to one retailer so a hit names that retailer', () => {
+    const query = buildLinkOnlySearchQuery(EK_ENTRY)!;
+    expect(query).not.toContain('Powershop');
+  });
+
+  it('keeps after: outside the group, formatted YYYY/MM/DD', () => {
+    const query = buildLinkOnlySearchQuery(EK_ENTRY, '2026-08-15')!;
+    const braceGroup = query.slice(1, query.indexOf('}'));
+    expect(braceGroup).not.toContain('after:');
+    expect(query).toMatch(/} after:\d{4}\/\d{2}\/\d{2}$/);
+  });
+
+  it('lists exactly the retailers documented as link-only', () => {
+    // Guards against a retailer being added here without the coverage matrix
+    // (docs/RETAILER_EMAIL_COVERAGE.md) being updated to match.
+    expect([...LINK_ONLY_RETAILER_NAMES].sort()).toEqual(['Electric Kiwi', 'Powershop']);
   });
 });
