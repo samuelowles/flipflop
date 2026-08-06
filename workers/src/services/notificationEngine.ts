@@ -13,7 +13,7 @@ import { getBillsByUserId } from '../models/bills';
 import { getUserById, getNotificationThreshold } from '../models/users';
 import { sendText } from './messaging';
 import { renderTemplate } from './sentTemplates';
-import { explainComparison as _explainComparison, generateStayPutMessage, generateSavingMessage } from './comparisonIntelligence';
+import { explainComparison as _explainComparison, generateStayPutMessage, generateSavingMessage, displayablePlanName } from './comparisonIntelligence';
 import { persistLLMCall } from './llmAudit';
 import { createNotificationAudit } from '../models/notificationAudit';
 import { startStage, finishStage, failStage, skipStage, readFlowTrace } from './flowTrace';
@@ -118,6 +118,7 @@ export async function isFlowTestBypassActive(
 function savingToDollars(cents: number): number {
   return Math.round(Math.abs(cents) / 100);
 }
+
 
 /**
  * Issue #77 — build the registry variable map for the comparison context.
@@ -266,7 +267,7 @@ export async function evaluateAndNotify(
   const allBills = await getBillsByUserId(env.DB, userId);
   const parsedBills = allBills.filter(b => b.status === 'parsed');
   if (parsedBills.length > 0) {
-    currentPlanName = parsedBills[0]!.planName ?? 'your current plan';
+    currentPlanName = displayablePlanName(parsedBills[0]!.planName);
   }
 
   const savingDollars = savingToDollars(comparison.savingCents);

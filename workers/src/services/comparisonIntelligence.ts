@@ -6,6 +6,34 @@
  * All dollar values come from Python's deterministic pricing engine.
  */
 
+/**
+ * Stand-in used when a bill does not name the customer's plan. Reads correctly
+ * as a noun phrase in every sentence below ("Sticking with your current plan…").
+ */
+export const GENERIC_PLAN_NAME = 'your current plan';
+
+/**
+ * A plan name safe to drop into a sentence, or {@link GENERIC_PLAN_NAME}.
+ *
+ * The parsers emit the literal string `"Unknown"` when a bill does not state a
+ * plan name — a sentinel, not a name — and most NZ bills do not state one:
+ * BOTH real bills in `example bills/` parse to `plan_name: "Unknown"`. The
+ * caller's `?? 'your current plan'` guard only caught SQL NULL, so the sentinel
+ * sailed straight into copy the customer reads:
+ *
+ *   "Sticking with Unknown is the smart choice."
+ *   "Your current plan (Unknown) would cost about $4,491/year."
+ *
+ * That is the DEFAULT case for a real bill, not an edge case.
+ */
+export function displayablePlanName(name: string | null | undefined): string {
+  const trimmed = name?.trim() ?? '';
+  if (trimmed === '' || trimmed.toLowerCase() === 'unknown') {
+    return GENERIC_PLAN_NAME;
+  }
+  return trimmed;
+}
+
 interface ComparisonExplanationContext {
   readonly bestPlanName: string;
   readonly bestRetailerName: string;
@@ -71,7 +99,10 @@ export async function explainComparison(
 ): Promise<string> {
   if (!apiKey) {
     if (ctx.stayWhereYouAre) {
-      return `Good news — you're already on the best plan for your usage. Your current plan (${ctx.currentPlanName}) would cost about $${ctx.currentAnnualCostDollars}/year. The closest alternative would be about the same.`;
+      // Name the plan only when we actually know it — "Your current plan (your
+      // current plan)" is what the unconditional parenthetical produced.
+      const named = ctx.currentPlanName === GENERIC_PLAN_NAME ? '' : ` (${ctx.currentPlanName})`;
+      return `Good news — you're already on the best plan for your usage. Your current plan${named} would cost about $${ctx.currentAnnualCostDollars}/year. The closest alternative would be about the same.`;
     }
     return `Based on your last ${ctx.billCount} bills, you could save about $${ctx.savingDollarsPerYear}/year by switching to ${ctx.bestRetailerName}'s ${ctx.bestPlanName} plan. This is an estimate, not a guarantee.`;
   }
