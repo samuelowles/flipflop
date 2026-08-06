@@ -41,11 +41,16 @@ export async function gmailConnectPage(c: Context): Promise<Response> {
     .btn { display: inline-block; padding: 12px 24px; background: #1a73e8; color: #fff; border: none; border-radius: 6px; font-weight: 500; font-size: 1rem; cursor: pointer; }
     .btn:hover { background: #1557b0; }
     .error { color: #d93025; background: #fce8e6; padding: 10px 14px; border-radius: 6px; margin-bottom: 20px; }
+    .disclose { font-size: 0.9rem; color: #444; background: #f1f3f4; padding: 12px 14px; border-radius: 6px; }
   </style>
 </head>
 <body>
   <h1>Connect your Gmail</h1>
   <p>Flip reads power bill emails so you don&#39;t have to forward them. We only search for bills from NZ power retailers — nothing else.</p>
+  <p class="disclose">To find the plans actually available at your place, Flip queries
+     <strong>Powerswitch.org.nz</strong> on your behalf, using the address from your bill
+     and a few household details. Your ICP number is never shared. Those results are
+     cached for 7 days — say &quot;delete my data&quot; any time and it all goes.</p>
   <p>Enter your mobile number and we&#39;ll text you when we find something.</p>
   ${errorHtml}
   <form method="POST" action="/auth/gmail/login">
@@ -415,7 +420,12 @@ async function doPostConnectFlow(
     await sendText(
       sentApiKey,
       phone,
-      "Cheers! Flip's hooked up to your Gmail. Having a quick squiz for any power bills now — back in a tick."
+      "Cheers! Flip's hooked up to your Gmail. Having a quick squiz for any " +
+      "power bills now — back in a tick.\n\nOne thing worth knowing: to see " +
+      "what plans are actually available at your place, I check " +
+      "Powerswitch.org.nz on your behalf, using your address and a few " +
+      "household details. Never your ICP number. Those results are cached " +
+      "for 7 days — say \"delete my data\" any time and it all goes."
     );
   } catch (msgErr) {
     console.log(JSON.stringify({
