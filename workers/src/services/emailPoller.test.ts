@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { pollAllUsers, pollSingleUser } from './emailPoller';
+import { buildSearchQuery, matchRetailer, processMessage } from './emailPipeline';
 
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
@@ -1472,5 +1473,183 @@ describe('Issue #227 — Gmail bill discovery overhaul', () => {
     const cursorAfterClean = await env.KV.get('gmail:lastPoll:user-1');
     expect(cursorAfterClean).not.toBe(cursorBefore); // advanced
     expect(cursorAfterClean).toMatch(new RegExp(`^${new Date().getFullYear()}-`));
+  });
+});
+
+// ---------- Forwarded-bill discovery (bill-discovery-2036) ----------
+//
+// Forwarding a bill to yourself is a natural onboarding action: the From header
+// becomes the forwarder's own address (so `from:` never matches) while the
+// Subject still names the retailer. These cover the three fixes: subject:
+// search terms (buildSearchQuery), the Subject fallback retailer match
+// (processMessage), and Mercury's registered billing domain (migration 0019).
+
+const MERCURY_ID = '2951d6b6-436e-474b-8ea9-7fb5092cc069';
+const MERCURY_ENTRY = {
+  id: MERCURY_ID,
+  name: 'Mercury',
+  emailDomains: ['mercury.co.nz', 'mercuryonline.co.nz'],
+};
+
+describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockFetch.mockReset();
+    // Default: no existing bill (dedup returns null).
+    vi.mocked(getBillBySourceMessageId).mockResolvedValue(null);
+  });
+
+  // FIX 1a — buildSearchQuery emits both a from: and a subject: term for the
+  // same retailer, both inside the brace group, with has:attachment outside it.
+  it('buildSearchQuery emits from: and subject: terms inside the group, has:attachment outside', () => {
+    const retailers = [
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+      MERCURY_ENTRY,
+    ];
+    const query = buildSearchQuery(retailers);
+
+    const closeIdx = query.indexOf('}');
+    const braceGroup = query.slice(1, closeIdx);
+    const afterGroup = query.slice(closeIdx + 1);
+
+    // Same retailer (Mercury, single-word): both a from: AND a subject: term.
+    expect(braceGroup).toContain('from:Mercury');
+    expect(braceGroup).toContain('subject:Mercury');
+    // Multi-word name → quoted from: AND subject: phrase.
+    expect(braceGroup).toContain('from:"Contact Energy"');
+    expect(braceGroup).toContain('subject:"Contact Energy"');
+    // has:attachment lives OUTSIDE the brace group.
+    expect(braceGroup).not.toContain('has:attachment');
+    expect(afterGroup).toContain('has:attachment');
+    // No generic subject words (would pull in bank/insurance statements).
+    expect(braceGroup).not.toMatch(/subject:bill\b/i);
+    expect(braceGroup).not.toMatch(/subject:statement\b/i);
+  });
+
+  // FIX 1a — after: stays OUTSIDE the group and is slash-formatted YYYY/MM/DD.
+  it('buildSearchQuery places after: outside the group as YYYY/MM/DD', () => {
+    const query = buildSearchQuery([MERCURY_ENTRY], '2026-08-15');
+
+    const closeIdx = query.indexOf('}');
+    const braceGroup = query.slice(1, closeIdx);
+    expect(braceGroup).not.toContain('after:');
+    expect(query).toMatch(/} has:attachment after:\d{4}\/\d{2}\/\d{2}$/);
+  });
+
+  // FIX 2 — matchRetailer matches Mercury's real billing sender domain.
+  it('matchRetailer matches Mercury for onlinebills@mercuryonline.co.nz', () => {
+    expect(
+      matchRetailer([MERCURY_ENTRY], 'Mercury <onlinebills@mercuryonline.co.nz>')
+    ).toBe(MERCURY_ID);
+  });
+
+  // FIX 1b + 1a end to end — a forwarded bill (unknown From, retailer Subject,
+  // one PDF) is ingested, and the created bill carries Mercury's retailer id.
+  // This is the exact scenario that produced the zero-bill scan.
+  it('ingests a forwarded bill and tags it with the matched retailer id', async () => {
+    const env = makeEnv();
+
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_fwd',
+      threadId: 'thread_fwd',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'someone@gmail.com' },
+          { name: 'Subject', value: 'Fwd: Your Mercury Online Bill' },
+        ],
+        parts: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'mercury-bill.pdf',
+            body: { attachmentId: 'att_fwd', size: 50000 },
+            partId: '0',
+          },
+        ],
+        mimeType: 'multipart/mixed',
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+    vi.mocked(createBill).mockResolvedValue({
+      id: 'bill-fwd',
+      userId: 'user-1',
+      retailerId: MERCURY_ID,
+      planName: null,
+      meterType: null,
+      periodStart: null,
+      periodEnd: null,
+      days: null,
+      usageKwh: null,
+      totalCents: null,
+      cPerKwh: null,
+      cPerDay: null,
+      fixedTermExpiry: null,
+      breakFeeCents: null,
+      status: 'pending_parse' as const,
+      confidence: null,
+      rawR2Key: 'bills/user-1/gmail_msg_fwd_0.pdf',
+      parsedJson: null,
+      source: 'gmail' as const,
+      sourceMessageId: 'gmail_msg_fwd_0',
+      errorCode: null,
+      parsedAt: null,
+      createdAt: new Date().toISOString(),
+    });
+
+    const result = await processMessage(
+      env,
+      'user-1',
+      { messageId: 'msg_fwd', accessToken: 'tok' },
+      [MERCURY_ENTRY]
+    );
+
+    expect(result.billsFound).toBe(1);
+    expect(result.skipReason).toBeUndefined();
+    expect(createBill).toHaveBeenCalledWith(
+      env.DB,
+      expect.objectContaining({ retailerId: MERCURY_ID })
+    );
+  });
+
+  // Gate intact — unknown From AND unknown Subject (no retailer match either
+  // way) is still skipped, proving the widening did not loosen the hard gate.
+  it('still skips when neither From nor Subject matches a retailer', async () => {
+    const env = makeEnv();
+    const retailers = [
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+    ];
+
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_unrelated',
+      threadId: 'thread_x',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'someone@gmail.com' },
+          { name: 'Subject', value: 'Special offer just for you' },
+        ],
+        parts: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'coupon.pdf',
+            body: { attachmentId: 'att_unrelated', size: 5000 },
+            partId: '0',
+          },
+        ],
+        mimeType: 'multipart/mixed',
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+
+    const result = await processMessage(
+      env,
+      'user-1',
+      { messageId: 'msg_unrelated', accessToken: 'tok' },
+      retailers
+    );
+
+    expect(result.billsFound).toBe(0);
+    expect(result.skipReason).toBe('skipped_no_retailer_match');
+    expect(createBill).not.toHaveBeenCalled();
   });
 });

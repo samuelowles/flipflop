@@ -35,14 +35,18 @@ export interface RetailerSearchEntry {
 
 /**
  * Issue #227 — Build Gmail search query as a UNION of retailer sender DOMAINS
- * (migration 0017 `retailers.email_domains`) AND retailer NAME keywords.
+ * (migration 0017 `retailers.email_domains`), retailer NAME keywords, AND a
+ * `subject:` term for each name keyword.
  *
  * Domains are the reliable signal (`from:contactenergy.co.nz` matches any
  * display name on that domain); name keywords are retained so nothing that
  * matched before stops matching (third-party mailers where the display name
- * carries the retailer name but the domain is a shared bulk-sender).
+ * carries the retailer name but the domain is a shared bulk-sender). The
+ * `subject:` terms make FORWARDED bills discoverable: a forwarded bill's From
+ * header is the forwarder's own address (so every `from:` term misses), but the
+ * Subject still names the retailer (e.g. "Fwd: Your Mercury Online Bill").
  *
- * Example: {from:contactenergy.co.nz OR from:"Contact Energy" OR from:mercury.co.nz OR from:Mercury OR ...} has:attachment after:YYYY/MM/DD
+ * Example: {from:contactenergy.co.nz OR from:"Contact Energy" OR from:mercury.co.nz OR from:Mercury OR ... OR subject:Mercury OR subject:"Electric Kiwi" OR ...} has:attachment after:YYYY/MM/DD
  */
 export function buildSearchQuery(
   retailers: readonly RetailerSearchEntry[],
@@ -52,20 +56,32 @@ export function buildSearchQuery(
     throw new Error('No active retailers configured');
   }
 
-  // Collect every from: term across all retailers (handles multi-retailer users).
-  // Domains first, then name keywords — order is cosmetic but deterministic.
+  // Collect every from: term (sender domains + name keywords) AND a subject:
+  // term for each name keyword, across all retailers (handles multi-retailer
+  // users). The subject: terms catch FORWARDED bills: a forwarded bill's From
+  // header is the forwarder's own address, but its Subject still names the
+  // retailer (e.g. "Fwd: Your Mercury Online Bill"), and Gmail's from: operator
+  // does not search the body. Generic subject words (subject:bill) are
+  // deliberately omitted — they would pull in bank and insurance statements and
+  // defeat processMessage's unknown-sender gate. Order is cosmetic but
+  // deterministic (Set insertion order; domains before keywords per retailer).
   const fromTerms = new Set<string>();
+  const subjectTerms = new Set<string>();
   for (const r of retailers) {
     for (const domain of r.emailDomains) {
       fromTerms.add(domain);
     }
     for (const kw of nameToSearchKeywords(r.name)) {
       fromTerms.add(kw);
+      subjectTerms.add(kw);
     }
   }
 
-  const fromClause = [...fromTerms].map((t) => `from:${t}`).join(' OR ');
-  let query = `{${fromClause}} has:attachment`;
+  const group = [
+    ...[...fromTerms].map((t) => `from:${t}`),
+    ...[...subjectTerms].map((t) => `subject:${t}`),
+  ].join(' OR ');
+  let query = `{${group}} has:attachment`;
   if (afterDate) {
     const d = new Date(afterDate);
     const yyyy = d.getFullYear();
@@ -226,8 +242,12 @@ export async function processMessage(
     const subject = headers.find((h) => h.name === 'Subject')?.value ?? '';
     const subjectMatched = SUBJECT_PATTERN.test(subject);
 
-    // Retailer match is the primary signal (domain first, then name).
-    const retailerId = matchRetailer(retailers, from);
+    // Retailer match is the primary signal (domain first, then name). On a
+    // FORWARDED bill the From header is the forwarder's own address and carries
+    // no retailer signal, so fall back to the Subject — which still names the
+    // retailer (e.g. "Fwd: Your Mercury Online Bill"). Strict widening only:
+    // the hard gate below (retailerId === null && !subjectMatched) is unchanged.
+    const retailerId = matchRetailer(retailers, from) ?? matchRetailer(retailers, subject);
 
     // Recursive MIME walk to find PDF attachments at any nesting depth.
     const pdfParts = findPdfParts(fullMsg.payload);
