@@ -23,6 +23,72 @@ export interface GmailPollingEnv extends EncryptionEnv {
 const SUBJECT_PATTERN = /\b(bill|invoice|statement|account)\b/i;
 
 /**
+ * Retailers that email a "view your bill" LINK instead of attaching a PDF.
+ *
+ * `buildSearchQuery` ends every query with `has:attachment`, so these two never
+ * match and their customers are told "didn't spot any power bills" after every
+ * scan, forever — the daily poll cannot find what the retailer never sent.
+ *
+ * Following the link (#114) needs a logged-in session we do not have. What we
+ * CAN do is notice the mail exists and ask the customer to send the PDF over
+ * WhatsApp, which is already a first-class ingestion path
+ * (`routes/messaging.ts` — media downloaded to R2 and queued for parsing).
+ *
+ * Sourced from docs/RETAILER_EMAIL_COVERAGE.md, which tracks per-retailer
+ * delivery. Matched on retailer NAME because that is the stable key across
+ * migrations 0002/0017. ponytail: two names is a constant, not a schema
+ * change; promote to a `retailers.bill_delivery` column if the list grows.
+ */
+export const LINK_ONLY_RETAILER_NAMES: readonly string[] = [
+  'Electric Kiwi',
+  'Powershop',
+];
+
+/**
+ * Search terms for ONE link-only retailer, WITHOUT the `has:attachment` clause
+ * that hides it from the main query.
+ *
+ * Detection only — a hit tells us the customer is with this retailer so we can
+ * ask them for the PDF. It never ingests: these messages have no attachment to
+ * ingest. Scoped to a single retailer so a hit names the retailer without
+ * fetching every matched message's From header.
+ *
+ * Returns `null` when the retailer is not link-only, so callers skip the extra
+ * Gmail round-trip entirely.
+ */
+export function buildLinkOnlySearchQuery(
+  retailer: RetailerSearchEntry,
+  afterDate?: string
+): string | null {
+  if (!LINK_ONLY_RETAILER_NAMES.includes(retailer.name)) return null;
+
+  const fromTerms = new Set<string>();
+  const subjectTerms = new Set<string>();
+  for (const domain of retailer.emailDomains) {
+    fromTerms.add(domain);
+  }
+  for (const kw of nameToSearchKeywords(retailer.name)) {
+    fromTerms.add(kw);
+    subjectTerms.add(kw);
+  }
+
+  const group = [
+    ...[...fromTerms].map((t) => `from:${t}`),
+    ...[...subjectTerms].map((t) => `subject:${t}`),
+  ].join(' OR ');
+
+  let query = `{${group}}`;
+  if (afterDate) {
+    const d = new Date(afterDate);
+    const yyyy = d.getFullYear();
+    const mm = String(d.getMonth() + 1).padStart(2, '0');
+    const dd = String(d.getDate()).padStart(2, '0');
+    query += ` after:${yyyy}/${mm}/${dd}`;
+  }
+  return query;
+}
+
+/**
  * A retailer row projected for Gmail search-query construction and From-header
  * matching. Fetched once per poll run and reused for every message (avoids an
  * N+1 DB hit per message that the old getAllRetailerNames call caused).

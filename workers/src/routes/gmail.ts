@@ -2,7 +2,7 @@ import type { Context } from 'hono';
 import { buildAuthUrl, parseOAuthState, exchangeCodeForTokens } from '../services/gmailAuth';
 import { storeOAuthTokens, getOAuthTokens } from '../models/oauth';
 import { findOrCreateByPhone } from '../models/users';
-import { pollSingleUser, readScanProgress } from '../services/emailPoller';
+import { detectLinkOnlyRetailers, pollSingleUser, readScanProgress } from '../services/emailPoller';
 import type { GmailPollingEnv } from '../services/emailPoller';
 import { sendText } from '../services/messaging';
 import { runEvalComparison } from './eval';
@@ -474,11 +474,25 @@ async function doPostConnectFlow(
         "Had a bit of trouble checking your inbox just now. No worries — we'll try again at 6am. Nothing needed from you."
       );
     } else {
-      await sendText(
-        sentApiKey,
-        phone,
-        "Didn't spot any power bills in your inbox just yet. No worries — Flip checks daily, so we'll catch the next one. Keen to help if you flick us a message."
-      );
+      // Electric Kiwi and Powershop email a link, never a PDF, so the scan can
+      // never find their bills. Telling those customers "we'll catch the next
+      // one" is a promise we cannot keep — the next one looks identical. Check
+      // whether that is what happened and give them something that works.
+      const linkOnly = await detectLinkOnlyRetailers(pollingEnv, userId);
+      if (linkOnly.length > 0) {
+        const names = linkOnly.join(' and ');
+        await sendText(
+          sentApiKey,
+          phone,
+          `Found your ${names} email, but they send a link to view the bill rather than attaching it — so I can't read it from your inbox. Easy fix: download the PDF and send it straight to me here, and I'll take it from there.`
+        );
+      } else {
+        await sendText(
+          sentApiKey,
+          phone,
+          "Didn't spot any power bills in your inbox just yet. No worries — Flip checks daily, so we'll catch the next one. Keen to help if you flick us a message."
+        );
+      }
     }
   } catch (resultMsgErr) {
     console.log(JSON.stringify({
