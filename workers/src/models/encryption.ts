@@ -3,18 +3,56 @@
 
 const keyCache = new Map<string, CryptoKey>();
 
+/** Byte lengths AES accepts. Anything else is a mis-provisioned secret. */
+const VALID_AES_KEY_BYTES = new Set([16, 24, 32]);
+
 /**
- * Derive a CryptoKey from the ENCRYPTION_KEY secret (base64-encoded 256-bit key).
+ * Decode the ENCRYPTION_KEY secret to raw bytes, accepting HEX or BASE64.
+ *
+ * This used to be `atob()` only, while BOTH setup docs said hex
+ * (`openssl rand -hex 32`, DEPLOY.md; "32-byte hex", TESTING_RUN.md). A key
+ * generated exactly as documented is 64 hex characters — every one of which is
+ * also a legal base64 character, so `atob` did NOT reject it. It quietly decoded
+ * to 48 bytes and `importKey` threw `Invalid key length` on every encrypt and
+ * decrypt, surfacing as an opaque 500 from whatever route touched PII first. A
+ * deployment provisioned by the book could not create a single user.
+ *
+ * Rather than pick a winner and leave the other format as a trap, accept both.
+ * The two are unambiguous by length: a base64 AES-256 key is 43-44 characters,
+ * a hex one is exactly 64.
+ */
+function decodeMasterKey(masterKey: string): Uint8Array<ArrayBuffer> {
+  const trimmed = masterKey.trim();
+
+  const isHex = trimmed.length % 2 === 0 && /^[0-9a-fA-F]+$/.test(trimmed);
+  const values = isHex
+    ? (trimmed.match(/../g) ?? []).map((b) => parseInt(b, 16))
+    : [...atob(trimmed)].map((c) => c.charCodeAt(0));
+  const bytes = new Uint8Array(new ArrayBuffer(values.length));
+  bytes.set(values);
+
+  if (!VALID_AES_KEY_BYTES.has(bytes.length)) {
+    // Fail with something actionable. The native error is "Invalid key length",
+    // which says nothing about WHICH secret or what to do about it.
+    throw new Error(
+      `ENCRYPTION_KEY decodes to ${bytes.length} bytes; AES needs 16, 24 or 32. ` +
+      `Generate one with: openssl rand -hex 32`
+    );
+  }
+  return bytes;
+}
+
+/**
+ * Derive a CryptoKey from the ENCRYPTION_KEY secret (hex or base64, 256-bit).
  * Results are cached at the module level to avoid re-derivation on every operation.
  */
 async function deriveKey(masterKey: string): Promise<CryptoKey> {
   const cached = keyCache.get(masterKey);
   if (cached) return cached;
 
-  const keyData = Uint8Array.from(atob(masterKey), (c) => c.charCodeAt(0));
   const key = await crypto.subtle.importKey(
     'raw',
-    keyData,
+    decodeMasterKey(masterKey),
     { name: 'AES-GCM' },
     false,
     ['encrypt', 'decrypt']
