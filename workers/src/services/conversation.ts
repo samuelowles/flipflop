@@ -65,7 +65,7 @@ const RESPONSE_MESSAGES: Record<string, string> = {
 
   new_bill_received: "Got it! I'll analyse your bill and get back to you shortly. This usually takes less than a minute.",
 
-  help_default: "I can help you with:\n• Send a bill — just forward a PDF or photo\n• \"usage\" — see your power usage summary\n• \"compare\" — check if you could save by switching\n• \"status\" — see what's happening with your account\n• \"stop\" — unsubscribe anytime\n\nWhat would you like to do?",
+  help_default: "I can help you with:\n• Send a bill — just forward a PDF or photo\n• \"usage\" — see your power usage summary\n• \"compare\" — check if you could save by switching\n• \"status\" — see what's happening with your account\n• \"stop\" — unsubscribe anytime\n• \"delete my data\" — erase everything I hold about you\n\nWhat would you like to do?",
 
   help_onboarding: "I'm ready when you are! Just send me a photo or PDF of your latest power bill and I'll start monitoring for you.",
 
