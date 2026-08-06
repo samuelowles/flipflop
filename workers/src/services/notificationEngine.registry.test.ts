@@ -84,6 +84,11 @@ vi.mock('../models/comparisons', () => ({
 vi.mock('../models/users', () => ({
   getUserById: async () => makeUser(),
   getNotificationThreshold: async () => 0,
+  // These cases are all about a SUBSCRIBED user reaching dispatch. The opt-out
+  // guard fails closed, so a mock that omits it silently suppresses every send
+  // and the assertions below would pass for the wrong reason.
+  isUnsubscribed: async () => false,
+  UNSUBSCRIBED_STATE: 'UNSUBSCRIBED',
 }));
 vi.mock('../models/plans', () => ({ getPlanById: async () => makePlan() }));
 vi.mock('../models/retailers', () => ({ getRetailerById: async () => makeRetailer() }));

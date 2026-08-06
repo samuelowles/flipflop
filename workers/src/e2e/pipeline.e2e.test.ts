@@ -317,6 +317,39 @@ describe('E2E: notification guards', () => {
       'message to a real user is the worst beta failure mode'
     ).toBe(0);
   });
+
+  /**
+   * "stop" replies "You're all unsubscribed." Until this guard landed, nothing
+   * read users.state, so the notify consumer kept sending afterwards. Under the
+   * Unsolicited Electronic Messages Act 2007 an unsubscribe must be honoured,
+   * and the state is only meaningful if a real send path respects it — which
+   * only a run through the real consumer can demonstrate.
+   */
+  it('sends nothing to a user who asked us to stop', async () => {
+    const { userId, billId } = await seedUserWithBill();
+    await runQueue('flip-parse-queue', { billId, r2Key: `bills/${userId}/e2e.pdf`, userId });
+    await runQueue('flip-compare-queue', { user_id: userId, bill_id: billId });
+
+    const comparison = await env.DB.prepare(
+      'SELECT id FROM plan_comparisons WHERE user_id = ?1 ORDER BY compared_at DESC'
+    ).bind(userId).first<{ id: string }>();
+    expect(comparison?.id).toBeTruthy();
+
+    await env.DB.prepare("UPDATE users SET state = 'UNSUBSCRIBED' WHERE id = ?1")
+      .bind(userId).run();
+
+    calls = [];
+    // FLOW_TEST_MODE on: it bypasses the threshold and both cooldowns, so this
+    // also pins the ordering — opt-out is checked BEFORE the test-mode bypass
+    // and must survive it.
+    await runQueue('flip-notify-queue', { userId, comparisonId: comparison!.id },
+      { FLOW_TEST_MODE: 'true' });
+
+    expect(
+      calls.filter((c) => c.url.includes('/messages')).length,
+      'no message may be dispatched to an unsubscribed user, even in test mode'
+    ).toBe(0);
+  });
 });
 
 describe('E2E: failure handling', () => {

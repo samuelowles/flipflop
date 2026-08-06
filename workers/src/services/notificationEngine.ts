@@ -10,7 +10,7 @@ import { getLatestComparisonForUser, getComparisonsByUserId } from '../models/co
 import { getPlanById } from '../models/plans';
 import { getRetailerById } from '../models/retailers';
 import { getBillsByUserId } from '../models/bills';
-import { getUserById, getNotificationThreshold } from '../models/users';
+import { getUserById, getNotificationThreshold, isUnsubscribed } from '../models/users';
 import { sendText } from './messaging';
 import { renderTemplate } from './sentTemplates';
 import { explainComparison as _explainComparison, generateStayPutMessage, generateSavingMessage } from './comparisonIntelligence';
@@ -174,6 +174,20 @@ export async function evaluateAndNotify(
       timestamp: new Date().toISOString(),
     }));
   }
+  // 0. Opt-out. Checked BEFORE anything else, and deliberately ahead of the
+  // FLOW_TEST_MODE bypass below it in priority: test mode may skip thresholds
+  // and cooldowns, but it must never send to someone who asked us to stop.
+  if (await isUnsubscribed(env.DB, userId)) {
+    console.log(JSON.stringify({
+      type: 'notify_skip',
+      userId,
+      reason: 'user unsubscribed',
+      timestamp: new Date().toISOString(),
+    }));
+    await skipStage(env.KV, userId, 'notify', 'user unsubscribed');
+    return;
+  }
+
   // 1. Fetch the comparison result
   const comparison = await getLatestComparisonForUser(env.DB, userId);
   if (!comparison || comparison.id !== comparisonId) {
