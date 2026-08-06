@@ -58,7 +58,7 @@ The plan comparison engine is deterministic Python -- no AI, no ML, no statistic
 
 The notification engine is what makes Flip "Always On." It watches silently and only interrupts when the expected saving is meaningful.
 
-- **Threshold-based:** Only notifies when expected saving exceeds a threshold (e.g., $50 over the next 3 months, configurable)
+- **Threshold-based:** Only notifies when expected saving exceeds a threshold. **As built this is $50 over the next 12 months** (`SAVING_THRESHOLD_CENTS` in `planComparator.ts`), because the comparator projects annually — see the horizon note under 7.7. This spec previously said "$50 over the next 3 months"; the implementation never matched it. Worth an explicit product decision: $50/year is a low bar (~$4/month) and will notify on marginal savings.
 - **"Stay where you are":** Periodic reassurance that the user is still on the best plan. This is a first-class message, not an apology.
 - **Urgency signals:** Fixed-term expiry approaching ("your fixed term with Contact Energy ends in 14 days"), retailer price change detected, new plan available that changes the comparison
 - **Notification format (WhatsApp/SMS):** What changed, estimated saving, confidence level, one-tap "switch me" or "stay put" response
@@ -220,7 +220,8 @@ Sent handles template submission, approval tracking, and automatic resubmission 
 Required templates for proactive outreach:
 
 - `bill_received` -- "Got your [Retailer] bill. [Usage] kWh over [Days] days, $[Total]. I'll compare your plans now."
-- `saving_alert` -- "You could save ~$[Amount] over the next 3 months by switching to [Plan]. Want me to switch you?"
+- `saving_alert` -- "You could save ~$[Amount] over the next 12 months by switching to [Plan]. Want me to switch you?"
+  - **Horizon:** `[Amount]` is the **annual** saving — the comparator projects over 365 days and the notification engine passes `savingDollarsPerYear` straight through. This line read "3 months" until the copy was corrected, which overstated every alert by 4x. If the horizon is ever changed, change the projection and this line together.
 - `stay_put` -- "Good news -- you're still on the best plan for your usage. I'll keep watching."
 - `switch_update` -- "Your switch to [Retailer] is [Status]. Next: [Next Step]."
 - `fixed_term_expiry` -- "Your fixed term with [Retailer] ends on [Date]. I'll check what's available closer to then."

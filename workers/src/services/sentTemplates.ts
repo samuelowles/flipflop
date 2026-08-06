@@ -24,7 +24,15 @@ export const SENT_TEMPLATES: readonly SentTemplate[] = [
   },
   {
     name: 'saving_alert',
-    content: 'You could save ~${{1}} over the next 3 months by switching to {{2}}. Want me to switch you?',
+    // HORIZON: `saving_amount` is the ANNUAL saving. The comparator projects
+    // over 365 days (comparator/plan_comparator._project_annual) and
+    // notificationEngine passes `savingDollarsPerYear` straight in. This body
+    // previously read "over the next 3 months" — carried over from PRD 7.7,
+    // written when the horizon was still 3 months — so every alert overstated
+    // the saving by 4x. A $906/yr saving was announced as $906 over 3 months.
+    // The wording follows the math, not the other way round; annual is also
+    // what Powerswitch quotes, so a customer who checks sees the same unit.
+    content: 'You could save ~${{1}} over the next 12 months by switching to {{2}}. Want me to switch you?',
     variables: ['saving_amount', 'recommended_retailer'],
   },
   {

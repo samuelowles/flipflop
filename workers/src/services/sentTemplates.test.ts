@@ -76,7 +76,7 @@ describe('renderTemplate', () => {
       saving_amount: '180',
       recommended_retailer: 'Powershop',
     })).toBe(
-      'You could save ~$180 over the next 3 months by switching to Powershop. Want me to switch you?'
+      'You could save ~$180 over the next 12 months by switching to Powershop. Want me to switch you?'
     );
   });
 
@@ -201,5 +201,30 @@ describe('getTemplateStatus', () => {
     await getTemplateStatus('test-api-key', 'fixed_term_expiry');
     const call = mockFetch.mock.calls[0] as [string, RequestInit];
     expect(call[0]).toContain('/v1/templates/fixed_term_expiry');
+  });
+});
+describe('saving_alert states the horizon its number actually covers', () => {
+  /**
+   * `saving_amount` is the ANNUAL saving: the comparator projects over 365 days
+   * and notificationEngine passes `savingDollarsPerYear` in verbatim. The body
+   * used to say "over the next 3 months" (inherited from PRD 7.7), so every
+   * alert overstated the saving by 4x — a quantified financial claim to a
+   * customer, in a product whose entire promise is that number.
+   */
+  it('quotes a 12-month horizon, matching the annual figure it is given', () => {
+    const body = getTemplate('saving_alert').content;
+    expect(body).toContain('12 months');
+    expect(body).not.toContain('3 months');
+  });
+
+  it('does not understate the horizon for a real annual saving', () => {
+    // The Electric Kiwi bill in `example bills/` compares at ~$906/yr against a
+    // real captured Powerswitch plan. Announced over 3 months that reads as
+    // ~$3,600/yr of saving — four times what the comparator computed.
+    const rendered = renderTemplate('saving_alert', {
+      saving_amount: '906',
+      recommended_retailer: 'Electric Kiwi',
+    });
+    expect(rendered).toContain('$906 over the next 12 months');
   });
 });
