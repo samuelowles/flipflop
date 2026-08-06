@@ -18,7 +18,7 @@ from comparator.pricing import calculate_bill_cost, is_low_user_eligible, is_uns
 # Minimum saving (cents NZD) for a switch to be "worth it". Matches the TS
 # notification threshold (SAVING_THRESHOLD_CENTS in planComparator.ts). The AC
 # (#72) calls this the "configured notification threshold".
-SWITCH_THRESHOLD_CENTS = 5000
+SWITCH_THRESHOLD_CENTS = 20000
 
 
 def compare(

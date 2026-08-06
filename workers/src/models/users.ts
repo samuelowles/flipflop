@@ -73,12 +73,21 @@ export async function createUser(
   const phoneHash = await generatePhoneHash(input.phone);
 
   const stmt = db.prepare(
-    `INSERT INTO users (id, phone, phone_encrypted, phone_hash, sent_contact_id, name, created_at, updated_at)
-     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`
+    // notification_threshold_cents is written EXPLICITLY rather than left to the
+    // column default. 0001_initial hard-codes DEFAULT 5000, and changing a
+    // SQLite column default means rebuilding the table — which on a populated
+    // D1 trips strict FK enforcement (see docs/TESTING_RUN.md). Binding the
+    // constant makes DEFAULT_NOTIFICATION_THRESHOLD_CENTS the single source of
+    // truth and leaves the schema untouched.
+    `INSERT INTO users (id, phone, phone_encrypted, phone_hash, sent_contact_id, name, notification_threshold_cents, created_at, updated_at)
+     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)`
   );
 
   await stmt
-    .bind(id, input.phone, phoneEncrypted, phoneHash, input.sentContactId ?? null, encryptedName, now, now)
+    .bind(
+      id, input.phone, phoneEncrypted, phoneHash, input.sentContactId ?? null, encryptedName,
+      DEFAULT_NOTIFICATION_THRESHOLD_CENTS, now, now
+    )
     .run();
 
   const user = await getUserById(db, env, id);
@@ -317,7 +326,7 @@ export async function deleteUser(
  * Reuses getUserById rather than issuing a dedicated query — the notifier
  * already needs the full user row (for phone) and the threshold is one column.
  */
-export const DEFAULT_NOTIFICATION_THRESHOLD_CENTS = 5000;
+export const DEFAULT_NOTIFICATION_THRESHOLD_CENTS = 20000;
 
 export async function getNotificationThreshold(
   db: D1Database,

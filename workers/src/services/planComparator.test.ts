@@ -133,7 +133,7 @@ const pythonResult: ComparisonResultItem[] = [
     retailer_id: 'ret-b',
     projected_cost_cents: 280000,
     current_cost_cents: 300000,
-    saving_cents: 20000, // $200 NZD — well above the $50 notify threshold
+    saving_cents: 20000, // $200/yr NZD — exactly the notify threshold (inclusive)
     confidence: 0.85,
     stay_where_you_are: false,
     comparison_details: '{}',

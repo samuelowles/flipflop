@@ -10,6 +10,7 @@ import { getPlansByRetailer } from '../models/plans';
 import { getCanonicalPlans } from './planAggregator';
 import { createComparison } from '../models/comparisons';
 import { getLatestSwitchForUser } from '../models/switches';
+import { meetsThreshold } from './notificationEngine';
 import type {
   ComparisonBillSummary,
   ComparisonCurrentPlan,
@@ -122,7 +123,7 @@ export async function comparePlans(
   return (await response.json()) as ComparisonResult;
 }
 
-const SAVING_THRESHOLD_CENTS = 5000; // $50 NZD minimum saving to notify
+const SAVING_THRESHOLD_CENTS = 20000; // $200/yr NZD minimum saving to notify
 
 // AC #72 — recent_switch cooldown: if the user switched within this window,
 // override the recommendation to stay_put / recent_switch. PRD 5.3 does not
@@ -399,10 +400,15 @@ export async function runComparison(
   // 8. Enqueue notification only on a switch verdict that clears the saving
   // threshold. stay_put (any reason) must never trigger a switch nudge.
   // AC #74 — idempotent on comparison_id: skip if already notified (KV marker).
+  // Inclusive at the boundary, matching meetsThreshold in notificationEngine
+  // ("a saving equal to the threshold qualifies"). This gate used `>` while
+  // that one uses `>=`, so a saving of EXACTLY the threshold passed the notify
+  // engine but was never enqueued to reach it — two gates on one number
+  // disagreeing about the boundary.
   if (
     recommendation === 'switch' &&
     topSwitch != null &&
-    topSwitch.saving_cents > SAVING_THRESHOLD_CENTS
+    meetsThreshold(topSwitch.saving_cents, SAVING_THRESHOLD_CENTS)
   ) {
     const dedupKey = `${NOTIFIED_KEY_PREFIX}${comparison.id}`;
     const alreadyNotified = env.KV ? await env.KV.get(dedupKey) : null;
