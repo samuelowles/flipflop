@@ -105,14 +105,18 @@ From the repo root:
 >   the deployed code still falls back to them, so a Powerswitch failure yields no
 >   comparison at all instead of a (wrong) one.
 > - **Merge before the migrations** — two fixes are INERT. #268 changes the
->   threshold constant, but  reads the per-user
->    column, which still holds 5000: every existing
+>   threshold constant, but `getNotificationThreshold` reads the per-user
+>   `notification_threshold_cents` column, which still holds 5000: every existing
 >   user keeps being notified at $50/yr. And #263 is migration-only, so the 39
 >   fabricated plans stay live and keep outranking real scraped data.
 >
 > Correct order: **merge, then immediately apply both**, then re-run 2c.
 >
-> 
+> ```bash
+> cd workers
+> npx wrangler d1 execute flip-db --remote --file migrations/0020_expire_seed_test_plans.sql
+> npx wrangler d1 execute flip-db --remote --file migrations/0021_notification_threshold_200_per_year.sql
+> ```
 >
 > For FUTURE migrations (0022+), apply each with
 > `npx wrangler d1 execute flip-db --remote --file migrations/00NN_name.sql`
