@@ -17,6 +17,9 @@ from typing import Optional
 # NZ low-user threshold: < 8,000 kWh/year (single-phase) or < 9,000 kWh/year
 LOW_USER_ANNUAL_KWH_THRESHOLD = 8000
 
+# NZ GST rate, used to put ex-GST and incl-GST rates on one basis.
+GST_RATE = 0.15
+
 # Typical tiers for NZ residential
 # Low user: < 8000 kWh = "low fixed" rate; standard = "standard" rate
 # Anytime/Uncontrolled pricing: first N kWh at one rate, remainder at another
@@ -27,6 +30,38 @@ DEFAULT_STANDARD_DAILY = 90.0  # cents/day
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
+
+
+def gst_multiplier(plan: dict) -> float:
+    """Factor that lifts *plan*'s rates onto the GST-INCLUSIVE basis.
+
+    Every cost this module produces is compared against every other, so the
+    inputs must share one money basis. They do not arrive that way:
+
+    * Powerswitch tariffs are quoted EX-GST (``gst_inclusive: false``).
+    * A bill-derived current plan carries whichever basis the retailer printed
+      — Electric Kiwi prints incl-GST rates, Mercury ex-GST — detected by
+      arithmetic in ``workers/src/services/gstBasis.ts``.
+    * EIEP14A and the Powerswitch HTML parser both already default to
+      ``gst_inclusive: true``.
+
+    GST-inclusive is the target basis because it is the money the household
+    actually pays: it matches the bill totals we quote back to them and the
+    annual costs Powerswitch shows on its own site.
+
+    The flag is read from the top level first, then from ``conditions_json``
+    (where the plan parsers put it). An ABSENT flag is treated as inclusive —
+    that under-states an ex-GST plan's cost. For a candidate plan that makes it
+    look cheaper, so the guard is not absolute; it is chosen to match the two
+    parsers that already default to true, and every source that is actually
+    ex-GST declares itself.
+    """
+    inclusive = plan.get("gst_inclusive")
+    if inclusive is None:
+        inclusive = _get_conditions(plan).get("gst_inclusive")
+    if inclusive is None:
+        return 1.0
+    return 1.0 if bool(inclusive) else 1.0 + GST_RATE
 
 
 def is_unsupported_plan(plan: dict) -> tuple[bool, str]:
@@ -98,7 +133,10 @@ def calculate_bill_cost(kwh: float, days: int, plan: dict) -> int:
     if discount_pct > 0:
         subtotal = apply_discount(subtotal, discount_pct)
 
-    return subtotal
+    # Put every plan on ONE money basis before it is compared (see
+    # gst_multiplier). Rates arrive on both bases: Powerswitch tariffs are
+    # ex-GST, bill-derived rates are whichever the retailer printed.
+    return int(round(subtotal * gst_multiplier(plan)))
 
 
 def apply_tiers(kwh: float, tiers: list[dict]) -> float:

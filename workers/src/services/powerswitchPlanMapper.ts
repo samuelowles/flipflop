@@ -41,6 +41,8 @@ const PEAK_SHARE = 0.7;
 /** Conditions surfaced to the Python comparator + the recommendation reason. */
 export interface PowerswitchPlanConditions {
   readonly source: 'powerswitch_user';
+  /** Powerswitch tariffs are quoted ex-GST — always false here. */
+  readonly gst_inclusive: false;
   readonly fixed_term: boolean;
   readonly price_change_due: boolean | string;
   /** 'tou' when peak+off-peak registers were blended; 'flat' otherwise. */
@@ -124,6 +126,12 @@ export function mapPowerswitchPlan(parsed: ParsedPlan): MappedPowerswitchPlan | 
   const caveats: string[] = [];
   const conditions: PowerswitchPlanConditions = {
     source: 'powerswitch_user',
+    // Powerswitch tariff values are EX-GST (see UNIT CORRECTION above — the
+    // capture's annual_cost only reconciles after ×1.15). Declaring it lets
+    // pricing.py gross these up to the GST-inclusive basis the bill-derived
+    // current plan is normalised to, instead of silently comparing an ex-GST
+    // candidate against an incl-GST incumbent.
+    gst_inclusive: false,
     fixed_term: parsed.fixedTerm,
     price_change_due: parsed.priceChangeDue,
     ...(isTou

@@ -31,6 +31,7 @@ import { getBillsByUserId } from '../models/bills';
 import { createComparison } from '../models/comparisons';
 import { ensurePowerswitchPlanRows } from '../models/plans';
 import { comparePlans } from './planComparator';
+import { detectRatesGstInclusive } from './gstBasis';
 import { readCachedResults } from './powerswitchReplay';
 import { mapPowerswitchPlans, tariffContentHash } from './powerswitchPlanMapper';
 import type {
@@ -107,6 +108,9 @@ export async function compareUserWithPowerswitch(
         retailer_id: latestBill.retailerId ?? '',
         c_per_kwh: latestBill.cPerKwh ?? undefined,
         c_per_day: latestBill.cPerDay ?? undefined,
+        // Powerswitch tariffs are ex-GST; a bill's rates may be either. Declare
+        // which so the comparator can put both sides on one basis.
+        gst_inclusive: detectRatesGstInclusive(latestBill),
         break_fee_cents: latestBill.breakFeeCents ?? undefined,
         fixed_term_expiry: latestBill.fixedTermExpiry ?? undefined,
       }

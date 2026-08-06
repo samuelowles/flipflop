@@ -8,6 +8,8 @@ from comparator.pricing import (
     is_low_user_eligible,
     is_unsupported_plan,
     project_annual_cost,
+    gst_multiplier,
+    GST_RATE,
 )
 
 
@@ -207,3 +209,58 @@ class TestIsUnsupportedPlan:
         plan = {"c_per_kwh": 25.0, "conditions_json": "not-json"}
         unsupported, _ = is_unsupported_plan(plan)
         assert unsupported is False
+
+
+class TestGstBasis:
+    """Every plan must be priced on the GST-INCLUSIVE basis.
+
+    Powerswitch tariffs are ex-GST and bill-derived rates may be either, so a
+    plan that does not declare its basis correctly is compared against the
+    wrong money. On the real Electric Kiwi bill this inflated a $907/yr saving
+    to $1,530/yr.
+    """
+
+    PLAN = {"c_per_kwh": 25.0, "c_per_day": 90.0}
+
+    def test_absent_flag_is_treated_as_inclusive(self):
+        assert gst_multiplier(self.PLAN) == 1.0
+
+    def test_explicit_inclusive_is_not_grossed_up(self):
+        assert gst_multiplier({**self.PLAN, "gst_inclusive": True}) == 1.0
+
+    def test_exclusive_plan_is_grossed_up_by_gst(self):
+        assert gst_multiplier({**self.PLAN, "gst_inclusive": False}) == 1.0 + GST_RATE
+
+    def test_flag_is_read_from_conditions_json_string(self):
+        plan = {**self.PLAN, "conditions_json": json.dumps({"gst_inclusive": False})}
+        assert gst_multiplier(plan) == 1.0 + GST_RATE
+
+    def test_flag_is_read_from_conditions_json_dict(self):
+        plan = {**self.PLAN, "conditions_json": {"gst_inclusive": False}}
+        assert gst_multiplier(plan) == 1.0 + GST_RATE
+
+    def test_top_level_flag_wins_over_conditions(self):
+        plan = {
+            **self.PLAN,
+            "gst_inclusive": True,
+            "conditions_json": {"gst_inclusive": False},
+        }
+        assert gst_multiplier(plan) == 1.0
+
+    def test_ex_gst_plan_costs_15_percent_more_than_face_value(self):
+        # 100 kWh @ 25c + 10 days @ 90c = 2500 + 900 = 3400c ex-GST
+        incl = calculate_bill_cost(100, 10, {**self.PLAN, "gst_inclusive": True})
+        excl = calculate_bill_cost(100, 10, {**self.PLAN, "gst_inclusive": False})
+        assert incl == 3400
+        assert excl == 3910  # 3400 x 1.15
+
+    def test_powerswitch_capture_reconciles_to_displayed_annual_cost(self):
+        """The real capture (plan 161277) displays $3092/yr.
+
+        Tariffs IN 0.288 + EC 0.0019 $/kWh and F 1.80 $/day are EX-GST, over
+        7008 kWh/yr. Only the grossed-up figure matches what Powerswitch shows
+        the user — which is the whole point of the flag.
+        """
+        plan = {"c_per_kwh": 28.99, "c_per_day": 180.0, "gst_inclusive": False}
+        annual = calculate_bill_cost(7008, 365, plan)
+        assert abs(annual - 309_190) < 200  # ~$3,092
