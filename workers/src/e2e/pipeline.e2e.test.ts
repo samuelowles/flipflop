@@ -1,7 +1,7 @@
 import { env, createExecutionContext, waitOnExecutionContext } from 'cloudflare:test';
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import worker from '../index';
-import { createUser, updateUser, getUserById } from '../models/users';
+import { createUser, getUserById } from '../models/users';
 import { createBill, getBillById } from '../models/bills';
 
 /**
