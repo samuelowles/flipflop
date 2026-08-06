@@ -4,6 +4,7 @@ import worker from '../index';
 import { createUser, getUserById } from '../models/users';
 import { createBill, getBillById } from '../models/bills';
 import { activateSeedPlansForFixture, expireSeedPlansAfterFixture } from './apply-migrations';
+import { deleteAllUserData } from '../services/dataDeletion';
 
 /**
  * End-to-end: parse -> compare -> notify, through the REAL queue consumers,
@@ -419,5 +420,71 @@ describe('E2E: failure handling', () => {
       calls.filter((c) => c.url.includes('/messages')).length,
       'a $0 saving must not trigger a WhatsApp message'
     ).toBe(0);
+  });
+});
+
+describe('E2E: data deletion (PRD 3.7)', () => {
+  /**
+   * Erasure is the one operation that MUST be proven against real storage.
+   * Every child table declares `user_id ... REFERENCES users(id)` with no
+   * ON DELETE CASCADE, so a bare `DELETE FROM users` raises a foreign-key
+   * violation for any user who has ever had a bill — which is exactly the
+   * shape of the pre-existing, uncalled `deleteUser`. Mocks cannot show that.
+   */
+  it('erases D1 rows, the bill PDF in R2, and cached KV state', async () => {
+    const { userId, billId } = await seedUserWithBill();
+    await runQueue('flip-parse-queue', { billId, r2Key: `bills/${userId}/e2e.pdf`, userId });
+    await runQueue('flip-compare-queue', { user_id: userId, bill_id: billId });
+
+    // Establish there is something to delete, so a green test cannot mean
+    // "nothing was there in the first place".
+    const before = await env.DB.prepare('SELECT COUNT(*) AS n FROM bills WHERE user_id = ?1')
+      .bind(userId).first<{ n: number }>();
+    expect(before?.n, 'precondition: the user must own at least one bill').toBeGreaterThan(0);
+    expect(await env.BILLS.get(`bills/${userId}/e2e.pdf`)).not.toBeNull();
+    await env.KV.put(`gmail:scan:${userId}`, '{"phase":"complete"}');
+
+    const receipt = await deleteAllUserData(
+      { DB: env.DB, KV: env.KV, BILLS: env.BILLS },
+      userId
+    );
+
+    expect(receipt.d1RowsDeleted).toBeGreaterThan(0);
+    expect(receipt.tablesSwept).toContain('bills');
+    expect(receipt.tablesSwept).toContain('users');
+
+    // D1: the user row and every child row.
+    for (const table of ['bills', 'plan_comparisons', 'messages', 'oauth_tokens']) {
+      const row = await env.DB.prepare(`SELECT COUNT(*) AS n FROM ${table} WHERE user_id = ?1`)
+        .bind(userId).first<{ n: number }>();
+      expect(row?.n, `${table} still holds rows for the deleted user`).toBe(0);
+    }
+    const user = await env.DB.prepare('SELECT COUNT(*) AS n FROM users WHERE id = ?1')
+      .bind(userId).first<{ n: number }>();
+    expect(user?.n).toBe(0);
+
+    // R2: the bill PDF itself, not just the row pointing at it.
+    expect(
+      await env.BILLS.get(`bills/${userId}/e2e.pdf`),
+      'the bill PDF must be destroyed, not orphaned in R2'
+    ).toBeNull();
+
+    // KV: cached scan/comparison state.
+    expect(await env.KV.get(`gmail:scan:${userId}`)).toBeNull();
+  });
+
+  it('discovers user_id tables from the live schema rather than a hard-coded list', async () => {
+    // A hand-maintained table list is a privacy incident waiting for the next
+    // migration. Assert the sweep covers tables added long after the original
+    // schema — notification_audit arrived in 0015.
+    const { userId, billId } = await seedUserWithBill();
+    await runQueue('flip-parse-queue', { billId, r2Key: `bills/${userId}/e2e.pdf`, userId });
+
+    const receipt = await deleteAllUserData(
+      { DB: env.DB, KV: env.KV, BILLS: env.BILLS },
+      userId
+    );
+    expect(receipt.tablesSwept).toContain('notification_audit');
+    expect(receipt.tablesSwept.length).toBeGreaterThan(4);
   });
 });

@@ -1,7 +1,16 @@
 import type { Context } from 'hono';
 import { classifyIntent } from '../services/deepseek';
 import { transition, handleNewUser, getWelcomeMessage } from '../services/conversation';
-import { sendAndLog, downloadMedia } from '../services/messaging';
+import { sendAndLog, sendText, downloadMedia } from '../services/messaging';
+import { deleteAllUserData } from '../services/dataDeletion';
+import {
+  DELETE_PENDING_PREFIX,
+  DELETE_PENDING_TTL_SECONDS,
+  DELETION_DONE,
+  DELETION_PROMPT,
+  isDeletionConfirmation,
+  isDeletionRequest,
+} from '../services/deletionCommand';
 import { createUser, getUserByPhone, updateUserState } from '../models/users';
 import { createBill, getBillBySourceMessageId } from '../models/bills';
 import { detectRetailerBySender } from '../models/retailers';
@@ -109,6 +118,39 @@ export async function messagingWebhook(c: Context): Promise<Response> {
 
     // 4. Handle text message via intent classification
     if (body) {
+      // PRD 3.7 erasure. Handled BEFORE classifyIntent, deliberately: this is
+      // the one irreversible command, so it must not depend on an LLM getting
+      // the intent right. Exact phrase to arm, literal token to fire.
+      const pendingKey = `${DELETE_PENDING_PREFIX}${user.id}`;
+
+      if (isDeletionConfirmation(body) && (await kv.get(pendingKey)) !== null) {
+        const receipt = await deleteAllUserData(
+          { DB: db, KV: kv, BILLS: c.env.BILLS as R2Bucket },
+          user.id
+        );
+        console.log(JSON.stringify({
+          type: 'user_data_deleted',
+          // No userId: the point of the operation is that it no longer exists.
+          tablesSwept: receipt.tablesSwept,
+          d1RowsDeleted: receipt.d1RowsDeleted,
+          r2ObjectsDeleted: receipt.r2ObjectsDeleted,
+          kvKeysDeleted: receipt.kvKeysDeleted,
+          timestamp: new Date().toISOString(),
+        }));
+        // Sent directly, not via sendAndLog: logging the outbound message would
+        // write a messages row for the user we just erased.
+        await sendText(apiKey, phone, DELETION_DONE);
+        return c.json({ status: 'ok' }, 200);
+      }
+
+      if (isDeletionRequest(body)) {
+        await kv.put(pendingKey, new Date().toISOString(), {
+          expirationTtl: DELETE_PENDING_TTL_SECONDS,
+        });
+        await sendAndLog(apiKey, db, c.env as { ENCRYPTION_KEY: string }, user.id, phone, DELETION_PROMPT);
+        return c.json({ status: 'ok' }, 200);
+      }
+
       // Quick 2-second acknowledgment
       const ackPromise = sendAndLog(apiKey, db, c.env as { ENCRYPTION_KEY: string }, user.id, phone, 'Got it, let me check...');
 
