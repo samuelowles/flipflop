@@ -2,6 +2,13 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
 import { gmailConnectPage, gmailLogin, gmailCallback, gmailScanStatus, gmailEvalStatus } from './gmail';
 import { runEvalComparison } from './eval';
+import { mintFlowLink } from '../services/flowLink';
+
+/** The signed u/exp/sig triple the status endpoints require (see gmail.ts). */
+async function signedQuery(userId: string): Promise<string> {
+  const link = await mintFlowLink('test-encryption-key-32bytes!!', userId);
+  return link.slice(link.indexOf('?') + 1);
+}
 
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
@@ -515,21 +522,21 @@ describe('GET /auth/gmail/callback', () => {
 // ---------- GET /auth/gmail/scan-status ----------
 
 describe('GET /auth/gmail/scan-status', () => {
-  it('returns 400 when userId is missing', async () => {
+  it('returns 403 when the request carries no signature', async () => {
     const app = createTestApp();
     const env = makeEnv();
 
     const res = await app.request('/auth/gmail/scan-status', {}, env);
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(403);
     const body = (await res.json()) as { error: string };
-    expect(body.error).toContain('Missing userId');
+    expect(body.error).toContain('Invalid or expired link');
   });
 
   it('returns 404 when no scan progress exists for user', async () => {
     const app = createTestApp();
     const env = makeEnv();
 
-    const res = await app.request('/auth/gmail/scan-status?userId=nonexistent', {}, env);
+    const res = await app.request(`/auth/gmail/scan-status?${await signedQuery('nonexistent')}`, {}, env);
     expect(res.status).toBe(404);
     const body = (await res.json()) as { error: string };
     expect(body.error).toContain('No scan in progress');
@@ -561,7 +568,7 @@ describe('GET /auth/gmail/scan-status', () => {
     const { readScanProgress } = await import('../services/emailPoller');
     (readScanProgress as ReturnType<typeof vi.fn>).mockResolvedValue(progress);
 
-    const res = await app.request('/auth/gmail/scan-status?userId=user-1', {}, env);
+    const res = await app.request(`/auth/gmail/scan-status?${await signedQuery('user-1')}`, {}, env);
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as Record<string, unknown>;
@@ -599,7 +606,7 @@ describe('GET /auth/gmail/scan-status', () => {
     const { readScanProgress } = await import('../services/emailPoller');
     (readScanProgress as ReturnType<typeof vi.fn>).mockResolvedValue(progress);
 
-    const res = await app.request('/auth/gmail/scan-status?userId=user-1', {}, env);
+    const res = await app.request(`/auth/gmail/scan-status?${await signedQuery('user-1')}`, {}, env);
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as Record<string, unknown>;
@@ -634,7 +641,7 @@ describe('GET /auth/gmail/scan-status', () => {
     const { readScanProgress } = await import('../services/emailPoller');
     (readScanProgress as ReturnType<typeof vi.fn>).mockResolvedValue(progress);
 
-    const res = await app.request('/auth/gmail/scan-status?userId=user-1', {}, env);
+    const res = await app.request(`/auth/gmail/scan-status?${await signedQuery('user-1')}`, {}, env);
     expect(res.status).toBe(200);
 
     const body = (await res.json()) as Record<string, unknown>;
@@ -665,7 +672,7 @@ describe('GET /auth/gmail/eval-status (pending semantics + cache)', () => {
     const app = evalApp();
     const env = makeEnv();
 
-    const res = await app.request('/auth/gmail/eval-status?userId=u1', {}, env);
+    const res = await app.request(`/auth/gmail/eval-status?${await signedQuery('u1')}`, {}, env);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.found).toBe(false);
     expect(body.pending).toBe(true);
@@ -686,7 +693,7 @@ describe('GET /auth/gmail/eval-status (pending semantics + cache)', () => {
     vi.mocked(runEvalComparison).mockResolvedValueOnce({
       parsedData: null, comparisons: [], billsTotal: 12, billsParsed: 12,
     });
-    const res = await app.request('/auth/gmail/eval-status?userId=u1', {}, env);
+    const res = await app.request(`/auth/gmail/eval-status?${await signedQuery('u1')}`, {}, env);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.pending).toBe(true);
     expect(await kv.get('gmail:eval:u1')).toBeNull(); // poison purged
@@ -701,7 +708,7 @@ describe('GET /auth/gmail/eval-status (pending semantics + cache)', () => {
     const app = evalApp();
     const env = makeEnv();
 
-    const res = await app.request('/auth/gmail/eval-status?userId=u1', {}, env);
+    const res = await app.request(`/auth/gmail/eval-status?${await signedQuery('u1')}`, {}, env);
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.found).toBe(true);
     expect((body.comparisons as unknown[]).length).toBe(1);
@@ -711,7 +718,62 @@ describe('GET /auth/gmail/eval-status (pending semantics + cache)', () => {
     expect(cached.found).toBe(true);
 
     // Second request serves the cache — no recompute.
-    await app.request('/auth/gmail/eval-status?userId=u1', {}, env);
+    await app.request(`/auth/gmail/eval-status?${await signedQuery('u1')}`, {}, env);
     expect(runEvalComparison).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('status endpoints reject anything but a valid signature (access control)', () => {
+  /**
+   * These endpoints used to accept a bare `?userId=`, and returned that user's
+   * data to whoever asked: scan-status carries `billSenders` / `filteredSenders`
+   * — From addresses out of their Gmail inbox — and eval-status carries their
+   * bill-derived comparisons.
+   *
+   * A user id is a database key, not a credential, and this one TRAVELS IN A
+   * URL: it is in the post-OAuth page the user is invited to open, so it lands
+   * in browser history and in anything they share.
+   */
+  const ENV_KEY = 'test-encryption-key-32bytes!!';
+
+  it('rejects a bare userId — the old, unauthenticated contract', async () => {
+    const app = createTestApp();
+    const res = await app.request('/auth/gmail/scan-status?userId=user-1', {}, makeEnv());
+    expect(res.status, 'a raw user id must no longer be accepted').toBe(403);
+  });
+
+  it('rejects a tampered signature', async () => {
+    const app = createTestApp();
+    const q = await signedQuery('user-1');
+    const tampered = q.replace(/sig=[0-9a-f]+/, 'sig=' + 'a'.repeat(64));
+    const res = await app.request(`/auth/gmail/scan-status?${tampered}`, {}, makeEnv());
+    expect(res.status).toBe(403);
+  });
+
+  it('rejects an expired link', async () => {
+    const app = createTestApp();
+    const link = await mintFlowLink(ENV_KEY, 'user-1', -60); // already expired
+    const q = link.slice(link.indexOf('?') + 1);
+    const res = await app.request(`/auth/gmail/scan-status?${q}`, {}, makeEnv());
+    expect(res.status).toBe(403);
+  });
+
+  it('will not let one user\u2019s signature read another user\u2019s data', async () => {
+    // The signature covers the user id, so swapping `u` invalidates it. This is
+    // the property that actually contains the disclosure.
+    const app = createTestApp();
+    const q = await signedQuery('user-1');
+    const swapped = q.replace('u=user-1', 'u=victim');
+    const res = await app.request(`/auth/gmail/scan-status?${swapped}`, {}, makeEnv());
+    expect(res.status).toBe(403);
+  });
+
+  it('does not distinguish bad signature from unknown user', async () => {
+    // Different responses would confirm which user ids exist.
+    const app = createTestApp();
+    const bad = await app.request('/auth/gmail/scan-status?u=a&exp=99999999999&sig=deadbeef', {}, makeEnv());
+    const swapped = await app.request('/auth/gmail/scan-status?u=b&exp=99999999999&sig=deadbeef', {}, makeEnv());
+    expect(bad.status).toBe(swapped.status);
+    expect(await bad.text()).toBe(await swapped.text());
   });
 });
