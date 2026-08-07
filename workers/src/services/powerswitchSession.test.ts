@@ -677,6 +677,38 @@ describe('scoreCompletion (postcode-anchored scoring, null = hard reject)', () =
   it('keeps a route number in the street name so two highways differ (defect 2)', () => {
     expect(scoreCompletion('1837 State Highway 2, RD 2, Te Puke 3182', '1837 State Highway 33, Te Puke 3182')).toBeNull();
   });
+
+  // Compass suffixes are part of the street name, not the locality. "Victoria
+  // Street West" and "Victoria Street East" are different streets sharing a
+  // suburb AND a postcode, so no locality anchor can separate them — demoting
+  // the suffix left the street hard-reject blind and resolved the wrong side of
+  // the street whenever the correct twin was missing from the completion set.
+  describe('directional street suffixes', () => {
+    const WEST_USER = '10 Victoria Street West, Auckland Central, Auckland 1010';
+    const EAST = { a: '10 Victoria Street East, Auckland Central, Auckland 1010', pxid: 'east', v: 1 };
+    const WEST = { a: '10 Victoria Street West, Auckland Central, Auckland 1010', pxid: 'west', v: 1 };
+
+    it('keeps the compass suffix in the street name', () => {
+      expect(parseAddressParts(WEST_USER).streetName).toBe('victoria street west');
+      expect(parseAddressParts(EAST.a).streetName).toBe('victoria street east');
+    });
+    it('hard-rejects the opposite direction', () => {
+      expect(scoreCompletion(WEST_USER, EAST.a)).toBeNull();
+    });
+    it('does NOT resolve to the wrong twin when the correct one is absent', () => {
+      expect(pickBestMatch([EAST], WEST_USER)).toMatchObject({ status: 'needs_review' });
+    });
+    it('still resolves to the correct twin, whatever the completion order', () => {
+      expect(pickBestMatch([EAST, WEST], WEST_USER)).toMatchObject({ status: 'resolved', pxid: 'west' });
+      expect(pickBestMatch([WEST, EAST], WEST_USER)).toMatchObject({ status: 'resolved', pxid: 'west' });
+    });
+    it('does not eat a compass word that is really the suburb', () => {
+      // "New Lynn" / "West Auckland" style: the token after the type word is a
+      // locality, and a bare "West" suburb must not be pulled into the name.
+      expect(parseAddressParts('12 Great North Road, New Lynn, Auckland 0600').streetName)
+        .toBe('great north road');
+    });
+  });
   it('a postcode match outranks a suburb-only match', () => {
     const user = '1 Queen Street, Auckland Central, Auckland 1010';
     const postcodeMatch = scoreCompletion(user, '1 Queen Street, Ellerslie, Auckland 1010')!; // same postcode, diff suburb

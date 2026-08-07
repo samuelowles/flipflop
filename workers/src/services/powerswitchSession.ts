@@ -226,6 +226,13 @@ const STREET_ABBREVIATIONS: Record<string, string> = {
   mt: 'mount', esp: 'esplanade', pde: 'parade', sq: 'square', gr: 'grove',
 };
 
+/**
+ * Compass suffixes that are part of a NZ street name rather than the locality
+ * ("Victoria Street West" is a different street from "Victoria Street East",
+ * sharing both suburb and postcode).
+ */
+const DIRECTIONAL_SUFFIXES = new Set(['north', 'south', 'east', 'west']);
+
 /** Street-type tokens (abbrev keys + expanded values) for finding the name/type boundary. */
 const STREET_TYPE_WORDS = new Set<string>([
   ...Object.keys(STREET_ABBREVIATIONS),
@@ -429,6 +436,11 @@ export function parseAddressParts(raw: string): AddressParts {
     // Route-number rule (defect 2): a single purely-numeric token right after
     // the type word ("State Highway 2") belongs to the name; a word token
     // starts the locality.
+    // Directional rule: so does a compass suffix. "Victoria Street West" and
+    // "Victoria Street East" are DIFFERENT streets that share a postcode and a
+    // suburb, so demoting West/East to the locality left the street hard-reject
+    // blind to them — with the correct twin missing from the completion set, we
+    // resolved to the wrong side of the street. Same shape as the numeric rule.
     let typeIdx = -1;
     for (let i = 0; i < tokens.length; i++) {
       const lower = tokens[i]!.toLowerCase();
@@ -441,7 +453,7 @@ export function parseAddressParts(raw: string): AddressParts {
     let localityStart = typeIdx + 1;
     if (typeIdx >= 0) {
       const after = tokens[typeIdx + 1];
-      if (after !== undefined && /^\d+$/.test(after)) {
+      if (after !== undefined && (/^\d+$/.test(after) || DIRECTIONAL_SUFFIXES.has(after.toLowerCase()))) {
         nameEnd = typeIdx + 1;
         localityStart = typeIdx + 2;
       }
@@ -492,12 +504,17 @@ export function scoreCompletion(userAddress: string, candidate: string): number 
   if (u.numberBase !== null && c.numberBase !== null && u.numberBase !== c.numberBase) return null;
   if (u.postcode && c.postcode && u.postcode !== c.postcode) {
     // Postcode-mismatch redemption: the suburbs must agree (both present and
-    // equal — the original rule) AND the cities must agree, treating an absent
-    // city on either side as agreement (completions legitimately omit the city).
+    // equal) AND the cities must agree, an absent city counting as agreement.
     // NZ suburb names repeat across cities (Richmond → Nelson/Christchurch), so
-    // a suburb-only check resolves to the wrong city. The absent-suburb case is
+    // a suburb-only check resolved to the wrong city. The absent-SUBURB case is
     // intentionally NOT redeemed: with no suburb there is nothing to anchor the
     // typo to the right locality.
+    //
+    // Note the absent-city allowance is near-dead in practice, and deliberately
+    // kept only as a guard: when a completion omits its city, the positional
+    // parse puts its suburb into `city` and leaves `suburb` null, so `suburbOk`
+    // is already false and we reject before the city is consulted. It fires only
+    // for a shape where both sides carry a suburb and just one carries a city.
     const suburbOk = !!u.suburb && !!c.suburb && u.suburb === c.suburb;
     const cityOk = !u.city || !c.city || u.city === c.city;
     if (!suburbOk || !cityOk) return null;
@@ -578,6 +595,13 @@ export function pickBestMatch(
   // Defect 3: only floor-clearing candidates may resolve. If none clear it, the
   // outcome is `ambiguous` (some candidate survived the hard rejects but none
   // carried enough evidence) — never a silent wrong-door resolve.
+  //
+  // `ambiguous` rather than `zero_match` here is a deliberate trade of recall
+  // for safety: the ladder treats ambiguous as terminal, so an address whose
+  // first variant returns a near-miss stops instead of trying a looser query
+  // that might have matched. Reaching for that extra recall would mean letting
+  // a loosened query resolve what the faithful one declined to call, which is
+  // the wrong-door path this whole module exists to close.
   const floored = scored.filter((x) => meetsFloor(userParts, parseAddressParts(x.c.a)));
   if (floored.length === 0) {
     return { status: 'needs_review', reason: 'ambiguous', completions: completions.length };
