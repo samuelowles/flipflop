@@ -811,6 +811,30 @@ describe('sanitiseAddress (one normalisation pass before any query)', () => {
       expect(sanitiseAddress(once), `not idempotent for: ${input}`).toBe(once);
     }
   });
+  it('stays idempotent at absurd affix depth (no cap to exhaust)', () => {
+    // #281 re-review: a small iteration cap would exit mid-strip and return a
+    // NON-idempotent string with the postcode still hidden — silently
+    // resurrecting the ladder bug. The loop's bound is derived from the input
+    // length, so it cannot expire before the fixed point.
+    for (const k of [2, 6, 12, 40]) {
+      const input = `1 Queen Street, Auckland 1010${', NZ'.repeat(k)}`;
+      const out = sanitiseAddress(input);
+      expect(out, `k=${k}`).toBe('1 Queen Street, Auckland 1010');
+      expect(sanitiseAddress(out), `k=${k} idempotent`).toBe(out);
+      expect(parseAddressParts(out).postcode, `k=${k} postcode visible`).toBe('1010');
+    }
+    const labels = sanitiseAddress(`${'Address: '.repeat(12)}1 Queen Street, Auckland 1010`);
+    expect(labels).toBe('1 Queen Street, Auckland 1010');
+  });
+  it('does not eat a place name merely ENDING in a country token', () => {
+    // The country regex had no word boundary: "…, Franz" lost its last three
+    // characters to the "nz" alternative.
+    expect(sanitiseAddress('12 Franz Street, Franz')).toBe('12 Franz Street, Franz');
+    expect(sanitiseAddress('12 Franz Josef Road, Westland 7886'))
+      .toBe('12 Franz Josef Road, Westland 7886');
+    // A real country suffix is still stripped.
+    expect(sanitiseAddress('12 Franz Street, Franz, NZ')).toBe('12 Franz Street, Franz');
+  });
   it('strips a STACKED country suffix in one call, revealing the postcode', () => {
     const out = sanitiseAddress('1 Queen Street, Auckland Central, Auckland 1010, NZ, New Zealand');
     expect(out).toBe('1 Queen Street, Auckland Central, Auckland 1010');

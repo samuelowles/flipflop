@@ -305,10 +305,17 @@ export async function resolveUserAddress(
   // different suburb, different postcode ("25 Riddiford Street, Wellington"
   // resolving to "25 Buckingham Street, Melrose, Wellington 6023"), which
   // reports `agrees` because both are Wellington. That shape IS detectable from
-  // this payload: it is the records where `userSuburb` is null or differs from
-  // `chosenSuburb`. Deliberately not folded into `cityMatch` — a null user
-  // suburb is extremely common and would swamp the signal — so it belongs in
-  // the runbook as a second query, not a third state here.
+  // this payload: the records where `userSuburb` is null or differs from
+  // `chosenSuburb`. Run that as a second query — it is not folded into
+  // `cityMatch` because a null user suburb may be common enough in production
+  // to swamp the signal.
+  //
+  // That last assumption is UNMEASURED and the corpora argue against it: over
+  // the five warn-emitting fixture cases, a `suburbMatch` rule would have been
+  // 3/3 on real failures with 0 false positives, against `cityMatch`'s 2/3. The
+  // objection is about production null-suburb rates, not the corpus. So once
+  // live traffic exists, measure how often `userSuburb` is null; if it is lower
+  // than feared, promote suburb to the primary signal — a one-line change here.
   if (confidence === 'crossed' || confidence === 'unverified') {
     const cityMatch = !userParts.city || !chosenParts.city
       ? 'unknown'
@@ -386,17 +393,27 @@ function normaliseStreetName(name: string): string {
  *      whole module rests on.
  *   2. The residual leaked into the query variants, so we sent Addressfinder
  *      literal junk like "1 Queen Street NZ".
- * The loop is bounded; each iteration strictly shortens the string or stops.
+ * TERMINATION: every operation in the loop is a pure deletion, so any iteration
+ * that changes the string strictly SHORTENS it. The fixed-point break is
+ * therefore the whole mechanism and cannot fail to trigger. The iteration guard
+ * is derived from the input length purely so a future edit that accidentally
+ * introduces a growing operation cannot spin — it can never expire before the
+ * fixed point is reached under deletion-only strips. It is deliberately NOT a
+ * small constant: a cap low enough to be hit would exit with a non-idempotent
+ * string and silently resurrect harm 1 above, which is the failure mode this
+ * whole comment exists to describe.
  */
 export function sanitiseAddress(raw: string): string {
   let a = raw.replace(/\s+/g, ' ').trim();
   a = a.replace(/;/g, ','); // defect 8: semicolon separators → commas
   // Run the removable affixes to a fixed point — one strip can uncover the next.
-  for (let i = 0; i < 5; i++) {
+  for (let guard = a.length; guard >= 0; guard--) {
     const before = a;
     a = a.replace(/^(?:(?:supply|service|installation|property|site)\s+)?address\s*:\s*/i, '');
     a = a.replace(/\s+icp:?\s*[a-z0-9]{10,}$/i, '');
-    a = a.replace(/,?\s*(?:new zealand|nz|aotearoa)\s*$/i, '');
+    // \b so a place name merely ENDING in these letters survives: without it
+    // "12 Franz Street, Franz" loses its last three characters.
+    a = a.replace(/,?\s*\b(?:new zealand|nz|aotearoa)\s*$/i, '');
     a = a.replace(/[,\s;]+$/, '').trim();
     if (a === before) break;
   }
@@ -758,7 +775,13 @@ export function rankAndPick(
       bestIdx = i;
     }
   }
-  const completion = completions[bestIdx]!;
+  const completion = completions[bestIdx];
+  if (!completion) {
+    // Contract violation, not a recoverable state — there is no meaningful
+    // result for an empty set, and a nullable return would push a dead branch
+    // onto every caller. Named error beats the incidental TypeError.
+    throw new Error('rankAndPick requires a non-empty completion set');
+  }
   return { completion, confidence: confidenceTier(userParts, parseAddressParts(completion.a)) };
 }
 
