@@ -52,7 +52,7 @@ describe('ensurePowerswitchResults (#242 pipeline wiring)', () => {
   it('resolves the address then replays when the user has no pxid', async () => {
     vi.mocked(readCachedResults).mockResolvedValueOnce(null);
     vi.mocked(getUserById).mockResolvedValueOnce(user());
-    vi.mocked(resolveUserAddress).mockResolvedValueOnce({ status: 'resolved', pxid: 'px1', locationId: '267' });
+    vi.mocked(resolveUserAddress).mockResolvedValueOnce({ status: 'resolved', pxid: 'px1', locationId: '267', confidence: 'exact' });
     vi.mocked(replayQuestionnaire).mockResolvedValueOnce({ status: 'ok', results: RESULTS, cached: false });
     const out = await ensurePowerswitchResults(ENV, 'u1');
     expect(out).toEqual({ status: 'ok', results: RESULTS, source: 'live' });
