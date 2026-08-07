@@ -650,6 +650,45 @@ describe('resolveUserAddress (end-to-end against the real flights)', () => {
     expect(warned).toContain('"userCity":"wellington"');
   });
 
+  it('a stacked country suffix does not make the short-circuit skip a postcode match', async () => {
+    // #281 re-review BLOCKER. `sanitiseAddress` was not idempotent: one pass on
+    // "…Auckland 1010, NZ, New Zealand" left ", NZ", hiding the trailing
+    // postcode from parseAddressParts. The ladder's guard read that one-pass
+    // string and saw no postcode, while rankAndPick sanitised a SECOND time and
+    // did — so the ladder short-circuited on variant 0 and crossed a postcode
+    // boundary with the correct completion available on variant 1.
+    // Signature of the bug: the guard believed there was no user postcode, yet
+    // the emitted tier was `crossed`, which REQUIRES both postcodes present.
+    const wrong = JSON.stringify({ completions: [{ a: '9 Nowhere Road, Elsewhere, Auckland 0601', pxid: 'wrong', v: 1 }] });
+    const right = JSON.stringify({ completions: [{ a: '1 Queen Street, Auckland Central, Auckland 1010', pxid: 'right', v: 1 }] });
+    const original = globalThis.fetch;
+    let posts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? 'GET';
+      if (method === 'POST' && url === POWERSWITCH_BASE_URL + '/') {
+        posts++;
+        return new Response(`1:${posts === 1 ? wrong : right}`, { status: 200, headers: { 'content-type': 'text/x-component' } });
+      }
+      if (method === 'POST' && url.includes('/questionnaire/household')) {
+        return new Response(household_flight, { status: 200, headers: { 'content-type': 'text/x-component' } });
+      }
+      return new Response('', { status: 404 });
+    }) as typeof globalThis.fetch;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await resolveUserAddress(
+      env(true),
+      'u-stacked',
+      '1 Queen Street, Auckland Central, Auckland 1010, NZ, New Zealand'
+    );
+    globalThis.fetch = original;
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+    expect(posts).toBe(2); // did NOT short-circuit — the postcode was visible
+    expect(out).toMatchObject({ status: 'resolved', pxid: 'right', confidence: 'exact' });
+  });
+
   it('an address with NO postcode stops after one autocomplete POST', async () => {
     // #281 review: confidenceTier returns `unverified` whenever the USER has no
     // postcode, whatever the candidate — so no later variant can ever reach a
@@ -751,6 +790,39 @@ describe('sanitiseAddress (one normalisation pass before any query)', () => {
       .toBe('1 Queen Street, Auckland Central, Auckland 1010');
     expect(sanitiseAddress('1 Queen Street, Auckland Central, Auckland 1010 ICP 1000123456UN7C0'))
       .toBe('1 Queen Street, Auckland Central, Auckland 1010');
+  });
+  it('is idempotent — running it twice changes nothing', () => {
+    // The doc claimed idempotence long before the code delivered it (#281
+    // re-review). Each strip can uncover another, so they run to a fixed point.
+    // A second pass silently revealing a postcode broke the ladder's
+    // short-circuit; property-test the contract rather than one example.
+    const inputs = [
+      '1 Queen Street, Auckland Central, Auckland 1010, NZ, New Zealand',
+      '1 Queen Street, Auckland 1010, New Zealand, NZ',
+      'Supply Address: Site Address: 1 Queen Street, Auckland 1010',
+      '1 Queen Street, Auckland 1010 ICP 1000123456UN7C0 ICP 1000123456UN7C0',
+      '1 Queen Street, Auckland 1010,,, ;',
+      '1 Queen Street, Auckland Central, Auckland 1010',
+      'Queen Street',
+      '',
+    ];
+    for (const input of inputs) {
+      const once = sanitiseAddress(input);
+      expect(sanitiseAddress(once), `not idempotent for: ${input}`).toBe(once);
+    }
+  });
+  it('strips a STACKED country suffix in one call, revealing the postcode', () => {
+    const out = sanitiseAddress('1 Queen Street, Auckland Central, Auckland 1010, NZ, New Zealand');
+    expect(out).toBe('1 Queen Street, Auckland Central, Auckland 1010');
+    // The postcode must be visible to the ladder's guard on the FIRST pass.
+    expect(parseAddressParts(out).postcode).toBe('1010');
+  });
+  it('does not leak a country residual into the query variants', () => {
+    // The residual used to be sent to Addressfinder verbatim ("1 Queen Street NZ").
+    const variants = addressQueryVariants(
+      sanitiseAddress('1 Queen Street, Auckland Central, Auckland 1010, NZ, New Zealand')
+    );
+    for (const v of variants) expect(v).not.toMatch(/\bNZ\b|new zealand|aotearoa/i);
   });
   it('does not fold macrons (Addressfinder indexes them)', () => {
     expect(sanitiseAddress('12 Ōtākaro Lane, Christchurch 8011')).toBe('12 Ōtākaro Lane, Christchurch 8011');

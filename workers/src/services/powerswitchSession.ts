@@ -298,7 +298,17 @@ export async function resolveUserAddress(
   // signal, a shift from "no postcode, resolved correctly" to "no postcode,
   // resolved to another region" would produce identical log lines and move no
   // counter. `unknown` (no city on either side) is the highest-risk state: no
-  // locality evidence at all. Alert on `cityMatch` != 'agrees'.
+  // locality evidence at all.
+  //
+  // ALERTING: `cityMatch != 'agrees'` catches two of the three wrong-network
+  // shapes seen in the corpora. It does NOT catch the third — same city,
+  // different suburb, different postcode ("25 Riddiford Street, Wellington"
+  // resolving to "25 Buckingham Street, Melrose, Wellington 6023"), which
+  // reports `agrees` because both are Wellington. That shape IS detectable from
+  // this payload: it is the records where `userSuburb` is null or differs from
+  // `chosenSuburb`. Deliberately not folded into `cityMatch` — a null user
+  // suburb is extremely common and would swamp the signal — so it belongs in
+  // the runbook as a second query, not a third state here.
   if (confidence === 'crossed' || confidence === 'unverified') {
     const cityMatch = !userParts.city || !chosenParts.city
       ? 'unknown'
@@ -357,18 +367,40 @@ function normaliseStreetName(name: string): string {
 
 /**
  * One normalisation pass applied before any autocomplete query (issue #278).
- * Pure & idempotent. Order: collapse whitespace; strip a leading label prefix
- * ("Supply Address:"); strip a trailing glued ICP token; strip a trailing
- * country suffix; trim trailing commas/semicolons. Macrons are NOT folded here
- * (Addressfinder indexes them) — folding is a query-variant, not a sanitise step.
+ * Pure and — genuinely, now — IDEMPOTENT. Order: collapse whitespace; strip a
+ * leading label prefix ("Supply Address:"); strip a trailing glued ICP token;
+ * strip a trailing country suffix; trim trailing commas/semicolons. Macrons are
+ * NOT folded here (Addressfinder indexes them) — folding is a query-variant,
+ * not a sanitise step.
+ *
+ * The strips run to a FIXED POINT because each one can reveal another. This was
+ * a real defect (#281 review), not defensive coding: the doc already claimed
+ * idempotence and the code did not deliver it, so a stacked suffix like
+ * "…Auckland 1010, NZ, New Zealand" left a residual ", NZ" after one pass. Two
+ * concrete harms followed —
+ *   1. The trailing postcode stayed hidden from `parseAddressParts`, so
+ *      `resolveUserAddress`'s "user has no postcode" short-circuit fired while
+ *      `rankAndPick` (which sanitises a SECOND time) saw the postcode. The ladder
+ *      stopped early and crossed a postcode boundary with a same-postcode
+ *      completion available one variant later — breaking the invariant this
+ *      whole module rests on.
+ *   2. The residual leaked into the query variants, so we sent Addressfinder
+ *      literal junk like "1 Queen Street NZ".
+ * The loop is bounded; each iteration strictly shortens the string or stops.
  */
 export function sanitiseAddress(raw: string): string {
   let a = raw.replace(/\s+/g, ' ').trim();
   a = a.replace(/;/g, ','); // defect 8: semicolon separators → commas
-  a = a.replace(/^(?:(?:supply|service|installation|property|site)\s+)?address\s*:\s*/i, '');
-  a = a.replace(/\s+icp:?\s*[a-z0-9]{10,}$/i, '');
-  a = a.replace(/,?\s*(?:new zealand|nz|aotearoa)\s*$/i, '');
-  return a.replace(/[,\s;]+$/, '').trim();
+  // Run the removable affixes to a fixed point — one strip can uncover the next.
+  for (let i = 0; i < 5; i++) {
+    const before = a;
+    a = a.replace(/^(?:(?:supply|service|installation|property|site)\s+)?address\s*:\s*/i, '');
+    a = a.replace(/\s+icp:?\s*[a-z0-9]{10,}$/i, '');
+    a = a.replace(/,?\s*(?:new zealand|nz|aotearoa)\s*$/i, '');
+    a = a.replace(/[,\s;]+$/, '').trim();
+    if (a === before) break;
+  }
+  return a;
 }
 
 /** Strip a leading unit prefix ("Unit 5, "/"Flat 2, "/"1/82 …"); null if none.
