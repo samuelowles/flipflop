@@ -10,6 +10,7 @@ import {
   addressQueryVariants,
   scoreCompletion,
   parseAddressParts,
+  rankAndPick,
   levenshtein,
   streetSimilarity,
   AUTOCOMPLETE_ACTION,
@@ -573,6 +574,115 @@ describe('resolveUserAddress (end-to-end against the real flights)', () => {
     warnSpy2.mockRestore();
   });
 
+  it('NEVER writes a street address to logs or warns (PII policy)', async () => {
+    // docs/AI_RULES.md: "No user data in logs". docs/POWERSWITCH_COMPLIANCE.md
+    // commits to Powerswitch, in a partner-facing table, that server logs are
+    // "redacted of address/PII". installation_address is also encrypted at rest,
+    // so emitting it next to `userId` would create a plaintext userId→address
+    // pair in the log sink and partly defeat that encryption. Locality
+    // (postcode/suburb/city) is what measurement needs and carries no
+    // street-level identifier. This test pins that: no street name or street
+    // number from either side may appear in any log or warn line.
+    const flight = JSON.stringify({
+      completions: [{ a: '77 Sandringham Road, Kingsland, Auckland 1025', pxid: 'pii', v: 1 }],
+    });
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? 'GET';
+      if (method === 'POST' && url === POWERSWITCH_BASE_URL + '/') {
+        return new Response(`1:${flight}`, { status: 200, headers: { 'content-type': 'text/x-component' } });
+      }
+      if (method === 'POST' && url.includes('/questionnaire/household')) {
+        return new Response(household_flight, { status: 200, headers: { 'content-type': 'text/x-component' } });
+      }
+      return new Response('', { status: 404 });
+    }) as typeof globalThis.fetch;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    await resolveUserAddress(env(true), 'u-pii', '42 Marlborough Street, Kingsland, Auckland 1021');
+    globalThis.fetch = original;
+    const emitted = [...logSpy.mock.calls, ...warnSpy.mock.calls].map((c) => String(c[0])).join('\n');
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+
+    // Neither the user's street nor the chosen completion's street may leak.
+    for (const secret of ['Marlborough', 'marlborough', 'Sandringham', 'sandringham', '42 ', '77 ']) {
+      expect(emitted, `"${secret}" must not reach logs`).not.toContain(secret);
+    }
+    // Locality IS expected — that is what makes the risk measurable.
+    expect(emitted).toContain('"chosenPostcode":"1025"');
+    expect(emitted).toContain('"userPostcode":"1021"');
+    expect(emitted).toContain('"cityMatch"');
+  });
+
+  it('emits cityMatch so an unverified resolution is triageable', async () => {
+    // #281 review: the risk concentrates where the user's postcode is MISSING —
+    // exactly the condition that forces the `unverified` label — so the tier
+    // alone is close to anti-correlated with real risk. `cityMatch` is what
+    // carries the signal: 'differs' and 'unknown' are the states worth alerting
+    // on. Here the user gives a city that AGREES with the chosen completion.
+    const flight = JSON.stringify({
+      completions: [{ a: '25 Buckingham Street, Melrose, Wellington 6023', pxid: 'cm', v: 1 }],
+    });
+    const original = globalThis.fetch;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? 'GET';
+      if (method === 'POST' && url === POWERSWITCH_BASE_URL + '/') {
+        return new Response(`1:${flight}`, { status: 200, headers: { 'content-type': 'text/x-component' } });
+      }
+      if (method === 'POST' && url.includes('/questionnaire/household')) {
+        return new Response(household_flight, { status: 200, headers: { 'content-type': 'text/x-component' } });
+      }
+      return new Response('', { status: 404 });
+    }) as typeof globalThis.fetch;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await resolveUserAddress(env(true), 'u-city', '25 Riddiford Street, Wellington');
+    globalThis.fetch = original;
+    logSpy.mockRestore();
+    const warned = warnSpy.mock.calls.map((c) => String(c[0])).join('\n');
+    warnSpy.mockRestore();
+    expect(out).toMatchObject({ status: 'resolved', confidence: 'unverified' });
+    expect(warned).toContain('powerswitch_address_postcode_unverified');
+    expect(warned).toContain('"cityMatch":"agrees"');
+    expect(warned).toContain('"userCity":"wellington"');
+  });
+
+  it('an address with NO postcode stops after one autocomplete POST', async () => {
+    // #281 review: confidenceTier returns `unverified` whenever the USER has no
+    // postcode, whatever the candidate — so no later variant can ever reach a
+    // postcode tier, and fetching them burns calls on a shared not-for-profit
+    // resource to produce a result that is then discarded. Same reasoning as the
+    // PO Box short-circuit.
+    const original = globalThis.fetch;
+    let autocompletePosts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? 'GET';
+      if (method === 'POST' && url === POWERSWITCH_BASE_URL + '/') {
+        autocompletePosts++;
+        return new Response(
+          `1:${JSON.stringify({ completions: [{ a: '14 Wallace Street, Mount Cook, Wellington 6021', pxid: 'px-1', v: 1 }] })}`,
+          { status: 200, headers: { 'content-type': 'text/x-component' } }
+        );
+      }
+      if (method === 'POST' && url.includes('/questionnaire/household')) {
+        return new Response(household_flight, { status: 200, headers: { 'content-type': 'text/x-component' } });
+      }
+      return new Response('', { status: 404 });
+    }) as typeof globalThis.fetch;
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await resolveUserAddress(env(true), 'u-nopc', 'Flat 2, 14 Wallace Street, Mount Cook, Wellington');
+    globalThis.fetch = original;
+    logSpy.mockRestore();
+    warnSpy.mockRestore();
+    expect(autocompletePosts).toBe(1); // not 3 — later variants cannot improve on this
+    expect(out).toMatchObject({ status: 'resolved', pxid: 'px-1', confidence: 'unverified' });
+  });
+
   it('updatePowerswitchLocation never writes installation_address', async () => {
     // #279 guard: a substituted completion must never overwrite the bill's
     // address. updatePowerswitchLocation writes only powerswitch_pxid +
@@ -949,7 +1059,16 @@ describe('pickBestMatch vs captured fixture (30 real completion sets)', () => {
 
   for (const entry of FIXTURE) {
     it(`${entry.label} → ${expected[entry.label]!.status}`, () => {
+      // Driven through rankAndPick — the function resolveUserAddress actually
+      // calls (#281 review). pickBestMatch is the public wrapper; asserting both
+      // agree keeps the wrapper from drifting away from the live path.
       const out = pickBestMatch(entry.completions, entry.address);
+      if (entry.completions.length > 0) {
+        const picked = rankAndPick(entry.completions, entry.address);
+        expect(out).toMatchObject({
+          status: 'resolved', pxid: picked.completion.pxid, confidence: picked.confidence,
+        });
+      }
       const exp = expected[entry.label]!;
 
       if (exp.status === 'resolved') {
@@ -1032,7 +1151,16 @@ describe('pickBestMatch vs holdout corpus (20 real completion sets)', () => {
 
   for (const entry of HOLDOUT) {
     it(`${entry.label} → ${expected[entry.label]!.status}`, () => {
+      // Driven through rankAndPick — the function resolveUserAddress actually
+      // calls (#281 review). pickBestMatch is the public wrapper; asserting both
+      // agree keeps the wrapper from drifting away from the live path.
       const out = pickBestMatch(entry.completions, entry.address);
+      if (entry.completions.length > 0) {
+        const picked = rankAndPick(entry.completions, entry.address);
+        expect(out).toMatchObject({
+          status: 'resolved', pxid: picked.completion.pxid, confidence: picked.confidence,
+        });
+      }
       const exp = expected[entry.label]!;
 
       if (exp.status === 'resolved') {

@@ -49,10 +49,12 @@
  *      faithful-to-loose query strings. `resolveUserAddress` iterates them in
  *      order, one live POST each, and HUNTS for an `exact`/`postcode`-tier
  *      resolution (postcode agreement). The first variant that yields one wins
- *      and stops the ladder; if none ever does, the FIRST variant's `fallback`
- *      pick is kept (an earlier, more faithful query's fallback beats a later,
- *      looser one's). Only an address whose every variant returns zero
- *      completions ends in `needs_review`.
+ *      and stops the ladder; if none ever does, the FIRST variant's pick is
+ *      kept (an earlier, more faithful query beats a later, looser one). When
+ *      the user's own address has no postcode, no variant can reach a postcode
+ *      tier, so the ladder stops at the first non-empty set rather than
+ *      spending calls it cannot use. Only an address whose every variant
+ *      returns zero completions ends in `needs_review`.
  *   2. MATCH SCORING — `pickBestMatch` ranks every completion via
  *      `scoreCompletion` (postcode-anchored; postcode agreement dominates every
  *      other signal combined) and resolves to the top-ranked one. The resolved
@@ -125,17 +127,24 @@ export interface PowerswitchCompletion {
 /**
  * Confidence tier of a resolved address (issue #279). Drives observability.
  *
- * The two lower tiers are deliberately SEPARATE because they are different
- * failure modes and need counting apart:
+ * The two lower tiers are SEPARATE because they are different failure modes:
  *   - `crossed`    — both postcodes known and DIFFERENT. We knowingly picked
- *     another postcode, so the postcode→location invariant does NOT hold and
- *     the user may be priced on the wrong network. Highest-severity signal.
+ *     another postcode, so the postcode→location invariant does NOT hold.
  *   - `unverified` — a postcode is missing on one or both sides, so there was
- *     nothing to check. Not a known divergence, just an unverifiable pick.
- * Collapsing these into one tier would bury the genuinely risky case among the
- * merely unverifiable ones (a bill with no postcode resolves correctly far more
- * often than not), which would make the accepted risk of the always-resolve
- * policy unmeasurable — the one condition it was accepted on.
+ *     nothing to check.
+ *
+ * DO NOT read `crossed` as "the risky tier" and `unverified` as "the benign
+ * one" — measured against the captured corpora it is close to the opposite.
+ * Both resolutions that genuinely land in the wrong network (`G-street-only`
+ * "Queen Street" → Waihi 3610; `M-city-only` → a different Wellington postcode)
+ * are `unverified`, while one of the two `crossed` entries is a postcode typo
+ * that resolved to the CORRECT door. The risk concentrates where the user's
+ * postcode is missing, which is precisely the condition that forces the
+ * `unverified` label.
+ *
+ * That is why the warn payload carries `cityMatch` rather than the tier alone:
+ * the tier says how much evidence we had, `cityMatch` says whether what
+ * evidence there was agreed. Alert on `cityMatch` != 'agrees', not on tier.
  */
 export type ResolveConfidence = 'exact' | 'postcode' | 'crossed' | 'unverified';
 
@@ -202,16 +211,24 @@ export async function resolveUserAddress(
   //    only how we asked the question. A drift/error aborts the ladder at once
   //    — do not retry a drifted endpoint with a different query.
   //
-  //    For each variant with a non-empty completion set, run pickBestMatch:
+  //    For each variant with a non-empty completion set, rank the completions:
   //      - confidence `exact` or `postcode` → take it and STOP. Postcode
   //        agreement is what keeps the postcode→location invariant intact, so a
   //        postcode-tier hit is terminal and the best we can do.
-  //      - confidence `fallback` → keep it as best-so-far ONLY if it is the
+  //      - `crossed`/`unverified` → keep it as best-so-far ONLY if it is the
   //        first one seen, then continue. An earlier, more faithful query's
-  //        fallback beats a later, looser one's, so a later fallback never
-  //        overrides an earlier one.
+  //        pick beats a later, looser one's, so a later pick never overrides an
+  //        earlier one.
   //    After all variants, resolve using best-so-far. If no variant ever
   //    returned a completion, the address is genuinely unresolvable.
+  //
+  //    SHORT-CIRCUIT: when the user's own address carries no postcode, no
+  //    candidate can ever reach `exact`/`postcode` (confidenceTier returns
+  //    `unverified` on a missing user postcode regardless of the candidate), so
+  //    every later variant would be fetched, ranked and discarded. Stop at the
+  //    first non-empty set instead — same reasoning as the PO Box short-circuit
+  //    above: don't spend a shared-resource call to learn what we already know.
+  const userHasPostcode = parseAddressParts(sanitised).postcode !== null;
   const variants = addressQueryVariants(sanitised);
   let best: { pxid: string; confidence: ResolveConfidence; chosenAddress: string; variant: number } | null = null;
   for (let i = 0; i < variants.length; i++) {
@@ -222,15 +239,14 @@ export async function resolveUserAddress(
     if (outcome.completions.length === 0) continue;
 
     const { completion, confidence } = rankAndPick(outcome.completions, sanitised);
+    if (best === null) {
+      best = { pxid: completion.pxid, confidence, chosenAddress: completion.a, variant: i };
+    }
     if (confidence === 'exact' || confidence === 'postcode') {
       best = { pxid: completion.pxid, confidence, chosenAddress: completion.a, variant: i };
       break;
     }
-    // fallback: keep the FIRST variant's pick; a later, looser query's fallback
-    // must not override an earlier, more faithful one.
-    if (best === null) {
-      best = { pxid: completion.pxid, confidence, chosenAddress: completion.a, variant: i };
-    }
+    if (!userHasPostcode) break; // nothing later can improve on this
   }
   if (best === null) {
     return { status: 'needs_review', reason: 'zero_match', completions: 0 };
@@ -250,33 +266,57 @@ export async function resolveUserAddress(
   //    is the source of truth; a substituted completion must not overwrite it).
   await updatePowerswitchLocation(env.DB, userId, { pxid, locationId });
 
+  // NOTE: the chosen STREET address is deliberately absent from this line.
+  // `installation_address` is encrypted at rest, docs/AI_RULES.md says "no user
+  // data in logs", and docs/POWERSWITCH_COMPLIANCE.md commits to Powerswitch in
+  // a partner-facing table that server logs are "redacted of address/PII".
+  // Logging a full address next to `userId` would create a plaintext
+  // userId→address pair in the log sink and partly defeat that encryption.
+  // Locality (postcode/suburb/city) is what measurement actually needs, and it
+  // carries no street-level identifier.
+  const userParts = parseAddressParts(sanitised);
+  const chosenParts = parseAddressParts(chosenAddress);
+
   console.log(JSON.stringify({
     type: 'powerswitch_address_resolved',
     userId,
     pxid,
     locationId,
     confidence,
-    chosenAddress,
+    chosenPostcode: chosenParts.postcode,
     variant,
     timestamp: new Date().toISOString(),
   }));
 
   // A sub-postcode resolution may return plans for the wrong network area. That
   // cost was accepted by the owner on the condition it be MEASURABLE, never
-  // silent — so warn (not log) with both postcodes. `console.warn` is permitted
-  // by the eslint config. The two tiers are emitted under DIFFERENT type names
-  // so they can be alerted on separately: `crossed` is a known divergence (we
-  // had both postcodes and picked a different one), `unverified` merely means
-  // there was no postcode to check against.
+  // silent — so warn (not log). `console.warn` is permitted by the eslint config.
+  //
+  // `cityMatch` is what makes `unverified` triageable, and it is load-bearing:
+  // the risk concentrates exactly where the user's postcode is MISSING, which is
+  // the condition that forces the `unverified` label — so without a locality
+  // signal, a shift from "no postcode, resolved correctly" to "no postcode,
+  // resolved to another region" would produce identical log lines and move no
+  // counter. `unknown` (no city on either side) is the highest-risk state: no
+  // locality evidence at all. Alert on `cityMatch` != 'agrees'.
   if (confidence === 'crossed' || confidence === 'unverified') {
+    const cityMatch = !userParts.city || !chosenParts.city
+      ? 'unknown'
+      : userParts.city === chosenParts.city
+        ? 'agrees'
+        : 'differs';
     console.warn(JSON.stringify({
       type: confidence === 'crossed'
         ? 'powerswitch_address_postcode_crossed'
         : 'powerswitch_address_postcode_unverified',
       userId,
-      userPostcode: parseAddressParts(sanitised).postcode,
-      chosenPostcode: parseAddressParts(chosenAddress).postcode,
-      chosenAddress,
+      userPostcode: userParts.postcode,
+      chosenPostcode: chosenParts.postcode,
+      userSuburb: userParts.suburb,
+      chosenSuburb: chosenParts.suburb,
+      userCity: userParts.city,
+      chosenCity: chosenParts.city,
+      cityMatch,
       variant,
     }));
   }
@@ -586,9 +626,8 @@ export function levenshtein(a: string, b: string): number {
  * already-normalised street names (lowercased, abbreviations expanded).
  */
 export function streetSimilarity(a: string | null, b: string | null): number {
-  if (!a || !b) return 0;
+  if (!a || !b) return 0; // also covers empty strings, so max > 0 below
   const max = Math.max(a.length, b.length);
-  if (max === 0) return 0;
   const sim = 1 - levenshtein(a, b) / max;
   return sim < 0 ? 0 : sim > 1 ? 1 : sim;
 }
@@ -662,11 +701,17 @@ function confidenceTier(u: AddressParts, c: AddressParts): ResolveConfidence {
 
 /**
  * Rank every completion and return the top one plus its confidence tier
- * (issue #279). The user address is sanitised first. Ties break by the
+ * (issue #279). THIS is the function `resolveUserAddress` calls, so it is the
+ * one the fixture corpora must exercise — `pickBestMatch` is the public wrapper
+ * around it and cannot be allowed to drift into being the only thing tested.
+ *
+ * PRECONDITION: `completions` must be non-empty. Callers guard this
+ * (`resolveUserAddress` skips empty sets; `pickBestMatch` returns needs_review),
+ * so this does not re-check it. The user address is sanitised first. Ties break by the
  * completion's original array order — Addressfinder's own ranking is the
  * tiebreaker, so a strict `>` (first-seen wins) is intentional.
  */
-function rankAndPick(
+export function rankAndPick(
   completions: ReadonlyArray<PowerswitchCompletion>,
   userAddress: string
 ): { completion: PowerswitchCompletion; confidence: ResolveConfidence } {
