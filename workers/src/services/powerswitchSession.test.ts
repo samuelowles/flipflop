@@ -21,6 +21,7 @@ import {
 import { findFlightObject } from './powerswitchRscParser';
 import { autocomplete_flight, household_flight } from './powerswitchLiveFixtures';
 import fixtureJson from '../../tests/fixtures/powerswitch-address-completions.json';
+import holdoutJson from '../../tests/fixtures/powerswitch-address-completions-holdout.json';
 
 /** Real captured completion sets per address string (issue #278 ground truth). */
 interface FixtureEntry {
@@ -29,6 +30,9 @@ interface FixtureEntry {
   readonly completions: ReadonlyArray<PowerswitchCompletion>;
 }
 const FIXTURE: ReadonlyArray<FixtureEntry> = fixtureJson as FixtureEntry[];
+
+/** A second, never-tuned-against corpus (20 live completion sets) — the holdout. */
+const HOLDOUT: ReadonlyArray<FixtureEntry> = holdoutJson as FixtureEntry[];
 
 /**
  * Issue #220/#240 — Powerswitch per-user address resolution, rebuilt against the
@@ -214,17 +218,20 @@ describe('pickBestMatch (match confidence)', () => {
       { a: '82B Verran Road, Birkdale, Auckland 0626', pxid: 'unit-82b', v: 1 },
     ];
 
-    it('an exact number match that only beats neighbours by the number bonus is ambiguous', () => {
-      // 82A scores 185 vs 82/82B at 175 — a 10-point margin, under the 20-point
-      // resolve threshold, because the only differentiator is the +10 number
-      // bonus. Adjacent lettered numbers on the same street → manual review.
+    it('an exact lettered number resolves over its bare neighbours (number bonus clears the margin)', () => {
+      // Regression: a real Meridian bill's "82A Verran Rd" was wrongly sent to
+      // manual review. 82A scores 225 vs 82/82B at 175 — a 50-point gap, over the
+      // 20-point resolve threshold, because the exact-number-as-written bonus is
+      // +50. The matching lettered number must resolve outright.
       const out = pickBestMatch(verran, '82A Verran Rd, Birkdale, Auckland 0626');
-      expect(out).toMatchObject({ status: 'needs_review', reason: 'ambiguous' });
+      expect(out).toMatchObject({ status: 'resolved', pxid: 'unit-82a' });
     });
 
-    it('is still ambiguous without a postcode (margin stays thin)', () => {
+    it('still resolves without a postcode (the exact-number bonus is margin-independent)', () => {
+      // No postcode on the user side, but the exact "82A" number match still
+      // clears the resolve margin, so the 82A completion resolves.
       const out = pickBestMatch(verran, '82A Verran Rd, Birkdale, Auckland');
-      expect(out).toMatchObject({ status: 'needs_review', reason: 'ambiguous' });
+      expect(out).toMatchObject({ status: 'resolved', pxid: 'unit-82a' });
     });
 
     it('unifies "1/82" and "Unit 1, 82" flat forms (unit match wins by margin)', () => {
@@ -414,6 +421,83 @@ describe('resolveUserAddress (end-to-end against the real flights)', () => {
     expect(autocompletePosts).toBeLessThanOrEqual(4);
     expect(out.status).toBe('needs_review');
   });
+
+  it('query ladder: advances past a NON-EMPTY variant that resolves to nothing', async () => {
+    // Live-observed (#278): a unit prefix makes Addressfinder return a full set
+    // of the WRONG street — "Flat 2, 14 Wallace Street, Mount Cook, Wellington
+    // 6021" yields six completions, none on Wallace Street, all hard-rejected
+    // by the scoring. Advancing only on an EMPTY set would strand the address
+    // in manual review even though the unit-stripped variant matches exactly.
+    const wrongStreet = JSON.stringify({
+      completions: [
+        { a: 'Flat 2, 14 Arlington Street, Mount Cook, Wellington 6011', pxid: 'wrong-1', v: 1 },
+        { a: 'Shop 2, 14 Hopper Street, Mount Cook, Wellington 6011', pxid: 'wrong-2', v: 1 },
+      ],
+    });
+    const rightStreet = JSON.stringify({
+      completions: [{ a: '14 Wallace Street, Mount Cook, Wellington 6021', pxid: 'right-1', v: 1 }],
+    });
+    const original = globalThis.fetch;
+    let autocompletePosts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? 'GET';
+      if (method === 'POST' && url === POWERSWITCH_BASE_URL + '/') {
+        autocompletePosts++;
+        // Variant 0 (with the unit prefix) → non-empty but unresolvable.
+        // Variant 1 (unit stripped) → the real address.
+        return new Response(`1:${autocompletePosts === 1 ? wrongStreet : rightStreet}`, {
+          status: 200,
+          headers: { 'content-type': 'text/x-component' },
+        });
+      }
+      if (method === 'POST' && url.includes('/questionnaire/household')) {
+        return new Response(household_flight, { status: 200, headers: { 'content-type': 'text/x-component' } });
+      }
+      return new Response('', { status: 404 });
+    }) as typeof globalThis.fetch;
+    const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+    const out = await resolveUserAddress(
+      env(true),
+      'u-unit-prefix',
+      'Flat 2, 14 Wallace Street, Mount Cook, Wellington 6021'
+    );
+    globalThis.fetch = original;
+    logSpy.mockRestore();
+    expect(autocompletePosts).toBe(2); // did NOT stop at the non-empty wrong-street set
+    expect(out).toMatchObject({ status: 'resolved', pxid: 'right-1' });
+  });
+
+  it('query ladder: an unresolvable ladder reports the FIRST variant\'s outcome', async () => {
+    // When no variant resolves, the reported counts come from the most faithful
+    // query rather than whichever loose variant happened to run last.
+    const original = globalThis.fetch;
+    let autocompletePosts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? 'GET';
+      if (method === 'POST' && url === POWERSWITCH_BASE_URL + '/') {
+        autocompletePosts++;
+        // First variant: 3 wrong-street completions. Later variants: 1 wrong-street.
+        const n = autocompletePosts === 1 ? 3 : 1;
+        return new Response(
+          `1:${JSON.stringify({
+            completions: Array.from({ length: n }, (_, i) => ({
+              a: `${i + 1} Nowhere Road, Elsewhere, Auckland 9999`,
+              pxid: `no-${i}`,
+              v: 1,
+            })),
+          })}`,
+          { status: 200, headers: { 'content-type': 'text/x-component' } }
+        );
+      }
+      return new Response('', { status: 404 });
+    }) as typeof globalThis.fetch;
+    const out = await resolveUserAddress(env(true), 'u-none', '1 Queen Street, Auckland Central, Auckland 1010');
+    globalThis.fetch = original;
+    expect(out.status).toBe('needs_review');
+    if (out.status === 'needs_review') expect(out.completions).toBe(3); // first variant's count
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -546,7 +630,6 @@ describe('pickBestMatch vs captured fixture (30 real completion sets)', () => {
   const CASHEL_A = '166 Cashel Street, Christchurch Central, Christchurch 8011';
   const HAMILTON_A = '5 Garden Place, Hamilton Central, Hamilton 3204';
   const WILLIS_A = '12 Willis Street, Wellington Central, Wellington 6011';
-  const POBOX_A = 'PO Box 1234, Shortland Street, Auckland 1140';
 
   type Expect = {
     status: 'resolved' | 'needs_review';
@@ -598,9 +681,9 @@ describe('pickBestMatch vs captured fixture (30 real completion sets)', () => {
     'F-macron': { status: 'needs_review', reason: 'zero_match' },
     // "1010" alone — every completion's postcode differs and the user has no suburb → all rejected.
     'G-postcode-only': { status: 'needs_review', reason: 'zero_match' },
-    // Single exact survivor (PO Box 1234 uniquely matches). NOTE: a PO Box is not a
-    // metered supply address, so resolving here is a known limitation — flagged for review.
-    'G-po-box': { status: 'resolved', chosenA: POBOX_A, note: 'PO Box single-survivor; not a metered address' },
+    // A PO Box is a postal facility, not a metered supply address — scoreCompletion
+    // hard-rejects either side, so this correctly goes to manual review (deliberate).
+    'G-po-box': { status: 'needs_review', reason: 'zero_match', note: 'PO Box deliberately rejected — not a metered address' },
   };
 
   for (const entry of FIXTURE) {
@@ -624,6 +707,95 @@ describe('pickBestMatch vs captured fixture (30 real completion sets)', () => {
         if (exp.reason && out.status === 'needs_review') expect(out.reason).toBe(exp.reason);
         // Explicit guard: the previously-silent-wrong cases must not resolve at all.
         expect(entry.completions.every((c) => !c.a.includes('Upper Queen Street')) || out.status === 'needs_review').toBe(true);
+      }
+      logSpy.mockRestore();
+    });
+  }
+});
+
+/**
+ * Issue #278 holdout — a second, never-tuned-against corpus (20 live completion
+ * sets), same table-driven shape as the 30-entry suite above. The single most
+ * important property — asserted for EVERY entry that resolves — is that the
+ * chosen completion's street name equals the user's street name. That is the
+ * silent-wrong-door class this whole change exists to prevent; it is a real
+ * assertion over parsed parts, not a hand-maintained list of strings.
+ */
+describe('pickBestMatch vs holdout corpus (20 real completion sets, never tuned against)', () => {
+  const TUWHARETOA_A = '46 Tūwharetoa Street, Taupō 3330';
+  const EMILY_A = 'Floor 3, 48 Emily Place, Auckland Central, Auckland 1010';
+  const GREAT_SOUTH_A = '12 Great South Road, Papakura 2110';
+  const MARINE_A = '70 Marine Parade, Napier South, Napier 4110';
+
+  type Expect = {
+    status: 'resolved' | 'needs_review';
+    chosenA?: string;
+    reason?: 'zero_match' | 'ambiguous';
+    note?: string;
+  };
+  const expected: Record<string, Expect> = {
+    // --- resolve: defect 2 (macron-folded bill text matches macronised records) ---
+    'J-taupo-macron': { status: 'resolved', chosenA: TUWHARETOA_A },
+    'J-taupo-folded': { status: 'resolved', chosenA: TUWHARETOA_A },
+    // --- resolve: defect 3 ("Level N" matches the "Floor N" completion) ---
+    'L-level-prefix': { status: 'resolved', chosenA: EMILY_A },
+    // --- resolve: suburb dropped by Addressfinder; street + number + postcode anchor it ---
+    'K-avenue-abbrev': { status: 'resolved', chosenA: GREAT_SOUTH_A },
+    'K-lowercase-all': { status: 'resolved', chosenA: GREAT_SOUTH_A },
+    // --- resolve: single exact completion ---
+    'S-napier': { status: 'resolved', chosenA: MARINE_A },
+
+    // --- zero completions in the fixture → needs_review/zero_match ---
+    'H-rural-real': { status: 'needs_review', reason: 'zero_match' },
+    'H-rural-no-rd': { status: 'needs_review', reason: 'zero_match' },
+    'H-rural-sh-abbrev': { status: 'needs_review', reason: 'zero_match' },
+    'P-attn-prefix': { status: 'needs_review', reason: 'zero_match' },
+
+    // --- CORRECT needs_review: the user's actual street is absent from the set ---
+    // Ōtāhuhu Road absent — completions are Nikau/Lippiatt/Gordon/Papaku/Ronaki/Pukeora Road.
+    'I-macron-real': { status: 'needs_review', reason: 'zero_match' },
+    'I-macron-folded': { status: 'needs_review', reason: 'zero_match' },
+    // Hobson Street absent — completions are Albert Street / Victoria Street West.
+    'L-apartment-word': { status: 'needs_review', reason: 'zero_match' },
+    // Riddiford Street absent — completions are Daniell/Ferguson/Hall/Lawrence/Mein/Owen/Paeroa/Rhodes/Rintoul/Wilson Street.
+    'M-suburb-only-no-city': { status: 'needs_review', reason: 'zero_match' },
+    // Riddiford Street absent — completions are St George/Wellington/Benares/Buckingham/Chelsea Street across NZ.
+    'M-city-only': { status: 'needs_review', reason: 'zero_match' },
+    // Riddiford Street absent (double-comma address; same Newtown set).
+    'N-double-comma': { status: 'needs_review', reason: 'zero_match' },
+    // Riddiford Street absent (semicolon-separated; same Newtown set).
+    'N-semicolon': { status: 'needs_review', reason: 'zero_match' },
+    // Riddiford Street absent (tab-separated; same Newtown set).
+    'O-tab-sep': { status: 'needs_review', reason: 'zero_match' },
+    // Trafalgar Street absent — completions are Alfred/Brougham/Brunner/Franklyn/Ngatitama/Tipahi/Tukuka/Wellington/Motueka Street.
+    'Q-nelson': { status: 'needs_review', reason: 'zero_match' },
+    // Don Street absent — completions are Albany/Alice/Anglesey/Argyle/Arthur/Cushen/Dublin/Enniskillen/Farrar/Holloway Street.
+    'R-invercargill': { status: 'needs_review', reason: 'zero_match' },
+  };
+
+  for (const entry of HOLDOUT) {
+    it(`${entry.label} → ${expected[entry.label]!.status}`, () => {
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      const out = pickBestMatch(entry.completions, entry.address);
+      const exp = expected[entry.label]!;
+
+      if (exp.status === 'resolved') {
+        expect(out.status).toBe('resolved');
+        if (out.status === 'resolved') {
+          const chosen = entry.completions.find((c) => c.pxid === out.pxid)?.a;
+          if (exp.chosenA) expect(chosen).toBe(exp.chosenA);
+
+          // THE critical property: the chosen completion's street name must equal
+          // the user's street name. No silent wrong-door resolution. Real parse
+          // over parts, not a hand-maintained string list.
+          const chosenStreet = chosen ? parseAddressParts(chosen).streetName : null;
+          const userStreet = parseAddressParts(sanitiseAddress(entry.address)).streetName;
+          expect(userStreet).not.toBeNull();
+          expect(chosenStreet).toBe(userStreet);
+        }
+      } else {
+        expect(out.status).toBe('needs_review');
+        if (exp.reason && out.status === 'needs_review') expect(out.reason).toBe(exp.reason);
       }
       logSpy.mockRestore();
     });

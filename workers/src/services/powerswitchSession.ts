@@ -140,31 +140,42 @@ export async function resolveUserAddress(
 
   const jar = createCookieJar();
 
-  // 1. Query ladder (issue #278): sanitise → variants → first non-empty. Each
-  //    variant is one live POST to the autocomplete server-action, tried in
-  //    order (most faithful first). A drift/error aborts the ladder at once —
-  //    do not retry a drifted endpoint with a different query. The match runs
-  //    against the SANITISED FULL address (the variant is only how we asked).
+  // 1. Query ladder (issue #278): sanitise → variants → first variant that
+  //    RESOLVES. Each variant is one live POST to the autocomplete server-
+  //    action, tried in order (most faithful first). A drift/error aborts the
+  //    ladder at once — do not retry a drifted endpoint with a different query.
+  //    The match always runs against the SANITISED FULL address; the variant is
+  //    only how we asked the question.
+  //
+  //    Advancing on "no resolvable match" rather than "no completions at all"
+  //    is load-bearing: a unit prefix makes Addressfinder return a non-empty
+  //    set of the WRONG street ("Flat 2, 14 Wallace Street" → six completions,
+  //    none on Wallace Street), which the scoring rejects wholesale. Stopping
+  //    at the first non-empty set would strand that address in manual review
+  //    even though the unit-stripped variant matches it exactly.
   const variants = addressQueryVariants(sanitised);
-  let completions: ReadonlyArray<PowerswitchCompletion> | null = null;
+  let match: ResolveAddressOutcome | null = null;
   let winningVariant = -1;
   for (let i = 0; i < variants.length; i++) {
     if (i > 0) await delay(REQUEST_DELAY_MS); // etiquette BETWEEN attempts
     const outcome = await fetchCompletions(variants[i]!, jar);
     if (outcome.status === 'drift') return { status: 'drift', reason: outcome.reason };
     if (outcome.status === 'error') return { status: 'error', reason: outcome.reason };
-    if (outcome.completions.length > 0) {
-      completions = outcome.completions;
+    if (outcome.completions.length === 0) continue;
+
+    const attempt = pickBestMatch(outcome.completions, sanitised);
+    // Keep the FIRST non-empty variant's outcome as the reported fallback, so a
+    // ladder that never resolves still reports the most faithful query's counts.
+    if (match === null) match = attempt;
+    if (attempt.status === 'resolved') {
+      match = attempt;
       winningVariant = i;
       break;
     }
   }
-  if (completions === null) {
+  if (match === null) {
     return { status: 'needs_review', reason: 'zero_match', completions: 0 };
   }
-
-  // 2. Match-confidence decision (against the sanitised full address).
-  const match = pickBestMatch(completions, sanitised);
   if (match.status !== 'resolved') {
     return match;
   }
@@ -208,7 +219,12 @@ const STREET_TYPE_WORDS = new Set<string>([
 
 /** Lowercase + expand abbreviations. Used for equality comparison of a street name or locality. */
 function normaliseStreetName(name: string): string {
-  const s = name.toLowerCase().replace(/[.,]/g, ' ').replace(/\s+/g, ' ').trim();
+  // Fold diacritics (NFD, drop combining marks) so macron-stripped bill text
+  // ("Tuwharetoa") compares equal to macronised Addressfinder records
+  // ("Tūwharetoa") — NZ bills routinely strip macrons. Both sides go through
+  // this, so folding is equality-preserving and never reaches the live query
+  // (sanitiseAddress keeps macrons intact; Addressfinder indexes them). (#278)
+  const s = foldDiacritics(name.toLowerCase().replace(/[.,]/g, ' ')).replace(/\s+/g, ' ').trim();
   return s.split(' ').map((w) => STREET_ABBREVIATIONS[w] ?? w).join(' ');
 }
 
@@ -253,7 +269,7 @@ function stripUnitPrefix(s: string): string | null {
     const kept = `${slash[2]} ${s.slice(slash[0].length).trim()}`.trim();
     return kept || null;
   }
-  const word = s.match(/^(?:unit|flat|apartment|apt)\s+([0-9a-z]+)\b[,\s]*/i);
+  const word = s.match(/^(?:unit|flat|apartment|apt|level)\s+([0-9a-z]+)\b[,\s]*/i);
   if (word) {
     const rest = s.slice(word[0].length).trim();
     return rest || null;
@@ -328,8 +344,10 @@ export interface AddressParts {
   readonly postcode: string | null;
 }
 
-/** Leading word-unit prefix ("Unit 5, "/"Suite 1, "), capturing the unit value. */
-const UNIT_WORD_RE = /^(?:unit|flat|apartment|apt|floor|shop|suite)\s+([0-9a-z]+)\b[,\s]*/i;
+/** Leading word-unit prefix ("Unit 5, "/"Suite 1, "), capturing the unit value.
+ *  `level` is included because "Level N" is an NZ unit/floor prefix; it collapses
+ *  to the same bare unit value as "Floor N" (both denote the same door class). */
+const UNIT_WORD_RE = /^(?:unit|flat|apartment|apt|floor|shop|suite|level)\s+([0-9a-z]+)\b[,\s]*/i;
 
 /**
  * Parse an address into components for scoring. Best-effort & lenient — missing
@@ -409,13 +427,28 @@ export function parseAddressParts(raw: string): AddressParts {
 }
 
 /**
+ * Match "PO Box" / "P.O. Box" / "POBox" (case-insensitive, optional dots and
+ * spaces). A PO Box is a postal facility, not a metered electricity supply
+ * address — resolving one would hand the user plans for the wrong location
+ * entirely, so it is always a hard reject. (#278)
+ */
+const PO_BOX_RE = /\bp\.?o\.?\s*box\b/i;
+function isPoBox(s: string): boolean {
+  return PO_BOX_RE.test(s);
+}
+
+/**
  * Score a candidate completion against the user's address. Returns null for a
- * hard reject (different street, different number, or a postcode mismatch the
- * suburb cannot redeem), else a score where higher is better. Postcode-anchored
- * — the postcode is what drives plan accuracy. A postcode mismatch WITH an
- * agreeing suburb is tolerated (a user typo, e.g. "1011" for "1010").
+ * hard reject (a PO Box on either side, different street, different number, or a
+ * postcode mismatch the suburb cannot redeem), else a score where higher is
+ * better. Postcode-anchored — the postcode is what drives plan accuracy. A
+ * postcode mismatch WITH an agreeing suburb is tolerated (a user typo, e.g.
+ * "1011" for "1010").
  */
 export function scoreCompletion(userAddress: string, candidate: string): number | null {
+  // A PO Box is never a metered supply address — reject either side outright.
+  if (isPoBox(userAddress) || isPoBox(candidate)) return null;
+
   const u = parseAddressParts(userAddress);
   const c = parseAddressParts(candidate);
 
@@ -429,7 +462,11 @@ export function scoreCompletion(userAddress: string, candidate: string): number 
   if (u.postcode && c.postcode && u.postcode === c.postcode) score += 100;
   if (u.suburb && c.suburb && u.suburb === c.suburb) score += 40;
   if (u.unit === c.unit) score += 30; // both null counts as equal
-  if (u.number && c.number && u.number === c.number) score += 10;
+  // An exact street-number match AS WRITTEN (including the letter on "82A") is
+  // strong evidence. The bonus clears RESOLVE_MARGIN so an exact lettered number
+  // wins outright over its bare neighbours — regression: a real Meridian bill's
+  // "82A Verran Rd" was wrongly sent to manual review when it only led by +10.
+  if (u.number && c.number && u.number === c.number) score += 50;
   if (u.unit === null && c.unit === null) score += 5;
   return score;
 }
