@@ -3,7 +3,6 @@ import {
   resolveUserAddress,
   pickBestMatch,
   validateCompletions,
-  addressHasUnit,
   isPowerswitchLive,
   postAction,
   householdRequestBody,
@@ -31,7 +30,8 @@ interface FixtureEntry {
 }
 const FIXTURE: ReadonlyArray<FixtureEntry> = fixtureJson as FixtureEntry[];
 
-/** A second, never-tuned-against corpus (20 live completion sets) — the holdout. */
+/** A second corpus (20 live completion sets) captured as a holdout — see the
+ *  describe block below for what that does and does not still mean. */
 const HOLDOUT: ReadonlyArray<FixtureEntry> = holdoutJson as FixtureEntry[];
 
 /**
@@ -126,24 +126,6 @@ describe('isPowerswitchLive (#219 gate)', () => {
   });
 });
 
-describe('addressHasUnit (NZ unit heuristics)', () => {
-  it('flags slash-separated unit prefixes', () => {
-    expect(addressHasUnit('1/12 Birkdale Road, Birkdale')).toBe(true);
-  });
-  it('flags number+letter unit prefixes', () => {
-    expect(addressHasUnit('12A Birkdale Road, Birkdale')).toBe(true);
-  });
-  it('flags Unit/Flat/Apartment word prefixes', () => {
-    expect(addressHasUnit('Unit 3 Birkdale Road')).toBe(true);
-    expect(addressHasUnit('Flat 2 Birkdale Road')).toBe(true);
-    expect(addressHasUnit('Apartment 12 Queen Street')).toBe(true);
-  });
-  it('does not flag bare street numbers', () => {
-    expect(addressHasUnit('1 Queen Street, Auckland Central')).toBe(false);
-    expect(addressHasUnit('12 Birkdale Road, Birkdale')).toBe(false);
-  });
-});
-
 describe('householdRequestBody (ICP never submitted)', () => {
   it('builds the captured body shape with icp_identifier $undefined', () => {
     const body = householdRequestBody(BASE_PXID);
@@ -195,8 +177,10 @@ describe('pickBestMatch (match confidence)', () => {
     expect(out.status).toBe('resolved');
     if (out.status === 'resolved') expect(out.pxid).toBe(BASE_PXID);
   });
-  it('resolves a single completion', () => {
-    expect(pickBestMatch([completions[0]!], '1 Queen Street').status).toBe('resolved');
+  it('resolves a single completion that clears the evidence floor', () => {
+    // Defect 3: a lone survivor resolves only with street + number + a locality
+    // anchor. '1 Queen Street 1010' anchors on the shared postcode.
+    expect(pickBestMatch([completions[0]!], '1 Queen Street 1010').status).toBe('resolved');
   });
   it('returns needs_review for zero completions', () => {
     expect(pickBestMatch([], 'nowhere')).toEqual({ status: 'needs_review', reason: 'zero_match', completions: 0 });
@@ -204,7 +188,9 @@ describe('pickBestMatch (match confidence)', () => {
   it('resolves to the matching unit when the user gave that exact unit', () => {
     // Scoring (#278): the unit-11 completion matches unit+number+street and
     // beats the unit-less base by more than the resolve margin → resolved.
-    const out = pickBestMatch(completions, 'Unit 11, 1 Queen Street');
+    // Defect 3: the user address carries a locality anchor (the postcode) so the
+    // floor does not reject a sparse unit-only string.
+    const out = pickBestMatch(completions, 'Unit 11, 1 Queen Street, Auckland Central, Auckland 1010');
     expect(out).toMatchObject({ status: 'resolved', pxid: 'unit-11' });
   });
 
@@ -261,6 +247,24 @@ describe('pickBestMatch (match confidence)', () => {
       expect(out).toMatchObject({ status: 'resolved', pxid: 'dupe-1' });
       expect(logSpy.mock.calls.some((c) => String(c[0]).includes('powerswitch_address_location_equivalent'))).toBe(true);
       logSpy.mockRestore();
+    });
+  });
+
+  // Minimum-evidence floor (defect 3): every resolve path requires an equal
+  // street name, an equal street-number base, AND at least one locality anchor.
+  // A lone survivor on sparse evidence goes to needs_review, never resolves.
+  describe('minimum-evidence floor (defect 3)', () => {
+    it('a sparse street+number survivor needs review', () => {
+      expect(pickBestMatch([{ a: '14 Wallace Street, Riccarton, Christchurch 8041', pxid: 'x', v: 1 }], '14 Wallace Street'))
+        .toMatchObject({ status: 'needs_review', reason: 'ambiguous' });
+    });
+    it('a survivor with no street number needs review', () => {
+      expect(pickBestMatch([{ a: '12 Highbrook Drive, East Tamaki, Auckland 2013', pxid: 'x', v: 1 }], 'Highbrook Drive, East Tamaki'))
+        .toMatchObject({ status: 'needs_review', reason: 'ambiguous' });
+    });
+    it('a unit-only user string with no locality needs review', () => {
+      expect(pickBestMatch([{ a: '3 Wallace Street, Wadestown, Wellington 6012', pxid: 'x', v: 1 }], 'Flat 2, Wallace Street'))
+        .toMatchObject({ status: 'needs_review', reason: 'ambiguous' });
     });
   });
 });
@@ -498,6 +502,49 @@ describe('resolveUserAddress (end-to-end against the real flights)', () => {
     expect(out.status).toBe('needs_review');
     if (out.status === 'needs_review') expect(out.completions).toBe(3); // first variant's count
   });
+
+  it('a PO Box returns needs_review without issuing any fetch (PO Box short-circuit)', async () => {
+    // A PO Box is a postal facility, not a metered supply address — we already
+    // know it can never resolve, so no live request is spent on it.
+    const stub = stubFlights();
+    const out = await resolveUserAddress(env(true), 'u-po', 'PO Box 1234, Auckland 1140');
+    expect(out).toMatchObject({ status: 'needs_review', reason: 'zero_match' });
+    expect(stub.calls).toHaveLength(0); // INERT — no live POST
+    stub.restore();
+  });
+
+  it('query ladder: an ambiguous variant is terminal, not advanced past (defect 4)', async () => {
+    // Ambiguous means the faithful query could not separate two candidates; a
+    // looser query that returns only one of them would resolve to the WRONG door
+    // (Addressfinder returns a bounded top-N). Only zero_match may advance.
+    const twoCompetitors = JSON.stringify({
+      completions: [
+        { a: '14 Wallace Street, Berhampore, Wellington 6023', pxid: 'berhampore', v: 1 },
+        { a: '14 Wallace Street, Mount Cook, Wellington 6021', pxid: 'mount-cook', v: 1 },
+      ],
+    });
+    const onlyOne = JSON.stringify({
+      completions: [{ a: '14 Wallace Street, Berhampore, Wellington 6023', pxid: 'berhampore', v: 1 }],
+    });
+    const original = globalThis.fetch;
+    let autocompletePosts = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === 'string' ? input : input instanceof URL ? input.toString() : input.url;
+      const method = init?.method ?? 'GET';
+      if (method === 'POST' && url === POWERSWITCH_BASE_URL + '/') {
+        autocompletePosts++;
+        // Variant 0 (faithful) → two competitors → ambiguous. A looser variant
+        // would collapse to only one of them (the wrong resolution).
+        const flight = autocompletePosts === 1 ? twoCompetitors : onlyOne;
+        return new Response(`1:${flight}`, { status: 200, headers: { 'content-type': 'text/x-component' } });
+      }
+      return new Response('', { status: 404 });
+    }) as typeof globalThis.fetch;
+    const out = await resolveUserAddress(env(true), 'u-ambig', 'Flat 2, 14 Wallace Street, Wellington');
+    globalThis.fetch = original;
+    expect(autocompletePosts).toBe(1); // did NOT advance past the ambiguous variant
+    expect(out).toMatchObject({ status: 'needs_review', reason: 'ambiguous' });
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -538,6 +585,12 @@ describe('sanitiseAddress (one normalisation pass before any query)', () => {
     expect(sanitiseAddress('1 Queen Street, Auckland Central, Auckland 1010,'))
       .toBe('1 Queen Street, Auckland Central, Auckland 1010');
   });
+  it('normalises semicolon separators to commas (defect 8)', () => {
+    // Without this, the whole tail after the first ';' is swallowed into the
+    // street name and the suburb/city are lost.
+    expect(sanitiseAddress('25 Riddiford Street; Newtown; Wellington 6021'))
+      .toBe('25 Riddiford Street, Newtown, Wellington 6021');
+  });
   it('sanitises the two required exact strings to the canonical form', () => {
     expect(sanitiseAddress('Supply Address: 1 Queen Street, Auckland Central, Auckland 1010'))
       .toBe('1 Queen Street, Auckland Central, Auckland 1010');
@@ -566,6 +619,13 @@ describe('addressQueryVariants (ordered query ladder, deduped, ≤4)', () => {
     ['1/82 Verran Road, Birkdale, Auckland 0626', '82 Verran Road, Birkdale, Auckland 0626'],
   ])('strips a unit prefix: %s', (input, stripped) => {
     expect(addressQueryVariants(input)).toContain(stripped);
+  });
+  it('strips Suite/Floor/Shop prefixes too (one shared unit list, defect 7)', () => {
+    // stripUnitPrefix used to miss these three — no unit-stripped variant was
+    // generated, so the recovery the ladder exists for never ran.
+    expect(addressQueryVariants('Suite 3, 5 Test Street, Auckland 1010')).toContain('5 Test Street, Auckland 1010');
+    expect(addressQueryVariants('Floor 3, 5 Test Street, Auckland 1010')).toContain('5 Test Street, Auckland 1010');
+    expect(addressQueryVariants('Shop 3, 5 Test Street, Auckland 1010')).toContain('5 Test Street, Auckland 1010');
   });
   it('does NOT treat a lettered street number as a unit prefix', () => {
     const v = addressQueryVariants('82A Verran Road, Birkdale, Auckland 0626');
@@ -604,6 +664,19 @@ describe('scoreCompletion (postcode-anchored scoring, null = hard reject)', () =
   it('tolerates a postcode typo when the suburb agrees', () => {
     expect(scoreCompletion('1 Queen Street, Auckland Central, Auckland 1011', '1 Queen Street, Auckland Central, Auckland 1010')).not.toBeNull();
   });
+  it('hard-rejects a postcode mismatch redeemed across different cities (defect 1)', () => {
+    // NZ suburb names repeat across cities (Richmond → Nelson and Christchurch);
+    // a suburb-agreeing postcode mismatch must NOT resolve to the wrong city.
+    expect(scoreCompletion('12 Bridge Street, Richmond, Nelson 7020', '12 Bridge Street, Richmond, Christchurch 8013')).toBeNull();
+  });
+  it('still matches a same-postcode pair whose completion omits the city (defect 1)', () => {
+    // Postcodes match here, so the redemption path is not involved; this pair
+    // must keep resolving. Guards against a blanket city hard-reject.
+    expect(scoreCompletion('12 Great South Rd, Papakura, Auckland 2110', '12 Great South Road, Papakura 2110')).not.toBeNull();
+  });
+  it('keeps a route number in the street name so two highways differ (defect 2)', () => {
+    expect(scoreCompletion('1837 State Highway 2, RD 2, Te Puke 3182', '1837 State Highway 33, Te Puke 3182')).toBeNull();
+  });
   it('a postcode match outranks a suburb-only match', () => {
     const user = '1 Queen Street, Auckland Central, Auckland 1010';
     const postcodeMatch = scoreCompletion(user, '1 Queen Street, Ellerslie, Auckland 1010')!; // same postcode, diff suburb
@@ -613,6 +686,33 @@ describe('scoreCompletion (postcode-anchored scoring, null = hard reject)', () =
   it('parses parts for inspection (sanity)', () => {
     const p = parseAddressParts('Unit 5, 10 High Street, Auckland Central, Auckland 1010');
     expect(p).toMatchObject({ unit: '5', number: '10', numberBase: 10, streetName: 'high street', suburb: 'auckland central', city: 'auckland', postcode: '1010' });
+  });
+});
+
+describe('parseAddressParts (street-name boundary: defects 5 & 6)', () => {
+  it('folds the next segment in when a stray comma follows the number (defect 5)', () => {
+    // "82, Verran Road" left the street segment as a bare number; the name must
+    // come from the following segment so the street hard-reject can fire.
+    expect(parseAddressParts('82, Verran Road, Birkdale, Auckland 0626')).toMatchObject({
+      number: '82', numberBase: 82, streetName: 'verran road', suburb: 'birkdale', city: 'auckland', postcode: '0626',
+    });
+  });
+  it.each([
+    ['Rewa Road Mount Eden Auckland', 'rewa road'],
+    ['Mount Eden Road Auckland', 'mount eden road'],
+    ['Great South Road Papakura Auckland', 'great south road'],
+    ['Queen Street Auckland Central', 'queen street'],
+    // "St" is an abbreviation: normaliseStreetName expands it to "street" (this
+    // is the same expansion "Queen St" → "queen street" relies on). The boundary
+    // rule is what's under test here — the name spans all four tokens rather
+    // than truncating at the idx-0 "st", which a LAST-type-word rule would do.
+    ['St Heliers Bay Road Auckland', 'street heliers bay road'],
+    ['Rewa Road St Heliers Auckland', 'rewa road'],
+    ['State Highway 2 Te Puke', 'state highway 2'],
+  ])('street-name boundary (defect 6): %s → %s', (input, streetName) => {
+    // FIRST street-type word at index >= 1, excluding mount/mt; a numeric token
+    // right after the type word stays in the name (defect 2's route-number rule).
+    expect(parseAddressParts(input).streetName).toBe(streetName);
   });
 });
 
@@ -714,14 +814,23 @@ describe('pickBestMatch vs captured fixture (30 real completion sets)', () => {
 });
 
 /**
- * Issue #278 holdout — a second, never-tuned-against corpus (20 live completion
- * sets), same table-driven shape as the 30-entry suite above. The single most
- * important property — asserted for EVERY entry that resolves — is that the
- * chosen completion's street name equals the user's street name. That is the
- * silent-wrong-door class this whole change exists to prevent; it is a real
- * assertion over parsed parts, not a hand-maintained list of strings.
+ * Issue #278 holdout — a second corpus (20 live completion sets), same
+ * table-driven shape as the 30-entry suite above. It was captured AFTER the
+ * scoring was written, specifically so the first version had to face data it
+ * had not been shaped around, and it earned its keep: it is what surfaced the
+ * macron-folding and "Level N" defects.
+ *
+ * Note for anyone adding to it: it is no longer an untouched holdout. Those two
+ * fixes were made in response to it, so it now carries the same overfitting risk
+ * as any other suite. Treat a green run here as regression cover, not as
+ * evidence of generalisation — for that, capture a fresh corpus.
+ *
+ * The single most important property — asserted for EVERY entry that resolves —
+ * is that the chosen completion's street name equals the user's street name.
+ * That is the silent-wrong-door class this whole change exists to prevent; it is
+ * a real assertion over parsed parts, not a hand-maintained list of strings.
  */
-describe('pickBestMatch vs holdout corpus (20 real completion sets, never tuned against)', () => {
+describe('pickBestMatch vs holdout corpus (20 real completion sets)', () => {
   const TUWHARETOA_A = '46 Tūwharetoa Street, Taupō 3330';
   const EMILY_A = 'Floor 3, 48 Emily Place, Auckland Central, Auckland 1010';
   const GREAT_SOUTH_A = '12 Great South Road, Papakura 2110';

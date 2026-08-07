@@ -137,6 +137,12 @@ export async function resolveUserAddress(
   if (!sanitised) {
     return { status: 'needs_review', reason: 'zero_match', completions: 0 };
   }
+  // A PO Box is a postal facility, not a metered supply address — we already
+  // know it can never resolve, so short-circuit before any live request. Don't
+  // spend one of Powerswitch's shared-resource calls to learn what we know.
+  if (isPoBox(sanitised)) {
+    return { status: 'needs_review', reason: 'zero_match', completions: 0 };
+  }
 
   const jar = createCookieJar();
 
@@ -147,12 +153,13 @@ export async function resolveUserAddress(
   //    The match always runs against the SANITISED FULL address; the variant is
   //    only how we asked the question.
   //
-  //    Advancing on "no resolvable match" rather than "no completions at all"
-  //    is load-bearing: a unit prefix makes Addressfinder return a non-empty
-  //    set of the WRONG street ("Flat 2, 14 Wallace Street" → six completions,
-  //    none on Wallace Street), which the scoring rejects wholesale. Stopping
-  //    at the first non-empty set would strand that address in manual review
-  //    even though the unit-stripped variant matches it exactly.
+  //    Advancing on `zero_match` rather than "no completions at all" is
+  //    load-bearing: a unit prefix makes Addressfinder return a non-empty set of
+  //    the WRONG street ("Flat 2, 14 Wallace Street" → six completions, none on
+  //    Wallace Street), which the scoring rejects wholesale. Stopping at the
+  //    first non-empty set would strand that address in manual review even
+  //    though the unit-stripped variant matches it exactly. An `ambiguous`
+  //    result, by contrast, is terminal (defect 4): only `zero_match` advances.
   const variants = addressQueryVariants(sanitised);
   let match: ResolveAddressOutcome | null = null;
   let winningVariant = -1;
@@ -171,6 +178,14 @@ export async function resolveUserAddress(
       match = attempt;
       winningVariant = i;
       break;
+    }
+    // Defect 4: an `ambiguous` outcome is terminal. Ambiguous means the faithful
+    // query could not separate two candidates; a looser query that happens to
+    // return only one of them would then resolve confidently to the WRONG door
+    // (Addressfinder returns a bounded top-N, so a broader query can push the
+    // rival out of the window). Only `zero_match` (nothing survived) may advance.
+    if (attempt.status === 'needs_review' && attempt.reason === 'ambiguous') {
+      return attempt;
     }
   }
   if (match === null) {
@@ -229,24 +244,6 @@ function normaliseStreetName(name: string): string {
 }
 
 /**
- * Normalise an address for equality comparison ONLY (never persisted, never
- * submitted): lowercase, punctuation → spaces, "1/82 X" and "Unit 1, 82 X"
- * unified, street abbreviations expanded. Both sides of the comparison go
- * through this, so a semantically wrong expansion (e.g. "St Heliers" →
- * "street heliers") is still equality-preserving.
- */
-export function normaliseAddressForMatch(address: string): string {
-  let a = address.toLowerCase().replace(/[.,]/g, ' ');
-  a = a.replace(/^(\d+[a-z]?)\s*\/\s*(\d+)/, 'unit $1 $2'); // "1/82 X" → "unit 1 82 X"
-  a = a.replace(/^(?:unit|flat|apartment|apt|u|f)\s+(\w+)\b/, 'unit $1');
-  a = a.replace(/\s+/g, ' ').trim();
-  return a
-    .split(' ')
-    .map((w) => STREET_ABBREVIATIONS[w] ?? w)
-    .join(' ');
-}
-
-/**
  * One normalisation pass applied before any autocomplete query (issue #278).
  * Pure & idempotent. Order: collapse whitespace; strip a leading label prefix
  * ("Supply Address:"); strip a trailing glued ICP token; strip a trailing
@@ -255,6 +252,7 @@ export function normaliseAddressForMatch(address: string): string {
  */
 export function sanitiseAddress(raw: string): string {
   let a = raw.replace(/\s+/g, ' ').trim();
+  a = a.replace(/;/g, ','); // defect 8: semicolon separators → commas
   a = a.replace(/^(?:(?:supply|service|installation|property|site)\s+)?address\s*:\s*/i, '');
   a = a.replace(/\s+icp:?\s*[a-z0-9]{10,}$/i, '');
   a = a.replace(/,?\s*(?:new zealand|nz|aotearoa)\s*$/i, '');
@@ -262,14 +260,16 @@ export function sanitiseAddress(raw: string): string {
 }
 
 /** Strip a leading unit prefix ("Unit 5, "/"Flat 2, "/"1/82 …"); null if none.
- *  For the slash form "1/82", the trailing number is the STREET number — keep it. */
+ *  For the slash form "1/82", the trailing number is the STREET number — keep it.
+ *  Uses the shared UNIT_WORD_RE (defect 7), so Suite/Floor/Shop prefixes are
+ *  stripped for a query variant too — exactly the recovery the ladder exists for. */
 function stripUnitPrefix(s: string): string | null {
   const slash = s.match(/^(\d+[a-z]?)\s*\/\s*(\d+[a-z]?)\b/i);
   if (slash) {
     const kept = `${slash[2]} ${s.slice(slash[0].length).trim()}`.trim();
     return kept || null;
   }
-  const word = s.match(/^(?:unit|flat|apartment|apt|level)\s+([0-9a-z]+)\b[,\s]*/i);
+  const word = s.match(UNIT_WORD_RE);
   if (word) {
     const rest = s.slice(word[0].length).trim();
     return rest || null;
@@ -299,13 +299,17 @@ const MAX_QUERY_VARIANTS = 4;
 
 /**
  * Ordered autocomplete query strings to try, most faithful first (issue #278).
- * Deduped, no empties, capped at MAX_QUERY_VARIANTS. Each entry is one live POST.
+ * Built in PRIORITY ORDER and truncated to MAX_QUERY_VARIANTS (4): each entry is
+ * one live POST, so once the cap is reached the lower-priority candidates below
+ * are silently dropped. Deduped, no empties. Candidates, best first:
  *   1. sanitised as-is
  *   2. unit prefix removed ("Flat 2, 14 Wallace St" → "14 Wallace St")
  *   3. RD segment removed
  *   4. diacritics folded (macrons → ASCII)
  *   5. street + postcode only
  *   6. street + city, postcode dropped
+ * Because the cap (4) is smaller than the candidate count (6), only the top of
+ * this list is reached for a given address; do not rely on a later variant.
  */
 export function addressQueryVariants(sanitised: string): string[] {
   const base = sanitised.trim();
@@ -344,16 +348,24 @@ export interface AddressParts {
   readonly postcode: string | null;
 }
 
-/** Leading word-unit prefix ("Unit 5, "/"Suite 1, "), capturing the unit value.
- *  `level` is included because "Level N" is an NZ unit/floor prefix; it collapses
- *  to the same bare unit value as "Floor N" (both denote the same door class). */
-const UNIT_WORD_RE = /^(?:unit|flat|apartment|apt|floor|shop|suite|level)\s+([0-9a-z]+)\b[,\s]*/i;
+/**
+ * Leading word-unit prefixes (NZ conventions). `level` collapses to the same
+ * door class as `floor`; `suite`/`shop` are unit-style prefixes. This is the ONE
+ * shared list (defect 7): both parsing (`UNIT_WORD_RE`) and the query-variant
+ * stripper (`stripUnitPrefix`) derive from it so they cannot drift apart again.
+ */
+const UNIT_WORDS = ['unit', 'flat', 'apartment', 'apt', 'floor', 'shop', 'suite', 'level'];
+
+/** Leading word-unit prefix ("Unit 5, "/"Suite 1, "), capturing the unit value. */
+const UNIT_WORD_RE = new RegExp(`^(?:${UNIT_WORDS.join('|')})\\s+([0-9a-z]+)\\b[,\\s]*`, 'i');
 
 /**
  * Parse an address into components for scoring. Best-effort & lenient — missing
- * fields are null. The street name ends at the LAST street-type word in the
- * street segment (so "Mount Eden Road" → "mount eden road", and a no-comma
- * "Queen Street Auckland Central" still yields street name "queen street").
+ * fields are null. The street name ends at the FIRST street-type word at
+ * index >= 1 (excluding mount/mt, which are NZ street-name prefixes), so a
+ * no-comma "Queen Street Auckland Central" yields "queen street" while
+ * "Mount Eden Road Auckland" yields "mount eden road". A numeric token right
+ * after the type word is kept ("State Highway 2").
  */
 export function parseAddressParts(raw: string): AddressParts {
   const parts: {
@@ -394,8 +406,8 @@ export function parseAddressParts(raw: string): AddressParts {
   }
   parts.unit = unitVal;
 
-  // Street segment: leading number (incl. "82A"/"1-5"), then name up to the
-  // last street-type word; anything after the type word is locality head.
+  // Street segment: leading number (incl. "82A"/"1-5"), then the name up to
+  // the type word; anything after is the locality head.
   if (segments.length > 0) {
     const seg = segments.shift()!;
     const num = seg.match(/^(\d+[a-z]?(?:\s*-\s*\d+[a-z]?)?)\b/i);
@@ -405,13 +417,37 @@ export function parseAddressParts(raw: string): AddressParts {
       parts.numberBase = parseInt(parts.number, 10);
       rest = seg.slice(num[0].length);
     }
-    const tokens = rest.trim().split(/\s+/).filter(Boolean);
+    let tokens = rest.trim().split(/\s+/).filter(Boolean);
+    // Defect 5: a stray comma after the number ("82, Verran Road") leaves this
+    // segment as a bare number — fold the NEXT segment in as the street name.
+    if (num && tokens.length === 0 && segments.length > 0) {
+      tokens = segments.shift()!.trim().split(/\s+/).filter(Boolean);
+    }
+    // Name/type boundary (defect 6): the FIRST street-type word at index >= 1,
+    // excluding mount/mt (NZ street-name prefixes, not terminators). The
+    // trailing postcode was stripped above, so it cannot land here.
+    // Route-number rule (defect 2): a single purely-numeric token right after
+    // the type word ("State Highway 2") belongs to the name; a word token
+    // starts the locality.
     let typeIdx = -1;
     for (let i = 0; i < tokens.length; i++) {
-      if (STREET_TYPE_WORDS.has(tokens[i]!.toLowerCase())) typeIdx = i;
+      const lower = tokens[i]!.toLowerCase();
+      if (i >= 1 && lower !== 'mount' && lower !== 'mt' && STREET_TYPE_WORDS.has(lower)) {
+        typeIdx = i;
+        break;
+      }
     }
-    const nameTokens = typeIdx >= 0 ? tokens.slice(0, typeIdx + 1) : tokens;
-    const localityHead = typeIdx >= 0 ? tokens.slice(typeIdx + 1) : [];
+    let nameEnd = typeIdx;
+    let localityStart = typeIdx + 1;
+    if (typeIdx >= 0) {
+      const after = tokens[typeIdx + 1];
+      if (after !== undefined && /^\d+$/.test(after)) {
+        nameEnd = typeIdx + 1;
+        localityStart = typeIdx + 2;
+      }
+    }
+    const nameTokens = typeIdx >= 0 ? tokens.slice(0, nameEnd + 1) : tokens;
+    const localityHead = typeIdx >= 0 ? tokens.slice(localityStart) : [];
     parts.streetName = normaliseStreetName(nameTokens.join(' ')) || null;
     if (localityHead.length > 0) segments.unshift(localityHead.join(' '));
   }
@@ -440,10 +476,10 @@ function isPoBox(s: string): boolean {
 /**
  * Score a candidate completion against the user's address. Returns null for a
  * hard reject (a PO Box on either side, different street, different number, or a
- * postcode mismatch the suburb cannot redeem), else a score where higher is
- * better. Postcode-anchored — the postcode is what drives plan accuracy. A
- * postcode mismatch WITH an agreeing suburb is tolerated (a user typo, e.g.
- * "1011" for "1010").
+ * postcode mismatch the suburb AND city cannot redeem), else a score where
+ * higher is better. Postcode-anchored — the postcode is what drives plan
+ * accuracy. A postcode mismatch WITH an agreeing suburb AND city is tolerated
+ * (a user typo, e.g. "1011" for "1010"); an absent city counts as agreement.
  */
 export function scoreCompletion(userAddress: string, candidate: string): number | null {
   // A PO Box is never a metered supply address — reject either side outright.
@@ -455,7 +491,16 @@ export function scoreCompletion(userAddress: string, candidate: string): number 
   if (u.streetName && c.streetName && u.streetName !== c.streetName) return null;
   if (u.numberBase !== null && c.numberBase !== null && u.numberBase !== c.numberBase) return null;
   if (u.postcode && c.postcode && u.postcode !== c.postcode) {
-    if (!u.suburb || !c.suburb || u.suburb !== c.suburb) return null;
+    // Postcode-mismatch redemption: the suburbs must agree (both present and
+    // equal — the original rule) AND the cities must agree, treating an absent
+    // city on either side as agreement (completions legitimately omit the city).
+    // NZ suburb names repeat across cities (Richmond → Nelson/Christchurch), so
+    // a suburb-only check resolves to the wrong city. The absent-suburb case is
+    // intentionally NOT redeemed: with no suburb there is nothing to anchor the
+    // typo to the right locality.
+    const suburbOk = !!u.suburb && !!c.suburb && u.suburb === c.suburb;
+    const cityOk = !u.city || !c.city || u.city === c.city;
+    if (!suburbOk || !cityOk) return null;
   }
 
   let score = 0;
@@ -484,6 +529,22 @@ function locationEquivalent(a: PowerswitchCompletion, b: PowerswitchCompletion):
   );
 }
 
+/**
+ * Minimum-evidence floor a candidate must clear before it may RESOLVE (defect
+ * 3). Both sides need an equal street name AND an equal street-number base, and
+ * at least one locality anchor must agree (postcode, suburb, or city — each
+ * counted only when present on both sides). A sparse address that disables every
+ * hard reject no longer resolves a lone survivor on name+number alone.
+ */
+function meetsFloor(u: AddressParts, c: AddressParts): boolean {
+  if (!u.streetName || !c.streetName || u.streetName !== c.streetName) return false;
+  if (u.numberBase === null || c.numberBase === null || u.numberBase !== c.numberBase) return false;
+  const postcodeAnchor = !!u.postcode && !!c.postcode && u.postcode === c.postcode;
+  const suburbAnchor = !!u.suburb && !!c.suburb && u.suburb === c.suburb;
+  const cityAnchor = !!u.city && !!c.city && u.city === c.city;
+  return postcodeAnchor || suburbAnchor || cityAnchor;
+}
+
 /** Score gap at which the best completion resolves outright over the runner-up. */
 const RESOLVE_MARGIN = 20;
 
@@ -491,9 +552,10 @@ const RESOLVE_MARGIN = 20;
  * Pick the best completion via postcode-anchored scoring (issue #278). The user
  * address is sanitised first; every completion is scored and hard rejects (a
  * different street/number, or an unredeemed postcode mismatch) are dropped. A
- * clear winner resolves; a tie among units at the same street number + postcode
- * resolves too (Powerswitch prices by network location); anything genuinely
- * ambiguous goes to manual review.
+ * candidate may only RESOLVE once it also clears the minimum-evidence floor
+ * (defect 3). A clear winner resolves; a tie among units at the same street
+ * number + postcode resolves too (Powerswitch prices by network location);
+ * anything genuinely ambiguous goes to manual review.
  */
 export function pickBestMatch(
   completions: ReadonlyArray<PowerswitchCompletion>,
@@ -503,6 +565,7 @@ export function pickBestMatch(
     return { status: 'needs_review', reason: 'zero_match', completions: 0 };
   }
   const user = sanitiseAddress(userAddress);
+  const userParts = parseAddressParts(user);
 
   const scored: Array<{ c: PowerswitchCompletion; s: number }> = [];
   for (const c of completions) {
@@ -512,13 +575,20 @@ export function pickBestMatch(
   if (scored.length === 0) {
     return { status: 'needs_review', reason: 'zero_match', completions: completions.length };
   }
-  if (scored.length === 1) {
-    return { status: 'resolved', pxid: scored[0]!.c.pxid, locationId: null };
+  // Defect 3: only floor-clearing candidates may resolve. If none clear it, the
+  // outcome is `ambiguous` (some candidate survived the hard rejects but none
+  // carried enough evidence) — never a silent wrong-door resolve.
+  const floored = scored.filter((x) => meetsFloor(userParts, parseAddressParts(x.c.a)));
+  if (floored.length === 0) {
+    return { status: 'needs_review', reason: 'ambiguous', completions: completions.length };
+  }
+  if (floored.length === 1) {
+    return { status: 'resolved', pxid: floored[0]!.c.pxid, locationId: null };
   }
 
-  scored.sort((a, b) => b.s - a.s);
-  const best = scored[0]!;
-  const runnerUp = scored[1]!;
+  floored.sort((a, b) => b.s - a.s);
+  const best = floored[0]!;
+  const runnerUp = floored[1]!;
   if (best.s - runnerUp.s >= RESOLVE_MARGIN) {
     return { status: 'resolved', pxid: best.c.pxid, locationId: null };
   }
@@ -526,7 +596,7 @@ export function pickBestMatch(
   // Top scores within the margin: if every tied candidate is the same door
   // differing only by unit, resolve the first (location-equivalent; E-chch).
   const topScore = best.s;
-  const tied = scored.filter((x) => x.s === topScore);
+  const tied = floored.filter((x) => x.s === topScore);
   if (tied.length > 1 && tied.every((x) => locationEquivalent(x.c, best.c))) {
     const chosen = tied[0]!.c;
     console.log(JSON.stringify({
@@ -744,20 +814,6 @@ async function resolveLocationId(pxid: string, jar: CookieJar): Promise<string |
 
 function delay(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-/**
- * Whether an address string carries a unit-level prefix. NZ unit conventions:
- *   - "12A ..." / "1/12 ..." (unit/number), or a leading letter then number.
- * A bare street number like "1 Queen Street" has NO unit. Heuristic only —
- * used to decide whether to auto-pick a base address.
- */
-export function addressHasUnit(address: string): boolean {
-  const trimmed = address.trim();
-  if (/^\d+\s*\/\s*\d+/.test(trimmed)) return true; // "1/12 ..."
-  if (/^\d+[A-Za-z]\b/.test(trimmed)) return true; // "12A ..."
-  if (/^(unit|flat|apartment|apt|u|f)\s+\w+\b/i.test(trimmed)) return true; // "Unit 3 ..."
-  return false;
 }
 
 function logDrift(detail: string, sample: unknown): void {
