@@ -1,0 +1,1337 @@
+[
+  {
+    "label": "A-exact",
+    "address": "1 Queen Street, Auckland Central, Auckland 1010",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-uppercase",
+    "address": "1 QUEEN STREET, AUCKLAND CENTRAL, AUCKLAND 1010",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-no-commas",
+    "address": "1 Queen Street Auckland Central Auckland 1010",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-no-postcode",
+    "address": "1 Queen Street, Auckland Central, Auckland",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-no-suburb",
+    "address": "1 Queen Street, Auckland 1010",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-street-postcode-only",
+    "address": "1 Queen Street 1010",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-abbrev-st",
+    "address": "1 Queen St, Auckland Central, Auckland 1010",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-country-suffix",
+    "address": "1 Queen Street, Auckland Central, Auckland 1010, New Zealand",
+    "completions": [
+      {
+        "a": "1-5 Upper Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1.xG",
+        "v": 0
+      },
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "1 Upper Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1.xG",
+        "v": 0
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Floor 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpPcFcW8AAFru4t1Z9BM",
+        "v": 1
+      },
+      {
+        "a": "Floor 4, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpXmtCSXBNdGTNnByolL",
+        "v": 1
+      },
+      {
+        "a": "Floor 6, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpZ4iPRyAd9c7FfhgMbH",
+        "v": 1
+      },
+      {
+        "a": "Floor 7, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpZpWcRdRxStxDQr3xvt",
+        "v": 1
+      },
+      {
+        "a": "Floor 8, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpaPXcRM9siy8GpNTLeH",
+        "v": 1
+      },
+      {
+        "a": "Floor G, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpd2B.QB8Kocx3HNGXmQ",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "A-newline-sep",
+    "address": "1 Queen Street\nAuckland Central\nAuckland 1010",
+    "completions": []
+  },
+  {
+    "label": "A-double-space",
+    "address": "1  Queen   Street,  Auckland  Central,  Auckland  1010",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-trailing-comma",
+    "address": "1 Queen Street, Auckland Central, Auckland 1010,",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-icp-glued",
+    "address": "1 Queen Street, Auckland Central, Auckland 1010 ICP 1000123456UN7C0",
+    "completions": []
+  },
+  {
+    "label": "A-label-prefix",
+    "address": "Supply Address: 1 Queen Street, Auckland Central, Auckland 1010",
+    "completions": [
+      {
+        "a": "1-5 Upper Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1.xG",
+        "v": 0
+      },
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "1 Upper Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1.xG",
+        "v": 0
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Floor 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpPcFcW8AAFru4t1Z9BM",
+        "v": 1
+      },
+      {
+        "a": "Floor 4, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpXmtCSXBNdGTNnByolL",
+        "v": 1
+      },
+      {
+        "a": "Floor 6, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpZ4iPRyAd9c7FfhgMbH",
+        "v": 1
+      },
+      {
+        "a": "Floor 7, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpZpWcRdRxStxDQr3xvt",
+        "v": 1
+      },
+      {
+        "a": "Floor 8, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpaPXcRM9siy8GpNTLeH",
+        "v": 1
+      },
+      {
+        "a": "Floor G, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpd2B.QB8Kocx3HNGXmQ",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "A-postcode-comma",
+    "address": "1 Queen Street, Auckland Central, Auckland, 1010",
+    "completions": [
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Unit 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-dceutpjG8tXpscitROjZ3",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-jPllhhDrumS6Z2TpsBsuY",
+        "v": 1
+      },
+      {
+        "a": "Unit 13, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmdD3GtBEhA$wA2R35Dv",
+        "v": 0
+      },
+      {
+        "a": "Unit 14, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmpqOGncP8NGzIyKJccW",
+        "v": 0
+      },
+      {
+        "a": "Unit 15, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCmyDcGjuW6r7klPllNjZ",
+        "v": 0
+      },
+      {
+        "a": "Unit 16, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCn2gOggbF.vH$XJQ5CUK",
+        "v": 0
+      },
+      {
+        "a": "Unit 17, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnbUHgRA7nDrlfjGoV7r",
+        "v": 0
+      },
+      {
+        "a": "Unit 19, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VCnqcTtKTkKSawEDMNqsw",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "A-wrong-postcode",
+    "address": "1 Queen Street, Auckland Central, Auckland 1011",
+    "completions": [
+      {
+        "a": "1-5 Upper Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1.xG",
+        "v": 0
+      },
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "1 Upper Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1.xG",
+        "v": 0
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Floor 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpPcFcW8AAFru4t1Z9BM",
+        "v": 1
+      },
+      {
+        "a": "Floor 4, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpXmtCSXBNdGTNnByolL",
+        "v": 1
+      },
+      {
+        "a": "Floor 6, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpZ4iPRyAd9c7FfhgMbH",
+        "v": 1
+      },
+      {
+        "a": "Floor 7, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpZpWcRdRxStxDQr3xvt",
+        "v": 1
+      },
+      {
+        "a": "Floor 8, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpaPXcRM9siy8GpNTLeH",
+        "v": 1
+      },
+      {
+        "a": "Floor G, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpd2B.QB8Kocx3HNGXmQ",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "B-verran-known-fail",
+    "address": "82A Verran Rd, Birkdale, Auckland 0626",
+    "completions": [
+      {
+        "a": "82 Verran Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i$B",
+        "v": 1
+      },
+      {
+        "a": "82 Salisbury Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.c0zP",
+        "v": 1
+      },
+      {
+        "a": "82 Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0$i",
+        "v": 1
+      },
+      {
+        "a": "82A Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0zQ",
+        "v": 1
+      },
+      {
+        "a": "82B Salisbury Road, Birkdale, Auckland 0626",
+        "pxid": "2-5zhDX0K3jTCGTGrHFDMuz",
+        "v": 0
+      },
+      {
+        "a": "82B Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0zO",
+        "v": 1
+      },
+      {
+        "a": "82C Salisbury Road, Birkdale, Auckland 0626",
+        "pxid": "2-5zhJXAK12hTl4D1Ai4Wus",
+        "v": 0
+      },
+      {
+        "a": "82C Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0zR",
+        "v": 1
+      },
+      {
+        "a": "82F Salisbury Road, Birkdale, Auckland 0626",
+        "pxid": "2-5zhQkMJ_tLbiqEb6V63Tz",
+        "v": 0
+      },
+      {
+        "a": "82F Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0$3",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "B-verran-expanded",
+    "address": "82A Verran Road, Birkdale, Auckland 0626",
+    "completions": [
+      {
+        "a": "82 Verran Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i$B",
+        "v": 1
+      },
+      {
+        "a": "82 Salisbury Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.c0zP",
+        "v": 1
+      },
+      {
+        "a": "82 Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0$i",
+        "v": 1
+      },
+      {
+        "a": "82A Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0zQ",
+        "v": 1
+      },
+      {
+        "a": "82B Salisbury Road, Birkdale, Auckland 0626",
+        "pxid": "2-5zhDX0K3jTCGTGrHFDMuz",
+        "v": 0
+      },
+      {
+        "a": "82B Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0zO",
+        "v": 1
+      },
+      {
+        "a": "82C Salisbury Road, Birkdale, Auckland 0626",
+        "pxid": "2-5zhJXAK12hTl4D1Ai4Wus",
+        "v": 0
+      },
+      {
+        "a": "82C Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0zR",
+        "v": 1
+      },
+      {
+        "a": "82F Salisbury Road, Birkdale, Auckland 0626",
+        "pxid": "2-5zhQkMJ_tLbiqEb6V63Tz",
+        "v": 0
+      },
+      {
+        "a": "82F Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "2-.1.6.D.i0$3",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "C-slash-unit",
+    "address": "1/82 Verran Road, Birkdale, Auckland 0626",
+    "completions": [
+      {
+        "a": "Unit 1, 82 Lauderdale Road, Birkdale, Auckland 0626",
+        "pxid": "3-OeqtYnNd2W6Py4V.mXwQc",
+        "v": 0
+      },
+      {
+        "a": "Unit 1, 82 Verbena Road, Birkdale, Auckland 0626",
+        "pxid": "3-VVl4$JTdA9meR8Rb0cfFQ",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "C-unit-word",
+    "address": "Unit 5, 10 High Street, Auckland 1010",
+    "completions": [
+      {
+        "a": "Unit 5, 10 High Street, Auckland Central, Auckland 1010",
+        "pxid": "3-VJ2vgI4coV.snmBBDPGVM",
+        "v": 0
+      },
+      {
+        "a": "Unit 5, 10 Wellesley Street East, Auckland Central, Auckland 1010",
+        "pxid": "3-VJLIiLZT7GWDMY8WpbpBS",
+        "v": 0
+      },
+      {
+        "a": "Flat 5, 10 Shelly Beach Road, Saint Marys Bay, Auckland 1011",
+        "pxid": "3-.1.6.22.KTrd4V",
+        "v": 1
+      },
+      {
+        "a": "Floor 5, 10 High Street, Auckland Central, Auckland 1010",
+        "pxid": "3-.1.6.6.101H1.",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "C-flat-word",
+    "address": "Flat 2, 14 Wallace Street, Mount Cook, Wellington 6021",
+    "completions": [
+      {
+        "a": "Flat 2, 14 Arlington Street, Mount Cook, Wellington 6011",
+        "pxid": "3-.F.1W.W.41GHV",
+        "v": 1
+      },
+      {
+        "a": "Flat 2, 14 Bidwill Street, Mount Cook, Wellington 6021",
+        "pxid": "3-.F.1W.W.61rHU",
+        "v": 1
+      },
+      {
+        "a": "Shop 2, 14 Hopper Street, Mount Cook, Wellington 6011",
+        "pxid": "3-.F.1W.W.M16HS",
+        "v": 1
+      },
+      {
+        "a": "Unit 2, 14 Hawker Street, Mount Victoria, Wellington 6011",
+        "pxid": "3-tCln5xDxgltTK6p2hFpsy",
+        "v": 1
+      },
+      {
+        "a": "Unit 2, 14 Prince Street, Mount Victoria, Wellington 6011",
+        "pxid": "3-.F.1W.X.g1BHS",
+        "v": 1
+      },
+      {
+        "a": "Flat 2, 14 Myrtle Crescent, Mount Cook, Wellington 6021",
+        "pxid": "3-.F.1W.W.S1aHT",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "D-rural-rd",
+    "address": "123 Kaipara Coast Highway, RD 2, Helensville 0874",
+    "completions": []
+  },
+  {
+    "label": "D-hyphen-range",
+    "address": "12-14 Willis Street, Wellington Central, Wellington 6011",
+    "completions": [
+      {
+        "a": "12 Willis Street, Wellington Central, Wellington 6011",
+        "pxid": "2-.F.1W.u.gorJ",
+        "v": 0
+      },
+      {
+        "a": "14 William Street, Hataitai, Wellington 6021",
+        "pxid": "2-.F.1W.B.nww",
+        "v": 0
+      },
+      {
+        "a": "12 William Street, Hataitai, Wellington 6021",
+        "pxid": "2-.F.1W.B.nwv",
+        "v": 1
+      },
+      {
+        "a": "14 Panama Street, Wellington Central, Wellington 6011",
+        "pxid": "2-.F.1W.u.Tx2",
+        "v": 0
+      },
+      {
+        "a": "14 Taranaki Street, Wellington Central, Wellington 6011",
+        "pxid": "2-.F.1W.u.Zwu",
+        "v": 0
+      },
+      {
+        "a": "14 Woodward Street, Wellington Central, Wellington 6011",
+        "pxid": "2-.F.1W.u.iwv",
+        "v": 0
+      },
+      {
+        "a": "12 Bond Street, Wellington Central, Wellington 6011",
+        "pxid": "2-.F.1W.p.Aw_",
+        "v": 1
+      },
+      {
+        "a": "12 Hunter Street, Wellington Central, Wellington 6011",
+        "pxid": "2-.F.1W.u.Lx1",
+        "v": 0
+      },
+      {
+        "a": "12 Johnston Street, Wellington Central, Wellington 6011",
+        "pxid": "2-.F.1W.u.Nws",
+        "v": 1
+      },
+      {
+        "a": "12 Woodward Street, Wellington Central, Wellington 6011",
+        "pxid": "2-.F.1W.u.ix0",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "E-chch",
+    "address": "166 Cashel Street, Christchurch Central, Christchurch 8011",
+    "completions": [
+      {
+        "a": "Unit 8, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0$i",
+        "v": 0
+      },
+      {
+        "a": "Unit 101, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0_z",
+        "v": 0
+      },
+      {
+        "a": "Unit 102, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0__",
+        "v": 0
+      },
+      {
+        "a": "Unit 103, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0_$",
+        "v": 0
+      },
+      {
+        "a": "Unit 104, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0$0",
+        "v": 1
+      },
+      {
+        "a": "Unit 105, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0$1",
+        "v": 0
+      },
+      {
+        "a": "Unit 106, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0$2",
+        "v": 0
+      },
+      {
+        "a": "Unit 107, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0$3",
+        "v": 0
+      },
+      {
+        "a": "Unit 108, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0$4",
+        "v": 0
+      },
+      {
+        "a": "Unit 109, 166 Cashel Street, Christchurch Central, Christchurch 8011",
+        "pxid": "3-.3.i.R.J0$5",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "E-dunedin-no-pc",
+    "address": "195 Castle Street, North Dunedin, Dunedin",
+    "completions": []
+  },
+  {
+    "label": "E-hamilton",
+    "address": "5 Garden Place, Hamilton Central, Hamilton 3204",
+    "completions": [
+      {
+        "a": "5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "2-.E.Y.L.F$6",
+        "v": 0
+      },
+      {
+        "a": "Suite 1, Floor 5, 5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "3-.E.Y.L.F.vnU",
+        "v": 1
+      },
+      {
+        "a": "Suite 2, Floor 5, 5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "3-.E.Y.L.F.vnV",
+        "v": 1
+      },
+      {
+        "a": "Suite 3, Floor 5, 5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "3-.E.Y.L.F.vnW",
+        "v": 1
+      },
+      {
+        "a": "Suite 1, Floor 1, 5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "3-.E.Y.L.F.vnE",
+        "v": 1
+      },
+      {
+        "a": "Suite 1, Floor 2, 5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "3-.E.Y.L.F.vnI",
+        "v": 1
+      },
+      {
+        "a": "Suite 1, Floor 3, 5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "3-.E.Y.L.F.vnM",
+        "v": 1
+      },
+      {
+        "a": "Suite 1, Floor 4, 5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "3-.E.Y.L.F.vnQ",
+        "v": 1
+      },
+      {
+        "a": "Suite 2, Floor 1, 5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "3-.E.Y.L.F.vnF",
+        "v": 1
+      },
+      {
+        "a": "Suite 2, Floor 2, 5 Garden Place, Hamilton Central, Hamilton 3204",
+        "pxid": "3-.E.Y.L.F.vnJ",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "F-macron",
+    "address": "12 Ōtākaro Lane, Christchurch Central, Christchurch 8011",
+    "completions": []
+  },
+  {
+    "label": "F-typo-street",
+    "address": "1 Queeen Street, Auckland Central, Auckland 1010",
+    "completions": [
+      {
+        "a": "1-5 Upper Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1.xG",
+        "v": 0
+      },
+      {
+        "a": "1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1aoR.",
+        "v": 1
+      },
+      {
+        "a": "1 Upper Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "2-.1.6.6.1.xG",
+        "v": 0
+      },
+      {
+        "a": "Floor 1, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpO1p.Wr59d3sduRez8Q",
+        "v": 1
+      },
+      {
+        "a": "Floor 11, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpPcFcW8AAFru4t1Z9BM",
+        "v": 1
+      },
+      {
+        "a": "Floor 4, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpXmtCSXBNdGTNnByolL",
+        "v": 1
+      },
+      {
+        "a": "Floor 6, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpZ4iPRyAd9c7FfhgMbH",
+        "v": 1
+      },
+      {
+        "a": "Floor 7, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpZpWcRdRxStxDQr3xvt",
+        "v": 1
+      },
+      {
+        "a": "Floor 8, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpaPXcRM9siy8GpNTLeH",
+        "v": 1
+      },
+      {
+        "a": "Floor G, 1 Queen Street, Auckland Central, Auckland 1010",
+        "pxid": "3-1pRpd2B.QB8Kocx3HNGXmQ",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "G-postcode-only",
+    "address": "1010",
+    "completions": [
+      {
+        "a": "1010D Ferry Road, Ferrymead, Christchurch 8023",
+        "pxid": "2-2t$fIvVGTYQl48kM$9_WrW",
+        "v": 0
+      },
+      {
+        "a": "1010E Ferry Road, Ferrymead, Christchurch 8023",
+        "pxid": "2-2t$fLIZGSUJS3OsLWRH38g",
+        "v": 1
+      },
+      {
+        "a": "1010F Ferry Road, Ferrymead, Christchurch 8023",
+        "pxid": "2-7TtC5vjeQ_AEsmPRbpPYJ",
+        "v": 0
+      },
+      {
+        "a": "1010C Ferry Road, Ferrymead, Christchurch 8023",
+        "pxid": "2-2t$fHag3U7RVXq0$60kEeg",
+        "v": 0
+      },
+      {
+        "a": "1010B Rata Street, Mahora, Hastings 4120",
+        "pxid": "2-.5.H.7.T$L",
+        "v": 1
+      },
+      {
+        "a": "1010B Mairoa Road, Mangaotaki, Piopio 3971",
+        "pxid": "2-1V9$1pPj9DLklBWzyfE87p",
+        "v": 0
+      },
+      {
+        "a": "1010B Beatty Street, Mayfair, Hastings 4122",
+        "pxid": "2-.5.H.8.5$l",
+        "v": 0
+      },
+      {
+        "a": "1010B Stirling Street, Raureka, Hastings 4120",
+        "pxid": "2-.5.H.A.h$3",
+        "v": 1
+      },
+      {
+        "a": "1010B Ferry Road, Ferrymead, Christchurch 8023",
+        "pxid": "2-.3.i.c.2$p",
+        "v": 1
+      },
+      {
+        "a": "1010B Mairoa Road, RD 1, Piopio 3971",
+        "pxid": "2-1V9$1pPj9DLklBWzyfE87p",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "G-street-only",
+    "address": "Queen Street",
+    "completions": [
+      {
+        "a": "4 Queen Street, Waihi 3610",
+        "pxid": "2-.E.3_.1.2enH",
+        "v": 1
+      },
+      {
+        "a": "4 Queen Street, Awanui 0483",
+        "pxid": "2-.9.7.1.Q$3",
+        "v": 0
+      },
+      {
+        "a": "4 Queen Street, Milton 9220",
+        "pxid": "2-.A.2d.1.2KfW",
+        "v": 1
+      },
+      {
+        "a": "4 Queen Street, Oxford 7430",
+        "pxid": "2-.3.35.1.1sR_",
+        "v": 1
+      },
+      {
+        "a": "4 Queen Street, Paeroa 3600",
+        "pxid": "2-oL5cwdbNi0nO41f98xnKA",
+        "v": 1
+      },
+      {
+        "a": "4 Queen Street, Wairoa 4108",
+        "pxid": "2-.5.1R.1.2OVo",
+        "v": 1
+      },
+      {
+        "a": "4 Queen Street, Winton 9720",
+        "pxid": "2-.B.3m.1.3ZhN",
+        "v": 1
+      },
+      {
+        "a": "32 Queen Street, Winton 9720",
+        "pxid": "2-.B.3m.1.3Zhb",
+        "v": 1
+      },
+      {
+        "a": "4 Queen Street, Waimate 7924",
+        "pxid": "2-.3.4D.1.2Duhg",
+        "v": 1
+      },
+      {
+        "a": "88 Queen Street, Waiuku 2123",
+        "pxid": "2-.1.1b.1.3jOb",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "G-po-box",
+    "address": "PO Box 1234, Auckland 1140",
+    "completions": [
+      {
+        "a": "PO Box 1234, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2O2",
+        "v": 1
+      },
+      {
+        "a": "PO Box 1134, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2MU",
+        "v": 1
+      },
+      {
+        "a": "PO Box 1204, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2Na",
+        "v": 1
+      },
+      {
+        "a": "PO Box 1232, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2N.",
+        "v": 1
+      },
+      {
+        "a": "PO Box 1237, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2O5",
+        "v": 1
+      },
+      {
+        "a": "PO Box 1238, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2O6",
+        "v": 1
+      },
+      {
+        "a": "PO Box 1294, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2O_",
+        "v": 1
+      },
+      {
+        "a": "PO Box 1334, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2Pc",
+        "v": 1
+      },
+      {
+        "a": "PO Box 1734, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2Vs",
+        "v": 1
+      },
+      {
+        "a": "PO Box 1934, Shortland Street, Auckland 1140",
+        "pxid": "4-.1.6.6.2Y_",
+        "v": 1
+      }
+    ]
+  }
+]
