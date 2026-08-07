@@ -12,10 +12,23 @@
  *   2. No cache + live: resolve the user's pxid from users.installation_address
  *      if not already stored (#220), then replay the questionnaire (#221) —
  *      which caches the parsed plan set (7-day TTL) and returns it.
- *   3. Anything unavailable (live off, no address, needs_review, drift, error)
- *      → null; the caller falls back to the seeded-plan compare path. This
- *      function NEVER throws pipeline-fatal errors — the drift flag, budget,
- *      and ICP rules are enforced inside the bridge modules themselves.
+ *   3. Anything unavailable (live off, no address, drift, error, or a ladder
+ *      that returned zero completions on every variant) → null; the caller
+ *      falls back to the seeded-plan compare path. This function NEVER throws
+ *      pipeline-fatal errors — the drift flag, budget, and ICP rules are
+ *      enforced inside the bridge modules themselves.
+ *
+ * ADDRESS RESOLUTION POLICY (#279): resolveUserAddress now ALWAYS resolves to
+ * the closest available completion rather than sending uncertain matches to
+ * review. Plans are a function of POSTCODE, not street address (same postcode →
+ * same Powerswitch electricity_location → same plans), so substituting a
+ * neighbouring address in the user's postcode is harmless, and there is no human
+ * review path — `needs_review` used to degrade users to generic seeded plans
+ * instead of their real ones. A resolved outcome carries a `confidence` tier
+ * (`exact`/`postcode`/`crossed`/`unverified`); the latter two can price the wrong network by
+ * design and return plans for the wrong network area, which the bridge emits as
+ * a measurable warning. Only a genuinely zero-completion ladder yields
+ * `needs_review` here, so this fallback path now fires far less often.
  */
 
 import type { EncryptionEnv } from '../models/encryption';

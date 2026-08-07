@@ -30,22 +30,44 @@
  *     `console.error('powerswitch_drift', …)` + typed `drift` failure. Never
  *     persists a partial/garbage guess.
  *
- * ADDRESS TOLERANCE (issue #278): the address text comes from parsed bills, so
- * it is noisy (label prefixes, glued ICP, newlines, unit prefixes, missing
- * suburbs/postcodes). Resolution is now a two-stage pipeline:
+ * ADDRESS RESOLUTION POLICY (issue #279 — inverted from #278): the address
+ * text comes from parsed bills, so it is noisy (label prefixes, glued ICP,
+ * newlines, unit prefixes, missing suburbs/postcodes). Resolution ALWAYS picks
+ * the closest available completion and never sends a non-empty result to manual
+ * review. Two facts justify substituting a neighbouring address for the one the
+ * user entered:
+ *   - Plans are a function of POSTCODE, not street address. Live measurement
+ *     shows different addresses sharing a postcode return the identical
+ *     Powerswitch electricity_location (1010 → 267 for Queen/Albert/Emily;
+ *     6021 → 386 for Wallace/Bidwill; 0626 → 268 for Verran/Salisbury). So a
+ *     same-postcode substitution yields identical plans and is harmless.
+ *   - There is no human review path. `needs_review` degraded users to generic
+ *     seeded plans rather than their real ones; the owner eliminated that.
+ * The pipeline:
  *   1. QUERY LADDER — `sanitiseAddress` does one normalisation pass (whitespace,
  *      label/ICP/country stripping), then `addressQueryVariants` builds up to 4
- *      faithful-to-loose query strings. `resolveUserAddress` tries them in
- *      order, one live POST each, stopping at the first non-empty completion
- *      set. This recovers the cases that previously returned zero completions
- *      (newlines, glued ICP, unit prefix hiding the street).
- *   2. MATCH SCORING — `pickBestMatch` scores every completion via
- *      `scoreCompletion` (postcode-anchored; street name + number are hard
- *      rejects). This kills the silent-wrong picks (a different street/city)
- *      and recovers the postcode-typo and unit-only (location-equivalent)
- *      cases. Powerswitch prices by network location, so any unit at the same
- *      street number + postcode yields the correct plans — a unit-only tie is
- *      resolved, not reviewed.
+ *      faithful-to-loose query strings. `resolveUserAddress` iterates them in
+ *      order, one live POST each, and HUNTS for an `exact`/`postcode`-tier
+ *      resolution (postcode agreement). The first variant that yields one wins
+ *      and stops the ladder; if none ever does, the FIRST variant's `fallback`
+ *      pick is kept (an earlier, more faithful query's fallback beats a later,
+ *      looser one's). Only an address whose every variant returns zero
+ *      completions ends in `needs_review`.
+ *   2. MATCH SCORING — `pickBestMatch` ranks every completion via
+ *      `scoreCompletion` (postcode-anchored; postcode agreement dominates every
+ *      other signal combined) and resolves to the top-ranked one. The resolved
+ *     outcome carries a `confidence` tier: `exact` (street + numberBase +
+ *     postcode all agree), `postcode` (postcode agrees, street/number do not),
+ *     `crossed` (both postcodes known and DIFFERENT — we knowingly picked
+ *     another network area), or `unverified` (a postcode missing on one side,
+ *     so nothing could be checked). The last two are counted SEPARATELY via
+ *     `console.warn`, because a known divergence and an unverifiable pick are
+ *     different failure modes and burying one in the other would make the
+ *     accepted risk of this policy unmeasurable.
+ *   The parsing work in `parseAddressParts` (directional suffixes, route
+ *   numbers, the mount/mt boundary rule, the stray-comma fold) is unchanged —
+ *   it now drives ranking quality instead of rejection, and is still
+ *   load-bearing.
  */
 
 import { updatePowerswitchLocation } from '../models/users';
@@ -100,10 +122,27 @@ export interface PowerswitchCompletion {
   readonly v: number;
 }
 
+/**
+ * Confidence tier of a resolved address (issue #279). Drives observability.
+ *
+ * The two lower tiers are deliberately SEPARATE because they are different
+ * failure modes and need counting apart:
+ *   - `crossed`    — both postcodes known and DIFFERENT. We knowingly picked
+ *     another postcode, so the postcode→location invariant does NOT hold and
+ *     the user may be priced on the wrong network. Highest-severity signal.
+ *   - `unverified` — a postcode is missing on one or both sides, so there was
+ *     nothing to check. Not a known divergence, just an unverifiable pick.
+ * Collapsing these into one tier would bury the genuinely risky case among the
+ * merely unverifiable ones (a bill with no postcode resolves correctly far more
+ * often than not), which would make the accepted risk of the always-resolve
+ * policy unmeasurable — the one condition it was accepted on.
+ */
+export type ResolveConfidence = 'exact' | 'postcode' | 'crossed' | 'unverified';
+
 /** Discriminated outcome of a resolve attempt. Callers route on `status`. */
 export type ResolveAddressOutcome =
-  | { readonly status: 'resolved'; readonly pxid: string; readonly locationId: string | null }
-  | { readonly status: 'needs_review'; readonly reason: 'zero_match' | 'ambiguous'; readonly completions: number }
+  | { readonly status: 'resolved'; readonly pxid: string; readonly locationId: string | null; readonly confidence: ResolveConfidence }
+  | { readonly status: 'needs_review'; readonly reason: 'zero_match'; readonly completions: number }
   | { readonly status: 'drift'; readonly reason: string }
   | { readonly status: 'disabled' }
   | { readonly status: 'error'; readonly reason: string };
@@ -115,9 +154,14 @@ export function isPowerswitchLive(env: PowerswitchSessionEnv): boolean {
 
 /**
  * Resolve a user's address string to a pxid (+ location id) and persist both
- * on the user row. Returns a typed outcome — callers route `needs_review` /
- * `drift` to the manual-review path. Never persists a guess. ICP is never
- * submitted. One cookie-keyed session threads autocomplete → household.
+ * on the user row (issue #279). ALWAYS resolves to the closest available
+ * completion when any variant returns one — never sends a non-empty result to
+ * review. The resolved `confidence` tier tells callers how trustworthy the
+ * postcode match is (`exact`/`postcode` keep the postcode→location invariant;
+ * `crossed`/`unverified` may not, and are warned on). Only a
+ * zero-completion ladder, a drift, or an error short of resolving yields a
+ * non-resolved outcome. ICP is never submitted. One cookie-keyed session
+ * threads autocomplete → household.
  */
 export async function resolveUserAddress(
   env: PowerswitchSessionEnv,
@@ -137,32 +181,39 @@ export async function resolveUserAddress(
   if (!sanitised) {
     return { status: 'needs_review', reason: 'zero_match', completions: 0 };
   }
-  // A PO Box is a postal facility, not a metered supply address — we already
-  // know it can never resolve, so short-circuit before any live request. Don't
-  // spend one of Powerswitch's shared-resource calls to learn what we know.
+  // PO Box short-circuit. This survives the #279 always-resolve policy for a
+  // specific reason: a PO Box postcode is a POSTAL-FACILITY range, not a
+  // physical distribution-network area. The postcode→location invariant that
+  // justifies substituting a neighbouring address (same postcode → same
+  // electricity_location → same plans) does NOT hold for postal postcodes, so
+  // resolving a PO Box to a neighbouring postal box would price the wrong
+  // network entirely. We know up front it can never resolve to a metered
+  // supply, so short-circuit before any live request — don't spend one of
+  // Powerswitch's shared-resource calls to learn what we know.
   if (isPoBox(sanitised)) {
     return { status: 'needs_review', reason: 'zero_match', completions: 0 };
   }
 
   const jar = createCookieJar();
 
-  // 1. Query ladder (issue #278): sanitise → variants → first variant that
-  //    RESOLVES. Each variant is one live POST to the autocomplete server-
-  //    action, tried in order (most faithful first). A drift/error aborts the
-  //    ladder at once — do not retry a drifted endpoint with a different query.
+  // 1. Query ladder (issue #279): iterate ALL variants in order (most faithful
+  //    first), one live POST each, and HUNT for a postcode-tier resolution.
   //    The match always runs against the SANITISED FULL address; the variant is
-  //    only how we asked the question.
+  //    only how we asked the question. A drift/error aborts the ladder at once
+  //    — do not retry a drifted endpoint with a different query.
   //
-  //    Advancing on `zero_match` rather than "no completions at all" is
-  //    load-bearing: a unit prefix makes Addressfinder return a non-empty set of
-  //    the WRONG street ("Flat 2, 14 Wallace Street" → six completions, none on
-  //    Wallace Street), which the scoring rejects wholesale. Stopping at the
-  //    first non-empty set would strand that address in manual review even
-  //    though the unit-stripped variant matches it exactly. An `ambiguous`
-  //    result, by contrast, is terminal (defect 4): only `zero_match` advances.
+  //    For each variant with a non-empty completion set, run pickBestMatch:
+  //      - confidence `exact` or `postcode` → take it and STOP. Postcode
+  //        agreement is what keeps the postcode→location invariant intact, so a
+  //        postcode-tier hit is terminal and the best we can do.
+  //      - confidence `fallback` → keep it as best-so-far ONLY if it is the
+  //        first one seen, then continue. An earlier, more faithful query's
+  //        fallback beats a later, looser one's, so a later fallback never
+  //        overrides an earlier one.
+  //    After all variants, resolve using best-so-far. If no variant ever
+  //    returned a completion, the address is genuinely unresolvable.
   const variants = addressQueryVariants(sanitised);
-  let match: ResolveAddressOutcome | null = null;
-  let winningVariant = -1;
+  let best: { pxid: string; confidence: ResolveConfidence; chosenAddress: string; variant: number } | null = null;
   for (let i = 0; i < variants.length; i++) {
     if (i > 0) await delay(REQUEST_DELAY_MS); // etiquette BETWEEN attempts
     const outcome = await fetchCompletions(variants[i]!, jar);
@@ -170,31 +221,21 @@ export async function resolveUserAddress(
     if (outcome.status === 'error') return { status: 'error', reason: outcome.reason };
     if (outcome.completions.length === 0) continue;
 
-    const attempt = pickBestMatch(outcome.completions, sanitised);
-    // Keep the FIRST non-empty variant's outcome as the reported fallback, so a
-    // ladder that never resolves still reports the most faithful query's counts.
-    if (match === null) match = attempt;
-    if (attempt.status === 'resolved') {
-      match = attempt;
-      winningVariant = i;
+    const { completion, confidence } = rankAndPick(outcome.completions, sanitised);
+    if (confidence === 'exact' || confidence === 'postcode') {
+      best = { pxid: completion.pxid, confidence, chosenAddress: completion.a, variant: i };
       break;
     }
-    // Defect 4: an `ambiguous` outcome is terminal. Ambiguous means the faithful
-    // query could not separate two candidates; a looser query that happens to
-    // return only one of them would then resolve confidently to the WRONG door
-    // (Addressfinder returns a bounded top-N, so a broader query can push the
-    // rival out of the window). Only `zero_match` (nothing survived) may advance.
-    if (attempt.status === 'needs_review' && attempt.reason === 'ambiguous') {
-      return attempt;
+    // fallback: keep the FIRST variant's pick; a later, looser query's fallback
+    // must not override an earlier, more faithful one.
+    if (best === null) {
+      best = { pxid: completion.pxid, confidence, chosenAddress: completion.a, variant: i };
     }
   }
-  if (match === null) {
+  if (best === null) {
     return { status: 'needs_review', reason: 'zero_match', completions: 0 };
   }
-  if (match.status !== 'resolved') {
-    return match;
-  }
-  const { pxid } = match;
+  const { pxid, variant, confidence, chosenAddress } = best;
 
   // 3. Resolve the pxid → internal location id via POST /questionnaire/household
   //    (returns result.electricity_location.id). Etiquette: a minimum inter-
@@ -204,7 +245,9 @@ export async function resolveUserAddress(
   await delay(REQUEST_DELAY_MS);
   const locationId = await resolveLocationId(pxid, jar);
 
-  // 4. Persist on the user row.
+  // 4. Persist on the user row. Writes only powerswitch_pxid +
+  //    powerswitch_location_id — NEVER installation_address (the bill's address
+  //    is the source of truth; a substituted completion must not overwrite it).
   await updatePowerswitchLocation(env.DB, userId, { pxid, locationId });
 
   console.log(JSON.stringify({
@@ -212,11 +255,33 @@ export async function resolveUserAddress(
     userId,
     pxid,
     locationId,
-    variant: winningVariant,
+    confidence,
+    chosenAddress,
+    variant,
     timestamp: new Date().toISOString(),
   }));
 
-  return { status: 'resolved', pxid, locationId };
+  // A sub-postcode resolution may return plans for the wrong network area. That
+  // cost was accepted by the owner on the condition it be MEASURABLE, never
+  // silent — so warn (not log) with both postcodes. `console.warn` is permitted
+  // by the eslint config. The two tiers are emitted under DIFFERENT type names
+  // so they can be alerted on separately: `crossed` is a known divergence (we
+  // had both postcodes and picked a different one), `unverified` merely means
+  // there was no postcode to check against.
+  if (confidence === 'crossed' || confidence === 'unverified') {
+    console.warn(JSON.stringify({
+      type: confidence === 'crossed'
+        ? 'powerswitch_address_postcode_crossed'
+        : 'powerswitch_address_postcode_unverified',
+      userId,
+      userPostcode: parseAddressParts(sanitised).postcode,
+      chosenPostcode: parseAddressParts(chosenAddress).postcode,
+      chosenAddress,
+      variant,
+    }));
+  }
+
+  return { status: 'resolved', pxid, locationId, confidence };
 }
 
 /** Common NZ street-suffix abbreviations, expanded for comparison only. */
@@ -486,93 +551,146 @@ function isPoBox(s: string): boolean {
 }
 
 /**
- * Score a candidate completion against the user's address. Returns null for a
- * hard reject (a PO Box on either side, different street, different number, or a
- * postcode mismatch the suburb AND city cannot redeem), else a score where
- * higher is better. Postcode-anchored — the postcode is what drives plan
- * accuracy. A postcode mismatch WITH an agreeing suburb AND city is tolerated
- * (a user typo, e.g. "1011" for "1010"); an absent city counts as agreement.
+ * Iterative Levenshtein edit distance (issue #279). Two rolling rows, O(m·n)
+ * time, O(min(m,n)) space. Hand-written — no new dependency. Used only to nudge
+ * the ranking of NON-equal street names; an exact street match is worth far more
+ * (see scoreCompletion), so this never decides a postcode-tier tie on its own.
  */
-export function scoreCompletion(userAddress: string, candidate: string): number | null {
-  // A PO Box is never a metered supply address — reject either side outright.
-  if (isPoBox(userAddress) || isPoBox(candidate)) return null;
+export function levenshtein(a: string, b: string): number {
+  const m = a.length;
+  const n = b.length;
+  if (m === 0) return n;
+  if (n === 0) return m;
+  // Keep the shorter string as the inner dimension so the row arrays are small.
+  if (n > m) return levenshtein(b, a);
+  const prev = new Array<number>(n + 1);
+  const curr = new Array<number>(n + 1);
+  for (let j = 0; j <= n; j++) prev[j] = j;
+  // Both rows are fully populated before any read (prev above; curr[0] then
+  // curr[j] left-to-right below), so every indexed access is defined — the `!`
+  // assertions document that invariant for the noUncheckedIndexedAccess check.
+  for (let i = 1; i <= m; i++) {
+    curr[0] = i;
+    for (let j = 1; j <= n; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+      curr[j] = Math.min(prev[j]! + 1, curr[j - 1]! + 1, prev[j - 1]! + cost);
+    }
+    for (let j = 0; j <= n; j++) prev[j] = curr[j]!;
+  }
+  return prev[n]!;
+}
 
+/**
+ * Normalised street-name similarity in [0,1]: `1 - distance / max(lenA, lenB)`,
+ * clamped to [0,1], and 0 when either side has no street name. Both inputs are
+ * already-normalised street names (lowercased, abbreviations expanded).
+ */
+export function streetSimilarity(a: string | null, b: string | null): number {
+  if (!a || !b) return 0;
+  const max = Math.max(a.length, b.length);
+  if (max === 0) return 0;
+  const sim = 1 - levenshtein(a, b) / max;
+  return sim < 0 ? 0 : sim > 1 ? 1 : sim;
+}
+
+/**
+ * Score a candidate completion against the user's address. ALWAYS returns a
+ * number (issue #279 — never rejects); higher is better. Postcode dominates
+ * every other signal combined: the postcode is what drives plan accuracy, so
+ * postcode agreement is worth +1000 (more than street+number+unit+suburb+city
+ * can sum to) and a postcode mismatch is a -1000 penalty. A missing postcode on
+ * either side is NEUTRAL (0), not a penalty — there is nothing to disagree with.
+ *
+ *   postcode both present & equal      +1000
+ *   postcode both present & different  -1000
+ *   postcode absent on either side        0
+ *   street name equal                   +200
+ *   street name not equal               + round(similarity * 150)
+ *   numberBase equal                     +80
+ *   number equal as written (incl. 82A)  +40
+ *   unit equal (both null = equal)       +30
+ *   suburb both present & equal          +40
+ *   city both present & equal            +20
+ */
+export function scoreCompletion(userAddress: string, candidate: string): number {
   const u = parseAddressParts(userAddress);
   const c = parseAddressParts(candidate);
 
-  if (u.streetName && c.streetName && u.streetName !== c.streetName) return null;
-  if (u.numberBase !== null && c.numberBase !== null && u.numberBase !== c.numberBase) return null;
-  if (u.postcode && c.postcode && u.postcode !== c.postcode) {
-    // Postcode-mismatch redemption: the suburbs must agree (both present and
-    // equal) AND the cities must agree, an absent city counting as agreement.
-    // NZ suburb names repeat across cities (Richmond → Nelson/Christchurch), so
-    // a suburb-only check resolved to the wrong city. The absent-SUBURB case is
-    // intentionally NOT redeemed: with no suburb there is nothing to anchor the
-    // typo to the right locality.
-    //
-    // Note the absent-city allowance is near-dead in practice, and deliberately
-    // kept only as a guard: when a completion omits its city, the positional
-    // parse puts its suburb into `city` and leaves `suburb` null, so `suburbOk`
-    // is already false and we reject before the city is consulted. It fires only
-    // for a shape where both sides carry a suburb and just one carries a city.
-    const suburbOk = !!u.suburb && !!c.suburb && u.suburb === c.suburb;
-    const cityOk = !u.city || !c.city || u.city === c.city;
-    if (!suburbOk || !cityOk) return null;
-  }
-
   let score = 0;
-  if (u.postcode && c.postcode && u.postcode === c.postcode) score += 100;
-  if (u.suburb && c.suburb && u.suburb === c.suburb) score += 40;
+  // A PO Box CANDIDATE for a street-address user is never the right answer: a
+  // postal postcode is not a distribution-network area, so it breaks the
+  // postcode→location invariant the always-resolve policy rests on. Penalise
+  // below the postcode weight so it can never outrank a real address, rather
+  // than rejecting — this function must always return a number. (A PO Box on
+  // the USER side never reaches here; resolveUserAddress short-circuits it.)
+  if (isPoBox(candidate) && !isPoBox(userAddress)) score -= 2000;
+  if (u.postcode && c.postcode) {
+    score += u.postcode === c.postcode ? 1000 : -1000;
+  }
+  if (u.streetName && c.streetName) {
+    score += u.streetName === c.streetName
+      ? 200
+      : Math.round(streetSimilarity(u.streetName, c.streetName) * 150);
+  }
+  if (u.numberBase !== null && c.numberBase !== null && u.numberBase === c.numberBase) score += 80;
+  if (u.number && c.number && u.number === c.number) score += 40;
   if (u.unit === c.unit) score += 30; // both null counts as equal
-  // An exact street-number match AS WRITTEN (including the letter on "82A") is
-  // strong evidence. The bonus clears RESOLVE_MARGIN so an exact lettered number
-  // wins outright over its bare neighbours — regression: a real Meridian bill's
-  // "82A Verran Rd" was wrongly sent to manual review when it only led by +10.
-  if (u.number && c.number && u.number === c.number) score += 50;
-  if (u.unit === null && c.unit === null) score += 5;
+  if (u.suburb && c.suburb && u.suburb === c.suburb) score += 40;
+  if (u.city && c.city && u.city === c.city) score += 20;
   return score;
 }
 
-/** Whether two completions are the same door differing only by unit. */
-function locationEquivalent(a: PowerswitchCompletion, b: PowerswitchCompletion): boolean {
-  const pa = parseAddressParts(a.a);
-  const pb = parseAddressParts(b.a);
-  return (
-    pa.number === pb.number &&
-    pa.streetName === pb.streetName &&
-    pa.postcode === pb.postcode &&
-    pa.suburb === pb.suburb &&
-    pa.city === pb.city
-  );
-}
-
 /**
- * Minimum-evidence floor a candidate must clear before it may RESOLVE (defect
- * 3). Both sides need an equal street name AND an equal street-number base, and
- * at least one locality anchor must agree (postcode, suburb, or city — each
- * counted only when present on both sides). A sparse address that disables every
- * hard reject no longer resolves a lone survivor on name+number alone.
+ * Confidence tier of a chosen completion vs the user's address (issue #279):
+ *   - exact    — postcode equal AND street name equal AND numberBase equal
+ *   - postcode — postcode equal, but not exact
+ *   - crossed    — both postcodes present and NOT equal
+ *   - unverified — a postcode is absent on one or both sides
+ * The postcode→location invariant holds for exact/postcode only; `crossed`
+ * departs from it knowingly and `unverified` cannot confirm it.
  */
-function meetsFloor(u: AddressParts, c: AddressParts): boolean {
-  if (!u.streetName || !c.streetName || u.streetName !== c.streetName) return false;
-  if (u.numberBase === null || c.numberBase === null || u.numberBase !== c.numberBase) return false;
-  const postcodeAnchor = !!u.postcode && !!c.postcode && u.postcode === c.postcode;
-  const suburbAnchor = !!u.suburb && !!c.suburb && u.suburb === c.suburb;
-  const cityAnchor = !!u.city && !!c.city && u.city === c.city;
-  return postcodeAnchor || suburbAnchor || cityAnchor;
+function confidenceTier(u: AddressParts, c: AddressParts): ResolveConfidence {
+  // No postcode on one or both sides: nothing to compare, so this is unverified
+  // rather than a known divergence. Kept distinct from `crossed` so the two can
+  // be counted separately in logs.
+  if (!u.postcode || !c.postcode) return 'unverified';
+  if (u.postcode !== c.postcode) return 'crossed';
+  const streetEqual = !!u.streetName && !!c.streetName && u.streetName === c.streetName;
+  const numberBaseEqual = u.numberBase !== null && c.numberBase !== null && u.numberBase === c.numberBase;
+  return streetEqual && numberBaseEqual ? 'exact' : 'postcode';
 }
 
-/** Score gap at which the best completion resolves outright over the runner-up. */
-const RESOLVE_MARGIN = 20;
+/**
+ * Rank every completion and return the top one plus its confidence tier
+ * (issue #279). The user address is sanitised first. Ties break by the
+ * completion's original array order — Addressfinder's own ranking is the
+ * tiebreaker, so a strict `>` (first-seen wins) is intentional.
+ */
+function rankAndPick(
+  completions: ReadonlyArray<PowerswitchCompletion>,
+  userAddress: string
+): { completion: PowerswitchCompletion; confidence: ResolveConfidence } {
+  const user = sanitiseAddress(userAddress);
+  const userParts = parseAddressParts(user);
+  let bestIdx = 0;
+  let bestScore = -Infinity;
+  for (let i = 0; i < completions.length; i++) {
+    const s = scoreCompletion(user, completions[i]!.a);
+    if (s > bestScore) {
+      bestScore = s;
+      bestIdx = i;
+    }
+  }
+  const completion = completions[bestIdx]!;
+  return { completion, confidence: confidenceTier(userParts, parseAddressParts(completion.a)) };
+}
 
 /**
- * Pick the best completion via postcode-anchored scoring (issue #278). The user
- * address is sanitised first; every completion is scored and hard rejects (a
- * different street/number, or an unredeemed postcode mismatch) are dropped. A
- * candidate may only RESOLVE once it also clears the minimum-evidence floor
- * (defect 3). A clear winner resolves; a tie among units at the same street
- * number + postcode resolves too (Powerswitch prices by network location);
- * anything genuinely ambiguous goes to manual review.
+ * Pick the best completion via postcode-anchored ranking (issue #279). ALWAYS
+ * resolves for a non-empty completion array — there is no longer a reject path.
+ * The only `needs_review` left is an empty array. The resolved outcome carries a
+ * `confidence` tier so callers (and observability) can tell a same-postcode
+ * resolution from one that crossed a postcode boundary or could not check.
  */
 export function pickBestMatch(
   completions: ReadonlyArray<PowerswitchCompletion>,
@@ -581,57 +699,8 @@ export function pickBestMatch(
   if (completions.length === 0) {
     return { status: 'needs_review', reason: 'zero_match', completions: 0 };
   }
-  const user = sanitiseAddress(userAddress);
-  const userParts = parseAddressParts(user);
-
-  const scored: Array<{ c: PowerswitchCompletion; s: number }> = [];
-  for (const c of completions) {
-    const s = scoreCompletion(user, c.a);
-    if (s !== null) scored.push({ c, s });
-  }
-  if (scored.length === 0) {
-    return { status: 'needs_review', reason: 'zero_match', completions: completions.length };
-  }
-  // Defect 3: only floor-clearing candidates may resolve. If none clear it, the
-  // outcome is `ambiguous` (some candidate survived the hard rejects but none
-  // carried enough evidence) — never a silent wrong-door resolve.
-  //
-  // `ambiguous` rather than `zero_match` here is a deliberate trade of recall
-  // for safety: the ladder treats ambiguous as terminal, so an address whose
-  // first variant returns a near-miss stops instead of trying a looser query
-  // that might have matched. Reaching for that extra recall would mean letting
-  // a loosened query resolve what the faithful one declined to call, which is
-  // the wrong-door path this whole module exists to close.
-  const floored = scored.filter((x) => meetsFloor(userParts, parseAddressParts(x.c.a)));
-  if (floored.length === 0) {
-    return { status: 'needs_review', reason: 'ambiguous', completions: completions.length };
-  }
-  if (floored.length === 1) {
-    return { status: 'resolved', pxid: floored[0]!.c.pxid, locationId: null };
-  }
-
-  floored.sort((a, b) => b.s - a.s);
-  const best = floored[0]!;
-  const runnerUp = floored[1]!;
-  if (best.s - runnerUp.s >= RESOLVE_MARGIN) {
-    return { status: 'resolved', pxid: best.c.pxid, locationId: null };
-  }
-
-  // Top scores within the margin: if every tied candidate is the same door
-  // differing only by unit, resolve the first (location-equivalent; E-chch).
-  const topScore = best.s;
-  const tied = floored.filter((x) => x.s === topScore);
-  if (tied.length > 1 && tied.every((x) => locationEquivalent(x.c, best.c))) {
-    const chosen = tied[0]!.c;
-    console.log(JSON.stringify({
-      type: 'powerswitch_address_location_equivalent',
-      unitCount: tied.length,
-      chosen: chosen.a,
-    }));
-    return { status: 'resolved', pxid: chosen.pxid, locationId: null };
-  }
-
-  return { status: 'needs_review', reason: 'ambiguous', completions: completions.length };
+  const { completion, confidence } = rankAndPick(completions, userAddress);
+  return { status: 'resolved', pxid: completion.pxid, locationId: null, confidence };
 }
 
 // ---------------------------------------------------------------------------
