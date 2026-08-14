@@ -83,6 +83,14 @@ POWERSWITCH_LIVE = "true"
 # real user can reach, and set it back immediately after (docs/TESTING_RUN.md).
 FLOW_TEST_MODE = "false"
 
+# TEMPORARY testing flag — disables the Gmail "Already imported (previous
+# scans)" dedup so a re-scan re-ingests bills a previous scan already stored.
+# Every scan then re-creates bill rows, re-runs the parser and re-enqueues a
+# comparison for the same mail, so this must be "false" for any deployment a
+# real user can reach. Set "true" only for a solo operator re-run, and set it
+# back immediately after. See services/emailPipeline.ts.
+BILL_DEDUP_DISABLED = "true"
+
 # Durable Object used by src/middleware/rateLimit.ts for atomic per-key rate
 # limiting.  One DO instance per rate-limit key serialises read-modify-write
 # cycles that would race under KV.

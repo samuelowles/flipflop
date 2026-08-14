@@ -18,6 +18,15 @@ export interface GmailPollingEnv extends EncryptionEnv {
   readonly PARSE_QUEUE: Queue<{ billId: string; r2Key: string; userId: string }>;
   readonly GMAIL_CLIENT_ID: string;
   readonly GMAIL_CLIENT_SECRET: string;
+  /**
+   * TEMPORARY (testing only, wrangler.toml default "false"). When "true", the
+   * source_message_id dedup below is skipped so a re-scan re-ingests bills the
+   * previous scan already imported — the "Already imported (previous scans)"
+   * counter stays at 0. Must be "false" for any deployment real users reach:
+   * every scan would re-create bill rows, re-run the parser and re-enqueue a
+   * comparison for mail already processed.
+   */
+  readonly BILL_DEDUP_DISABLED?: string;
 }
 
 const SUBJECT_PATTERN = /\b(bill|invoice|statement|account)\b/i;
@@ -353,8 +362,18 @@ export async function processMessage(
       // path in routes/messaging.ts + getBillBySourceMessageId). The poll
       // cursor is date-granular and crons run twice daily, so without this
       // every bill was processed twice → duplicate rows + duplicate parse jobs.
-      const sourceMessageId = `gmail_${msg.messageId}_${partId}`;
-      const existing = await getBillBySourceMessageId(env.DB, sourceMessageId);
+      //
+      // TEMPORARY test bypass: bills.source_message_id carries a UNIQUE index
+      // (idx_bills_source_message_id), so skipping the lookup alone would just
+      // move the duplicate from a clean skip to an INSERT constraint failure.
+      // The bypass therefore also salts the id, making each re-scan a new row.
+      const dedupDisabled = env.BILL_DEDUP_DISABLED === 'true';
+      const sourceMessageId = dedupDisabled
+        ? `gmail_${msg.messageId}_${partId}_rescan${Date.now()}`
+        : `gmail_${msg.messageId}_${partId}`;
+      const existing = dedupDisabled
+        ? null
+        : await getBillBySourceMessageId(env.DB, sourceMessageId);
       if (existing) {
         duplicatesSkipped++;
         console.log(JSON.stringify({

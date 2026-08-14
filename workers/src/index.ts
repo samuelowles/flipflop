@@ -465,6 +465,7 @@ async function scheduled(
       GMAIL_CLIENT_ID: string;
       GMAIL_CLIENT_SECRET: string;
       ENCRYPTION_KEY: string;
+      BILL_DEDUP_DISABLED?: string;
     });
     return;
   }
@@ -479,6 +480,7 @@ async function scheduled(
       GMAIL_CLIENT_ID: string;
       GMAIL_CLIENT_SECRET: string;
       ENCRYPTION_KEY: string;
+      BILL_DEDUP_DISABLED?: string;
     });
     return;
   }

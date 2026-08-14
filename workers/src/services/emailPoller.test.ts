@@ -1184,6 +1184,57 @@ describe('Issue #227 — Gmail bill discovery overhaul', () => {
     logSpy.mockRestore();
   });
 
+  // TEMPORARY test flag — BILL_DEDUP_DISABLED='true' re-ingests a message the
+  // previous scan already stored. The salted sourceMessageId matters: without
+  // it the re-insert would hit idx_bills_source_message_id (UNIQUE) instead of
+  // creating a row, so the bypass would fail rather than re-import.
+  it('re-ingests an already-imported message when BILL_DEDUP_DISABLED is true', async () => {
+    const env = { ...makeEnv({ oauthRows: userRow() }), BILL_DEDUP_DISABLED: 'true' };
+
+    vi.mocked(getAllRetailersForSearch).mockResolvedValue([
+      { id: 'ret-001', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+    ]);
+    vi.mocked(searchMessages).mockResolvedValue({
+      messages: [{ id: 'msg_001' }],
+      resultSizeEstimate: 1,
+    });
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_001',
+      threadId: 'thread_1',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'Contact Energy <bills@contactenergy.co.nz>' },
+          { name: 'Subject', value: 'Your monthly bill is ready' },
+        ],
+        parts: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'bill.pdf',
+            body: { attachmentId: 'att_001', size: 50000 },
+            partId: '0',
+          },
+        ],
+        mimeType: 'multipart/mixed',
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+    vi.mocked(createBill).mockResolvedValue(billMock);
+    // The bill IS already in D1 — the bypass must not even ask.
+    vi.mocked(getBillBySourceMessageId).mockResolvedValue(billMock);
+
+    await pollAllUsers(env);
+
+    expect(getBillBySourceMessageId).not.toHaveBeenCalled();
+    expect(createBill).toHaveBeenCalledTimes(1);
+    expect(createBill).toHaveBeenCalledWith(
+      env.DB,
+      expect.objectContaining({
+        sourceMessageId: expect.stringMatching(/^gmail_msg_001_0_rescan\d+$/),
+      })
+    );
+  });
+
   // FIX 2 — recursive MIME walk: a PDF nested two levels deep under
   // multipart/mixed → multipart/alternative is found.
   it('finds a PDF nested two levels deep in multipart/mixed', async () => {

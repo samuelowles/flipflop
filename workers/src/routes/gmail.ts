@@ -381,6 +381,7 @@ export async function gmailCallback(c: Context): Promise<Response> {
         GMAIL_CLIENT_ID: clientId,
         GMAIL_CLIENT_SECRET: clientSecret,
         ENCRYPTION_KEY: encryptionKey,
+        BILL_DEDUP_DISABLED: c.env.BILL_DEDUP_DISABLED as string | undefined,
       };
 
       console.log(JSON.stringify({
