@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { pollAllUsers, pollSingleUser } from './emailPoller';
-import { buildLinkOnlySearchQuery, buildSearchQuery, matchRetailer, processMessage, LINK_ONLY_RETAILER_NAMES } from './emailPipeline';
+import { buildLinkOnlySearchQuery, buildSearchQuery, matchRetailer, processMessage, isForwarded, LINK_ONLY_RETAILER_NAMES } from './emailPipeline';
 
 const mockFetch = vi.fn();
 globalThis.fetch = mockFetch;
@@ -1476,13 +1476,14 @@ describe('Issue #227 — Gmail bill discovery overhaul', () => {
   });
 });
 
-// ---------- Forwarded-bill discovery (bill-discovery-2036) ----------
+// ---------- Direct-from-retailer ingestion (no forwarded bills) ----------
 //
-// Forwarding a bill to yourself is a natural onboarding action: the From header
-// becomes the forwarder's own address (so `from:` never matches) while the
-// Subject still names the retailer. These cover the three fixes: subject:
-// search terms (buildSearchQuery), the Subject fallback retailer match
-// (processMessage), and Mercury's registered billing domain (migration 0019).
+// Ingest ONLY bills sent directly by the retailer — never forwarded copies.
+// The From header is the sole retailer signal: buildSearchQuery emits from:
+// terms only (no subject: union), and processMessage rejects forwarded mail
+// (Fwd:/FW: Subject or X-Forwarded-* header) and any unmatched sender. These
+// cover the search-query shape, the forwarded guard, and Mercury's registered
+// billing domain (migration 0019).
 
 const MERCURY_ID = '2951d6b6-436e-474b-8ea9-7fb5092cc069';
 const MERCURY_ENTRY = {
@@ -1491,7 +1492,7 @@ const MERCURY_ENTRY = {
   emailDomains: ['mercury.co.nz', 'mercuryonline.co.nz'],
 };
 
-describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
+describe('Direct-from-retailer ingestion (no forwarded bills)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockFetch.mockReset();
@@ -1499,9 +1500,10 @@ describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
     vi.mocked(getBillBySourceMessageId).mockResolvedValue(null);
   });
 
-  // FIX 1a — buildSearchQuery emits both a from: and a subject: term for the
-  // same retailer, both inside the brace group, with has:attachment outside it.
-  it('buildSearchQuery emits from: and subject: terms inside the group, has:attachment outside', () => {
+  // buildSearchQuery emits ONLY from: terms inside the group (every retailer
+  // domain AND name keyword), has:attachment outside it, and no subject: term
+  // anywhere — forwarded bills are intentionally not discoverable via subject.
+  it('buildSearchQuery emits only from: terms inside the group, has:attachment outside (no subject:)', () => {
     const retailers = [
       { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
       MERCURY_ENTRY,
@@ -1512,21 +1514,20 @@ describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
     const braceGroup = query.slice(1, closeIdx);
     const afterGroup = query.slice(closeIdx + 1);
 
-    // Same retailer (Mercury, single-word): both a from: AND a subject: term.
-    expect(braceGroup).toContain('from:Mercury');
-    expect(braceGroup).toContain('subject:Mercury');
-    // Multi-word name → quoted from: AND subject: phrase.
+    // Every retailer still present as a from: term (domains + name keywords).
+    expect(braceGroup).toContain('from:contactenergy.co.nz');
     expect(braceGroup).toContain('from:"Contact Energy"');
-    expect(braceGroup).toContain('subject:"Contact Energy"');
+    expect(braceGroup).toContain('from:mercury.co.nz');
+    expect(braceGroup).toContain('from:Mercury');
+    // No subject: terms anywhere — forwarded bills are intentionally not
+    // discoverable via the subject.
+    expect(query).not.toMatch(/subject:/i);
     // has:attachment lives OUTSIDE the brace group.
     expect(braceGroup).not.toContain('has:attachment');
     expect(afterGroup).toContain('has:attachment');
-    // No generic subject words (would pull in bank/insurance statements).
-    expect(braceGroup).not.toMatch(/subject:bill\b/i);
-    expect(braceGroup).not.toMatch(/subject:statement\b/i);
   });
 
-  // FIX 1a — after: stays OUTSIDE the group and is slash-formatted YYYY/MM/DD.
+  // after: stays OUTSIDE the group and is slash-formatted YYYY/MM/DD.
   it('buildSearchQuery places after: outside the group as YYYY/MM/DD', () => {
     const query = buildSearchQuery([MERCURY_ENTRY], '2026-08-15');
 
@@ -1536,17 +1537,16 @@ describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
     expect(query).toMatch(/} has:attachment after:\d{4}\/\d{2}\/\d{2}$/);
   });
 
-  // FIX 2 — matchRetailer matches Mercury's real billing sender domain.
+  // matchRetailer matches Mercury's real billing sender domain.
   it('matchRetailer matches Mercury for onlinebills@mercuryonline.co.nz', () => {
     expect(
       matchRetailer([MERCURY_ENTRY], 'Mercury <onlinebills@mercuryonline.co.nz>')
     ).toBe(MERCURY_ID);
   });
 
-  // FIX 1b + 1a end to end — a forwarded bill (unknown From, retailer Subject,
-  // one PDF) is ingested, and the created bill carries Mercury's retailer id.
-  // This is the exact scenario that produced the zero-bill scan.
-  it('ingests a forwarded bill and tags it with the matched retailer id', async () => {
+  // A retailer-lookalike forward survives the sender match (From is a real
+  // retailer domain), so the forwarded guard must reject it on the Subject.
+  it('skips a retailer-from message whose subject is "Fwd: …" as skipped_forwarded', async () => {
     const env = makeEnv();
 
     vi.mocked(getMessage).mockResolvedValue({
@@ -1555,7 +1555,7 @@ describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
       internalDate: '1715644800000',
       payload: {
         headers: [
-          { name: 'From', value: 'someone@gmail.com' },
+          { name: 'From', value: 'Mercury <onlinebills@mercuryonline.co.nz>' },
           { name: 'Subject', value: 'Fwd: Your Mercury Online Bill' },
         ],
         parts: [
@@ -1570,31 +1570,6 @@ describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
       },
     });
     vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
-    vi.mocked(createBill).mockResolvedValue({
-      id: 'bill-fwd',
-      userId: 'user-1',
-      retailerId: MERCURY_ID,
-      planName: null,
-      meterType: null,
-      periodStart: null,
-      periodEnd: null,
-      days: null,
-      usageKwh: null,
-      totalCents: null,
-      cPerKwh: null,
-      cPerDay: null,
-      fixedTermExpiry: null,
-      breakFeeCents: null,
-      status: 'pending_parse' as const,
-      confidence: null,
-      rawR2Key: 'bills/user-1/gmail_msg_fwd_0.pdf',
-      parsedJson: null,
-      source: 'gmail' as const,
-      sourceMessageId: 'gmail_msg_fwd_0',
-      errorCode: null,
-      parsedAt: null,
-      createdAt: new Date().toISOString(),
-    });
 
     const result = await processMessage(
       env,
@@ -1603,16 +1578,102 @@ describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
       [MERCURY_ENTRY]
     );
 
-    expect(result.billsFound).toBe(1);
-    expect(result.skipReason).toBeUndefined();
-    expect(createBill).toHaveBeenCalledWith(
-      env.DB,
-      expect.objectContaining({ retailerId: MERCURY_ID })
-    );
+    expect(result.billsFound).toBe(0);
+    expect(result.skipReason).toBe('skipped_forwarded');
+    expect(createBill).not.toHaveBeenCalled();
+    expect(downloadAttachment).not.toHaveBeenCalled();
   });
 
-  // Gate intact — unknown From AND unknown Subject (no retailer match either
-  // way) is still skipped, proving the widening did not loosen the hard gate.
+  // Gmail filter-based auto-forwarding sets X-Forwarded-For / X-Forwarded-To.
+  // A retailer-lookalike forward carrying one is skipped even without a Fwd:
+  // subject prefix.
+  it('skips a retailer-from message carrying an X-Forwarded-For header as skipped_forwarded', async () => {
+    const env = makeEnv();
+
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_xfwd',
+      threadId: 'thread_xfwd',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'Mercury <onlinebills@mercuryonline.co.nz>' },
+          { name: 'Subject', value: 'Your Mercury Online Bill' },
+          { name: 'X-Forwarded-For', value: 'original@gmail.com' },
+        ],
+        parts: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'mercury-bill.pdf',
+            body: { attachmentId: 'att_xfwd', size: 50000 },
+            partId: '0',
+          },
+        ],
+        mimeType: 'multipart/mixed',
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+
+    const result = await processMessage(
+      env,
+      'user-1',
+      { messageId: 'msg_xfwd', accessToken: 'tok' },
+      [MERCURY_ENTRY]
+    );
+
+    expect(result.billsFound).toBe(0);
+    expect(result.skipReason).toBe('skipped_forwarded');
+    expect(createBill).not.toHaveBeenCalled();
+    expect(downloadAttachment).not.toHaveBeenCalled();
+  });
+
+  // An unknown sender can no longer be rescued by a bill-like subject. This
+  // message ("Your Power Bill") was previously ingested because the old compound
+  // gate (retailerId === null && !subjectMatched) let subjectMatched through.
+  it('skips an unknown sender with a bill-like subject as skipped_no_retailer_match', async () => {
+    const env = makeEnv();
+    const retailers = [
+      { id: 'r1', name: 'Contact Energy', emailDomains: ['contactenergy.co.nz'] },
+    ];
+
+    vi.mocked(getMessage).mockResolvedValue({
+      id: 'msg_subjectbill',
+      threadId: 'thread_x',
+      internalDate: '1715644800000',
+      payload: {
+        headers: [
+          { name: 'From', value: 'deals@totally-unrelated.example' },
+          { name: 'Subject', value: 'Your Power Bill' },
+        ],
+        parts: [
+          {
+            mimeType: 'application/pdf',
+            filename: 'bill.pdf',
+            body: { attachmentId: 'att_subj', size: 5000 },
+            partId: '0',
+          },
+        ],
+        mimeType: 'multipart/mixed',
+      },
+    });
+    vi.mocked(downloadAttachment).mockResolvedValue(new ArrayBuffer(100));
+
+    const result = await processMessage(
+      env,
+      'user-1',
+      { messageId: 'msg_subjectbill', accessToken: 'tok' },
+      retailers
+    );
+
+    expect(result.billsFound).toBe(0);
+    expect(result.skipReason).toBe('skipped_no_retailer_match');
+    // subjectMatched is still reported even though it is no longer a gate.
+    expect(result.subjectMatched).toBe(true);
+    expect(createBill).not.toHaveBeenCalled();
+    expect(downloadAttachment).not.toHaveBeenCalled();
+  });
+
+  // Gate intact — unknown From AND unknown Subject (no retailer match) is still
+  // skipped, proving the direct-sender rule did not loosen into ingest-everything.
   it('still skips when neither From nor Subject matches a retailer', async () => {
     const env = makeEnv();
     const retailers = [
@@ -1651,6 +1712,40 @@ describe('Forwarded-bill discovery (bill-discovery-2036)', () => {
     expect(result.billsFound).toBe(0);
     expect(result.skipReason).toBe('skipped_no_retailer_match');
     expect(createBill).not.toHaveBeenCalled();
+  });
+});
+
+// ---------- isForwarded (forwarded-message guard, pure helper) ----------
+
+describe('isForwarded (forwarded-message guard)', () => {
+  it('detects a leading Fwd: subject marker', () => {
+    expect(isForwarded([], 'Fwd: Your Mercury Online Bill')).toBe(true);
+  });
+
+  it('detects repeated markers and leading whitespace', () => {
+    expect(isForwarded([], '  Fwd: Fwd: Your bill')).toBe(true);
+  });
+
+  it('detects FW: and Fw: case-insensitively', () => {
+    expect(isForwarded([], 'FW: your bill')).toBe(true);
+    expect(isForwarded([], 'fw: your bill')).toBe(true);
+  });
+
+  it('does not match a body word or a non-prefixed subject', () => {
+    expect(isForwarded([], 'Your Power Bill')).toBe(false);
+    // "Forward:" is not one of the supported markers (Fwd/Fw/FW only).
+    expect(isForwarded([], 'Forward: something')).toBe(false);
+  });
+
+  it('detects an X-Forwarded-For / X-Forwarded-To header', () => {
+    expect(isForwarded([{ name: 'X-Forwarded-For', value: 'x@y.com' }], 'Your bill')).toBe(true);
+    expect(isForwarded([{ name: 'X-Forwarded-To', value: 'x@y.com' }], 'Your bill')).toBe(true);
+  });
+
+  it('returns false for a direct retailer send (no marker, no forward header)', () => {
+    expect(
+      isForwarded([{ name: 'From', value: 'mercury@mercury.co.nz' }], 'Your Mercury Online Bill')
+    ).toBe(false);
   });
 });
 

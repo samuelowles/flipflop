@@ -7,6 +7,7 @@ vi.mock('../models/bills', () => ({
   updateBillStatus: vi.fn(),
   updateBillParsedData: vi.fn(),
   markBillCompareEnqueued: vi.fn().mockResolvedValue(true),
+  getLatestBillPeriodEnd: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('./messaging', () => ({
@@ -19,7 +20,7 @@ vi.mock('../models/users', () => ({
   updateUser: vi.fn(),
 }));
 
-import { getBillById, updateBillStatus, updateBillParsedData, markBillCompareEnqueued } from '../models/bills';
+import { getBillById, updateBillStatus, updateBillParsedData, markBillCompareEnqueued, getLatestBillPeriodEnd } from '../models/bills';
 import { getUserById, updateUser } from '../models/users';
 import { sendAndLog } from './messaging';
 
@@ -253,6 +254,9 @@ describe('handleParseJob', () => {
       } as never);
       vi.mocked(updateBillStatus).mockResolvedValue(undefined);
       vi.mocked(updateBillParsedData).mockResolvedValue(undefined);
+      // Default: no prior bills with a period_end. Per-test overrides set the
+      // recency ceiling for the most-recent-address-wins comparison.
+      vi.mocked(getLatestBillPeriodEnd).mockResolvedValue(null);
     });
 
     it('persists the extracted address (encrypted via updateUser) when the user has none', async () => {
@@ -272,7 +276,7 @@ describe('handleParseJob', () => {
       );
     });
 
-    it('never overwrites an existing installation address', async () => {
+    it('does not overwrite an existing address when the bill has no period_end', async () => {
       vi.mocked(getUserById).mockResolvedValue({
         id: 'user123',
         phone: '+64211234567',
@@ -280,6 +284,7 @@ describe('handleParseJob', () => {
       } as never);
       globalThis.fetch = vi.fn().mockResolvedValue({
         ok: true,
+        // No period_end — recency cannot be established, so never overwrite.
         json: async () => ({ usage_kwh: 500, total_cents: 12500, confidence: 0.92, address: ADDRESS }),
       });
       const env = makeEnv('bills/b.pdf', new Uint8Array([2]));
@@ -287,6 +292,120 @@ describe('handleParseJob', () => {
       await handleParseJob('bill-addr', 'bills/b.pdf', env);
 
       expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('does not overwrite when the extracted address is the same after normalisation (newer bill, no-op)', async () => {
+      // Same address as on file, differing only in whitespace/case — must be a
+      // no-op even though this bill is the most recent.
+      vi.mocked(getUserById).mockResolvedValue({
+        id: 'user123',
+        phone: '+64211234567',
+        installationAddress: '1 Queen Street, Auckland Central, Auckland 1010',
+      } as never);
+      vi.mocked(getLatestBillPeriodEnd).mockResolvedValue('2026-04-30T00:00:00+12:00');
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          usage_kwh: 500, total_cents: 12500, confidence: 0.92,
+          period_end: '2026-04-30T00:00:00+12:00',
+          address: '  1 queen   street, Auckland Central, AUCKLAND 1010  ',
+        }),
+      });
+      const env = makeEnv('bills/same.pdf', new Uint8Array([6]));
+
+      await handleParseJob('bill-addr', 'bills/same.pdf', env);
+
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('overwrites with a different address on the MOST-RECENT bill and nulls both powerswitch columns', async () => {
+      vi.mocked(getUserById).mockResolvedValue({
+        id: 'user123',
+        phone: '+64211234567',
+        installationAddress: '99 Existing Way, Wellington 6011',
+      } as never);
+      // MAX includes this bill → equal, so `>=` holds (most recent).
+      vi.mocked(getLatestBillPeriodEnd).mockResolvedValue('2026-04-30T00:00:00+12:00');
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          usage_kwh: 500, total_cents: 12500, confidence: 0.92,
+          period_end: '2026-04-30T00:00:00+12:00',
+          address: ADDRESS,
+        }),
+      });
+      const env = makeEnv('bills/newer.pdf', new Uint8Array([7]));
+
+      await handleParseJob('bill-addr', 'bills/newer.pdf', env);
+
+      expect(updateUser).toHaveBeenCalledWith(
+        env.DB,
+        { ENCRYPTION_KEY: 'test-encryption-key' },
+        'user123',
+        {
+          installationAddress: ADDRESS,
+          powerswitchPxid: null,
+          powerswitchLocationId: null,
+        }
+      );
+    });
+
+    it('does NOT overwrite when the different-address bill is OLDER than the max period_end', async () => {
+      vi.mocked(getUserById).mockResolvedValue({
+        id: 'user123',
+        phone: '+64211234567',
+        installationAddress: '99 Existing Way, Wellington 6011',
+      } as never);
+      // A newer bill already on file → this older bill must not overwrite.
+      vi.mocked(getLatestBillPeriodEnd).mockResolvedValue('2026-05-31T00:00:00+12:00');
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          usage_kwh: 500, total_cents: 12500, confidence: 0.92,
+          period_end: '2026-03-31T00:00:00+12:00',
+          address: ADDRESS,
+        }),
+      });
+      const env = makeEnv('bills/older.pdf', new Uint8Array([8]));
+
+      await handleParseJob('bill-addr', 'bills/older.pdf', env);
+
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
+    it('logs parse_address_changed (userId + billId only, never an address value) on an overwrite', async () => {
+      vi.mocked(getUserById).mockResolvedValue({
+        id: 'user123',
+        phone: '+64211234567',
+        installationAddress: '99 Existing Way, Wellington 6011',
+      } as never);
+      vi.mocked(getLatestBillPeriodEnd).mockResolvedValue('2026-04-30T00:00:00+12:00');
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          usage_kwh: 500, total_cents: 12500, confidence: 0.92,
+          period_end: '2026-04-30T00:00:00+12:00',
+          address: ADDRESS,
+        }),
+      });
+      const env = makeEnv('bills/log.pdf', new Uint8Array([9]));
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      await handleParseJob('bill-addr', 'bills/log.pdf', env);
+
+      const changedLog = logSpy.mock.calls
+        .map((c) => { try { return JSON.parse(c[0] as string); } catch { return null; } })
+        .find((l) => l !== null && l.type === 'parse_address_changed');
+      expect(changedLog).toBeDefined();
+      expect(changedLog.userId).toBe('user123');
+      expect(changedLog.billId).toBe('bill-addr');
+      // PII guard: neither address string may appear anywhere in the log line.
+      expect(changedLog.address).toBeUndefined();
+      const serialised = JSON.stringify(changedLog);
+      expect(serialised).not.toContain('Queen Street');
+      expect(serialised).not.toContain('Existing Way');
+
+      logSpy.mockRestore();
     });
 
     it('does not call updateUser when the parser returned no address', async () => {

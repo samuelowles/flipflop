@@ -300,6 +300,7 @@ export async function pollSingleUser(
     messagesSkippedNoSubject: 0,
     billsAlreadyImported: 0,
     messagesSkippedNoPdf: 0,
+    messagesSkippedForwarded: 0,
     billsFound: 0,
     billSenders: [],
     filteredSenders: [],
@@ -372,6 +373,7 @@ export async function pollSingleUser(
   let messagesSkippedNoSubject = 0;
   let billsAlreadyImported = 0;
   let messagesSkippedNoPdf = 0;
+  let messagesSkippedForwarded = 0;
 
   try {
     const messages = await searchAllMessages({
@@ -402,6 +404,8 @@ export async function pollSingleUser(
         filteredSenders.add(result.sender);
         if (result.skipReason === 'skipped_no_pdf') {
           messagesSkippedNoPdf++;
+        } else if (result.skipReason === 'skipped_forwarded') {
+          messagesSkippedForwarded++;
         } else if (result.skipReason === 'skipped_duplicate' || result.duplicatesSkipped > 0) {
           // Already ingested on a previous scan — NOT a discovery failure.
           // Counting these as "no bill subject" made re-connect scans read as
@@ -421,6 +425,7 @@ export async function pollSingleUser(
         progress.billsFound = billsFound;
         progress.messagesSkippedNoSubject = messagesSkippedNoSubject;
         progress.messagesSkippedNoPdf = messagesSkippedNoPdf;
+        progress.messagesSkippedForwarded = messagesSkippedForwarded;
         progress.billsAlreadyImported = billsAlreadyImported;
         progress.billSenders = [...billSenders];
         progress.filteredSenders = [...filteredSenders];
@@ -436,6 +441,7 @@ export async function pollSingleUser(
   progress.billsFound = billsFound;
   progress.messagesSkippedNoSubject = messagesSkippedNoSubject;
   progress.messagesSkippedNoPdf = messagesSkippedNoPdf;
+  progress.messagesSkippedForwarded = messagesSkippedForwarded;
   progress.billsAlreadyImported = billsAlreadyImported;
   progress.billSenders = [...billSenders];
   progress.filteredSenders = [...filteredSenders];
