@@ -264,3 +264,43 @@ class TestGstBasis:
         plan = {"c_per_kwh": 28.99, "c_per_day": 180.0, "gst_inclusive": False}
         annual = calculate_bill_cost(7008, 365, plan)
         assert abs(annual - 309_190) < 200  # ~$3,092
+
+
+class TestNullablePlanColumnsAreNotFatal:
+    """Regression: D1 columns are nullable and arrive present-but-NULL.
+
+    `dict.get(key, default)` only falls back when the KEY IS ABSENT, so a plan
+    row carrying an explicit None reached `float(None)` and raised TypeError.
+    In production that surfaced as a bare 500 from /compare, which the Gmail
+    callback swallowed as "still processing" — the comparison never rendered,
+    with no error shown to anyone. 12 of the 17 seeded plans had a NULL
+    prompt_payment_discount, so this fired on essentially every real request.
+    """
+
+    BASE = {
+        "id": "p1",
+        "name": "Standard",
+        "c_per_kwh": 25.0,
+        "c_per_day": 200.0,
+        "tier_thresholds_json": None,
+        "prompt_payment_discount": None,
+        "conditions_json": None,
+        "low_user_eligible": False,
+    }
+
+    def test_null_prompt_payment_discount_prices_as_no_discount(self):
+        cost = calculate_bill_cost(500, 30, self.BASE)
+        undiscounted = calculate_bill_cost(
+            500, 30, {**self.BASE, "prompt_payment_discount": 0}
+        )
+        assert cost == undiscounted
+
+    def test_null_c_per_day_is_treated_as_zero(self):
+        cost = calculate_bill_cost(500, 30, {**self.BASE, "c_per_day": None})
+        assert cost == calculate_bill_cost(500, 30, {**self.BASE, "c_per_day": 0})
+
+    def test_null_c_per_kwh_is_treated_as_zero(self):
+        # Reached only for plans is_unsupported_plan did not already exclude;
+        # it must not raise.
+        cost = calculate_bill_cost(500, 30, {**self.BASE, "c_per_kwh": None})
+        assert cost == calculate_bill_cost(500, 30, {**self.BASE, "c_per_kwh": 0})
