@@ -251,6 +251,7 @@ export async function gmailEvalStatus(c: Context): Promise<Response> {
       comparisons: result.comparisons,
       billsTotal: result.billsTotal,
       billsParsed: result.billsParsed,
+      verdict: result.verdict,
     };
 
     // Cache REAL results for 24 hours

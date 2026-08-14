@@ -12,6 +12,7 @@ import { createBill, getBillsByUserId, updateBillParsedData } from '../models/bi
 import { createUser as _createUser, findOrCreateByPhone } from '../models/users';
 import { createComparison } from '../models/comparisons';
 import { getPlansByRegion, getPlansByRetailer } from '../models/plans';
+import { getRetailerNamesByIds } from '../models/retailers';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -53,11 +54,27 @@ interface ComparisonResultItem {
   readonly stay_where_you_are: boolean;
 }
 
+/**
+ * The user-level verdict surfaced at the top of the comparison page. Derived
+ * from the SAME recommendation/verdictItem the plan_comparisons summary-row
+ * write uses (see runEvalComparison) — never recomputed by separate logic.
+ * All money is annual cents.
+ */
+export interface EvalVerdict {
+  readonly recommendation: 'switch' | 'stay_put';
+  readonly planName: string;
+  readonly retailerName: string;
+  readonly currentCostCents: number;
+  readonly projectedCostCents: number;
+  readonly savingCents: number;
+  readonly confidence: number;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers (extracted from planComparator.ts to avoid queue/Sent coupling)
 // ---------------------------------------------------------------------------
 
-function billToSummary(bill: {
+export function billToSummary(bill: {
   id: string;
   usageKwh: number | null;
   totalCents: number | null;
@@ -66,12 +83,18 @@ function billToSummary(bill: {
   days: number | null;
   breakFeeCents: number | null;
 }): BillSummary | null {
+  // A non-positive day count is a parser mis-extraction (e.g. period_end before
+  // period_start). Letting it through lets a negative value SUBTRACT from
+  // totalDays in computeAvgDailyKwh and inflate average daily usage, and lets a
+  // zero contribute usage with no days. Exclude such bills from the usage
+  // profile here, in this one place, rather than guarding again downstream.
   if (
     bill.usageKwh == null ||
     bill.totalCents == null ||
     !bill.periodStart ||
     !bill.periodEnd ||
-    bill.days == null
+    bill.days == null ||
+    bill.days <= 0
   ) {
     return null;
   }
@@ -86,7 +109,7 @@ function billToSummary(bill: {
   };
 }
 
-function computeAvgDailyKwh(summaries: readonly BillSummary[]): number {
+export function computeAvgDailyKwh(summaries: readonly BillSummary[]): number {
   if (summaries.length === 0) return 0;
   const totalKwh = summaries.reduce((s, b) => s + b.usageKwh, 0);
   const totalDays = summaries.reduce((s, b) => s + b.days, 0);
@@ -99,7 +122,7 @@ function getSeason(m: number): 'summer' | 'winter' | 'shoulder' {
   return 'shoulder';
 }
 
-function computeSeasonalWeights(
+export function computeSeasonalWeights(
   summaries: readonly BillSummary[]
 ): { summer: number; winter: number } {
   const seasonal = { summer: 0, winter: 0 };
@@ -385,6 +408,10 @@ export async function runEvalComparison(
    *  "nothing to compare" (the callback page pends on these — #242 live run). */
   billsTotal: number;
   billsParsed: number;
+  /** Headline verdict for the callback page, derived from the same
+   *  recommendation/verdictItem as the plan_comparisons summary-row write.
+   *  Null only when there is nothing to compare (parsedBills.length === 0). */
+  verdict: EvalVerdict | null;
 }> {
   const pythonUrl = env.PYTHON_SERVICE_URL ?? 'http://localhost:8000';
   const allBills = await getBillsByUserId(env.DB, userId);
@@ -392,7 +419,7 @@ export async function runEvalComparison(
   const counts = { billsTotal: allBills.length, billsParsed: parsedBills.length };
 
   if (parsedBills.length === 0) {
-    return { parsedData: null, comparisons: [], ...counts };
+    return { parsedData: null, comparisons: [], ...counts, verdict: null };
   }
 
   const billSummaries = parsedBills
@@ -487,13 +514,37 @@ export async function runEvalComparison(
     comparisons: ComparisonResultItem[];
   };
 
+  // Resolve retailer UUIDs → human names in ONE batched query. The Python
+  // /compare response carries retailer_id (a UUID) on every row, and the
+  // latest bill's retailer is also a UUID; without this the callback page
+  // prints a UUID where a retailer name belongs. Comparison rows that already
+  // carry a retailer_name from Python are preserved below — only filled in.
+  const retailerIds = new Set<string>();
+  if (latestBill.retailerId) retailerIds.add(latestBill.retailerId);
+  for (const item of compareResult.comparisons) {
+    if (item.retailer_id) retailerIds.add(item.retailer_id);
+  }
+  const retailerNames = await getRetailerNamesByIds(
+    env.DB,
+    Array.from(retailerIds)
+  );
+  /** retailer id → display name, falling back to the raw id when no row exists. */
+  const nameFor = (id: string): string => retailerNames.get(id) ?? id;
+
   // Store ONE summary row per run (AC #73 / #226), matching the live
   // COMPARE_QUEUE write shape. The per-plan items are still carried in the
   // returned `storedComparisons` for the result-page render, but only the
   // verdict row is persisted to plan_comparisons.
   const storedComparisons: Record<string, unknown>[] = [];
   for (const item of compareResult.comparisons) {
-    storedComparisons.push({ ...item });
+    const copy: Record<string, unknown> = { ...item };
+    // Only FILL IN retailer_name when absent/empty — never overwrite a name
+    // the Python /compare response already supplied.
+    if (!copy.retailer_name) {
+      const resolved = item.retailer_id ? nameFor(item.retailer_id) : '';
+      if (resolved) copy.retailer_name = resolved;
+    }
+    storedComparisons.push(copy);
   }
 
   // Derive the user-level verdict. Eval's Python response uses
@@ -531,7 +582,9 @@ export async function runEvalComparison(
 
   // Build parsed data snapshot from latest bill
   const parsedData: Record<string, unknown> = {
-    retailer_name: latestBill.retailerId,
+    retailer_name: latestBill.retailerId
+      ? nameFor(latestBill.retailerId)
+      : latestBill.retailerId,
     plan_name: latestBill.planName,
     meter_type: latestBill.meterType,
     icp_number: '', // not stored on bills table
@@ -547,7 +600,19 @@ export async function runEvalComparison(
     confidence: latestBill.confidence,
   };
 
-  return { parsedData, comparisons: storedComparisons, ...counts };
+  // Surface the SAME verdict the summary-row write derives — not recomputed.
+  // savingCents is clamped non-negative; money stays annual cents throughout.
+  const verdict: EvalVerdict = {
+    recommendation,
+    planName: verdictItem.plan_name,
+    retailerName: nameFor(verdictItem.retailer_id),
+    currentCostCents: verdictItem.current_cost_cents,
+    projectedCostCents: verdictItem.projected_cost_cents,
+    savingCents: Math.max(0, verdictItem.saving_cents),
+    confidence: verdictItem.confidence,
+  };
+
+  return { parsedData, comparisons: storedComparisons, ...counts, verdict };
 }
 
 // ---------------------------------------------------------------------------

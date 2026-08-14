@@ -667,7 +667,7 @@ describe('GET /auth/gmail/eval-status (pending semantics + cache)', () => {
 
   it('returns pending with parse counts while no comparisons exist, and caches nothing', async () => {
     vi.mocked(runEvalComparison).mockResolvedValueOnce({
-      parsedData: null, comparisons: [], billsTotal: 12, billsParsed: 3,
+      parsedData: null, comparisons: [], billsTotal: 12, billsParsed: 3, verdict: null,
     });
     const app = evalApp();
     const env = makeEnv();
@@ -691,7 +691,7 @@ describe('GET /auth/gmail/eval-status (pending semantics + cache)', () => {
     await kv.put('gmail:eval:u1', JSON.stringify({ found: true, parsedData: null, comparisons: [] }));
 
     vi.mocked(runEvalComparison).mockResolvedValueOnce({
-      parsedData: null, comparisons: [], billsTotal: 12, billsParsed: 12,
+      parsedData: null, comparisons: [], billsTotal: 12, billsParsed: 12, verdict: null,
     });
     const res = await app.request(`/auth/gmail/eval-status?${await signedQuery('u1')}`, {}, env);
     const body = (await res.json()) as Record<string, unknown>;
@@ -703,7 +703,7 @@ describe('GET /auth/gmail/eval-status (pending semantics + cache)', () => {
   it('returns and caches real results', async () => {
     const comparisons = [{ plan_id: 'p1', plan_name: 'Plan A', saving_cents: 12000 }];
     vi.mocked(runEvalComparison).mockResolvedValueOnce({
-      parsedData: { retailer: 'Meridian Energy' }, comparisons, billsTotal: 12, billsParsed: 12,
+      parsedData: { retailer: 'Meridian Energy' }, comparisons, billsTotal: 12, billsParsed: 12, verdict: null,
     });
     const app = evalApp();
     const env = makeEnv();
@@ -720,6 +720,37 @@ describe('GET /auth/gmail/eval-status (pending semantics + cache)', () => {
     // Second request serves the cache — no recompute.
     await app.request(`/auth/gmail/eval-status?${await signedQuery('u1')}`, {}, env);
     expect(runEvalComparison).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns and caches the verdict alongside the results', async () => {
+    const verdict = {
+      recommendation: 'switch' as const,
+      planName: 'Good Night Plan',
+      retailerName: 'Contact Energy',
+      currentCostCents: 25000,
+      projectedCostCents: 24000,
+      savingCents: 41200,
+      confidence: 0.85,
+    };
+    vi.mocked(runEvalComparison).mockResolvedValueOnce({
+      parsedData: { retailer_name: 'Contact Energy' },
+      comparisons: [{ plan_name: 'Good Night Plan' }],
+      billsTotal: 12,
+      billsParsed: 12,
+      verdict,
+    });
+    const app = evalApp();
+    const env = makeEnv();
+
+    const res = await app.request(`/auth/gmail/eval-status?${await signedQuery('u1')}`, {}, env);
+    const body = (await res.json()) as Record<string, unknown>;
+    expect(body.found).toBe(true);
+    expect(body.verdict).toEqual(verdict);
+
+    // Verdict is cached with the rest of the body.
+    const kv = env.KV as KVNamespace;
+    const cached = JSON.parse((await kv.get('gmail:eval:u1'))!) as Record<string, unknown>;
+    expect(cached.verdict).toEqual(verdict);
   });
 });
 

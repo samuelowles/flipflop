@@ -160,6 +160,34 @@ export async function createRetailer(
 }
 
 /**
+ * Resolve a set of retailer primary-key IDs to display names in ONE query.
+ * Used by the eval/comparison render path to replace UUIDs (bills.retailer_id
+ * and the Python /compare response's retailer_id) with human-readable names.
+ *
+ * Returns a Map keyed by id; ids without a matching row are absent so callers
+ * can fall back to the raw id. An empty/deduped input issues no query.
+ */
+export async function getRetailerNamesByIds(
+  db: D1Database,
+  ids: readonly string[]
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const unique = Array.from(new Set(ids.filter((id) => id.length > 0)));
+  if (unique.length === 0) return map;
+
+  const placeholders = unique.map((_, i) => '?' + (i + 1)).join(', ');
+  const result = await db
+    .prepare(`SELECT id, name FROM retailers WHERE id IN (${placeholders})`)
+    .bind(...unique)
+    .all<{ id: string; name: string }>();
+
+  for (const row of result.results ?? []) {
+    map.set(row.id, row.name);
+  }
+  return map;
+}
+
+/**
  * Get all active retailer names and IDs for Gmail From-header matching.
  * Used by emailPoller to build Gmail search queries and match senders.
  * Uses retailer name (not domain) so third-party billing services are caught.
