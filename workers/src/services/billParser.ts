@@ -306,7 +306,17 @@ export async function handleParseJob(
   //      year of bills that parse concurrently, so "the address from whichever
   //      bill happened to parse last" would be wrong. Best-effort throughout:
   //      any throw is caught and logged and never fails the parse job.
-  const periodEnd = parseResult.period_end ?? null;
+  // Treat an empty/whitespace-only period_end exactly like a missing one. Some
+  // parsers emit "" rather than null for a missing billing period
+  // (python/parsers/contact_parser.py), and the recency test below compares
+  // period_end strings, where "" >= "" is true — so a bill with no billing
+  // period could otherwise win the "most recent" test and overwrite a good
+  // address. Normalising it to null here makes such a bill never a candidate
+  // for overwriting, matching the null case.
+  const periodEnd =
+    parseResult.period_end != null && parseResult.period_end.trim() !== ''
+      ? parseResult.period_end
+      : null;
   const user = await getUserById(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId);
   if (extractedAddress && user) {
     try {

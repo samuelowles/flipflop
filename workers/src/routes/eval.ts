@@ -52,6 +52,12 @@ interface ComparisonResultItem {
   readonly saving_cents: number;
   readonly confidence: number;
   readonly stay_where_you_are: boolean;
+  // Python stamps the user-level verdict onto EVERY row identically
+  // (plan_comparator.py: _derive_recommendation → for r in results: stamp).
+  // Optional because older unit-test fixtures omit it; the verdict derivation
+  // falls back to the local logic when these are absent.
+  readonly recommendation?: 'switch' | 'stay_put';
+  readonly reason?: string | null;
 }
 
 /**
@@ -320,7 +326,7 @@ function renderResultPage(
         return `<tr class="${stay ? 'row-stay' : ''}">
           <td>${escapeHtml(planName)}<br><span class="retailer-sub">${escapeHtml(retailer)}</span></td>
           <td class="num">$${formatCents(projected)}</td>
-          <td class="num ${savingClass}">${saving > 0 ? '$' + formatSavings(saving) : '$0'}</td>
+          <td class="num ${savingClass}">${saving > 0 ? formatSavings(saving) : '$0'}</td>
           <td class="num">${Math.round(confidence * 100)}%</td>
           <td>${badge}</td>
         </tr>`;
@@ -489,17 +495,39 @@ export async function runEvalComparison(
   const compareController = new AbortController();
   const compareTimeout = setTimeout(() => compareController.abort(), 30000);
 
+  // Boundary serialization: mirror planComparator.comparePlans' wireBody
+  // EXACTLY. The Python /compare contract is snake_case
+  // (usage_profile.avg_daily_kwh, bill_history[].usage_kwh, …) and the handler
+  // returns the BARE ranked list (jsonify(results)), not an object keyed by
+  // `comparisons`. Sending the camelCase TS input verbatim made Python 400 with
+  // "current_plan is required" and the route swallowed it as `pending`, so the
+  // feature never rendered. The two sites are intentionally not shared:
+  // comparePlans has queue/Sent coupling this eval path deliberately avoids.
+  const wireBody = {
+    usage_profile: {
+      avg_daily_kwh: usageProfile.avgDailyKwh,
+      meter_type: usageProfile.meterType,
+      seasonal_weight: usageProfile.seasonalWeights,
+    },
+    current_plan: currentPlan,
+    available_plans: planDicts,
+    bill_history: billSummaries.map((b) => ({
+      id: b.id,
+      usage_kwh: b.usageKwh,
+      total_cents: b.totalCents,
+      period_start: b.periodStart,
+      period_end: b.periodEnd,
+      days: b.days,
+      break_fee_cents: b.breakFeeCents,
+    })),
+  };
+
   let compareResponse: Response;
   try {
     compareResponse = await fetch(`${pythonUrl}/compare`, {
       method: 'POST',
       headers: compareHeaders,
-      body: JSON.stringify({
-        usageProfile,
-        currentPlan,
-        availablePlans: planDicts,
-        billHistory: billSummaries,
-      }),
+      body: JSON.stringify(wireBody),
       signal: compareController.signal,
     });
   } finally {
@@ -510,9 +538,9 @@ export async function runEvalComparison(
     throw new Error(`Comparison service returned ${compareResponse.status}`);
   }
 
-  const compareResult = (await compareResponse.json()) as {
-    comparisons: ComparisonResultItem[];
-  };
+  // Python returns the bare ranked list (jsonify(results)), so parse it as an
+  // array of ComparisonResultItem — never an object with a `comparisons` key.
+  const compareResult = (await compareResponse.json()) as ComparisonResultItem[];
 
   // Resolve retailer UUIDs → human names in ONE batched query. The Python
   // /compare response carries retailer_id (a UUID) on every row, and the
@@ -521,7 +549,7 @@ export async function runEvalComparison(
   // carry a retailer_name from Python are preserved below — only filled in.
   const retailerIds = new Set<string>();
   if (latestBill.retailerId) retailerIds.add(latestBill.retailerId);
-  for (const item of compareResult.comparisons) {
+  for (const item of compareResult) {
     if (item.retailer_id) retailerIds.add(item.retailer_id);
   }
   const retailerNames = await getRetailerNamesByIds(
@@ -536,7 +564,7 @@ export async function runEvalComparison(
   // returned `storedComparisons` for the result-page render, but only the
   // verdict row is persisted to plan_comparisons.
   const storedComparisons: Record<string, unknown>[] = [];
-  for (const item of compareResult.comparisons) {
+  for (const item of compareResult) {
     const copy: Record<string, unknown> = { ...item };
     // Only FILL IN retailer_name when absent/empty — never overwrite a name
     // the Python /compare response already supplied.
@@ -547,18 +575,26 @@ export async function runEvalComparison(
     storedComparisons.push(copy);
   }
 
-  // Derive the user-level verdict. Eval's Python response uses
-  // stay_where_you_are (inverse of switchable); the live path uses an explicit
-  // recommendation field, but eval does not receive one, so derive it here.
-  const switchable = compareResult.comparisons.filter(
+  // Derive the user-level verdict. Python owns this decision: it stamps the
+  // recommendation (and reason) onto every row in plan_comparator.py after
+  // applying SWITCH_THRESHOLD_CENTS ($200/yr) plus fixed-term and break-fee
+  // guards. Use Python's value verbatim so the headline the user reads agrees
+  // with the notification engine; fall back to the local derivation ONLY when
+  // Python omits the field. There remains exactly ONE derivation of the
+  // headline a user sees: the Python-stamped verdict below.
+  const pythonRecommendation = compareResult[0]?.recommendation;
+  const switchable = compareResult.filter(
     item => !item.stay_where_you_are && item.saving_cents > 0
   );
   const topSwitch = switchable.length > 0 ? switchable[0] : null;
-  const recommendation = topSwitch ? 'switch' : 'stay_put';
+  const recommendation: 'switch' | 'stay_put' = pythonRecommendation
+    ?? (topSwitch ? 'switch' : 'stay_put');
 
+  // verdictItem selection is unchanged: the best switchable row when switching,
+  // else the stay-put row, else the first row.
   const verdictItem = topSwitch
-    ?? compareResult.comparisons.find(item => item.stay_where_you_are)
-    ?? compareResult.comparisons[0]!;
+    ?? compareResult.find(item => item.stay_where_you_are)
+    ?? compareResult[0]!;
 
   const matchedRecommended = availablePlans.find(
     p => p.retailerId === verdictItem.retailer_id && p.name === verdictItem.plan_name
@@ -576,7 +612,7 @@ export async function runEvalComparison(
       projectedAnnualCost: verdictItem.projected_cost_cents,
       savings: verdictItem.saving_cents,
       recommendation,
-      reason: null,
+      reason: verdictItem.reason ?? null,
     });
   }
 

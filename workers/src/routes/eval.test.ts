@@ -152,30 +152,36 @@ const MOCK_PLANS = [
   },
 ];
 
-const MOCK_COMPARE_RESPONSE = {
-  comparisons: [
-    {
-      plan_name: 'Good Night Plan',
-      retailer_name: 'Contact Energy',
-      retailer_id: 'contact-energy',
-      projected_cost_cents: 24000,
-      current_cost_cents: 25000,
-      saving_cents: 1000,
-      confidence: 0.85,
-      stay_where_you_are: false,
-    },
-    {
-      plan_name: 'Current (retailer C)',
-      retailer_name: 'Retailer C',
-      retailer_id: 'retailer-c',
-      projected_cost_cents: 25000,
-      current_cost_cents: 25000,
-      saving_cents: 0,
-      confidence: 0.9,
-      stay_where_you_are: true,
-    },
-  ],
-};
+// Python /compare returns the BARE ranked list (jsonify(results)), NOT an
+// object keyed by `comparisons`. Each row carries Python's stamped
+// recommendation/reason (the user-level verdict applied identically to every
+// row in plan_comparator.py).
+const MOCK_COMPARE_RESPONSE = [
+  {
+    plan_name: 'Good Night Plan',
+    retailer_name: 'Contact Energy',
+    retailer_id: 'contact-energy',
+    projected_cost_cents: 24000,
+    current_cost_cents: 25000,
+    saving_cents: 1000,
+    confidence: 0.85,
+    stay_where_you_are: false,
+    recommendation: 'switch',
+    reason: null,
+  },
+  {
+    plan_name: 'Current (retailer C)',
+    retailer_name: 'Retailer C',
+    retailer_id: 'retailer-c',
+    projected_cost_cents: 25000,
+    current_cost_cents: 25000,
+    saving_cents: 0,
+    confidence: 0.9,
+    stay_where_you_are: true,
+    recommendation: 'switch',
+    reason: null,
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -393,9 +399,10 @@ describe('POST /eval/upload', () => {
     expect(parsed.isAnonymous).toBe(false);
 
     // #226 — eval writes ONE summary row (not per-plan), matching the live
-    // COMPARE_QUEUE shape. The verdict is derived from stay_where_you_are:
-    // the first comparison is switchable (saving_cents 1000 > 0, not stay),
-    // so recommendation === 'switch' and the recommended plan is plan-1.
+    // COMPARE_QUEUE shape. The verdict comes from Python's stamped
+    // recommendation on every row: MOCK_COMPARE_RESPONSE stamps 'switch', the
+    // first row is the switchable one (Good Night Plan), so recommendation ===
+    // 'switch' and the recommended plan is plan-1.
     const comp = await import('../models/comparisons');
     expect(comp.createComparison).toHaveBeenCalledTimes(1);
     const persisted = (comp.createComparison as ReturnType<typeof vi.fn>).mock.calls[0]![1];
@@ -1047,14 +1054,15 @@ describe('runEvalComparison (verdict + retailer name resolution)', () => {
     ).mockResolvedValue(new Map<string, string>());
   });
 
-  it('surfaces a switch verdict derived from the existing recommendation logic', async () => {
+  it('surfaces a switch verdict taken from Python’s stamped recommendation', async () => {
     const result = await runEvalComparison(
       env as unknown as Parameters<typeof runEvalComparison>[0],
       'user-phone-1'
     );
 
-    // The first MOCK_COMPARE_RESPONSE row is switchable (saving 1000, not
-    // stay), so recommendation is 'switch' and the verdict names that row.
+    // Python stamps recommendation 'switch' on every MOCK_COMPARE_RESPONSE row;
+    // the verdict takes that value. The first row is the switchable one (Good
+    // Night Plan, saving 1000), so the verdict names it.
     expect(result.verdict).not.toBeNull();
     expect(result.verdict!.recommendation).toBe('switch');
     expect(result.verdict!.planName).toBe('Good Night Plan');
@@ -1073,20 +1081,20 @@ describe('runEvalComparison (verdict + retailer name resolution)', () => {
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({
       ok: true,
-      json: async () => ({
-        comparisons: [
-          {
-            plan_name: 'Current Plan',
-            retailer_name: 'Contact Energy',
-            retailer_id: 'contact-energy',
-            projected_cost_cents: 25000,
-            current_cost_cents: 25000,
-            saving_cents: 0,
-            confidence: 0.9,
-            stay_where_you_are: true,
-          },
-        ],
-      }),
+      json: async () => [
+        {
+          plan_name: 'Current Plan',
+          retailer_name: 'Contact Energy',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+          recommendation: 'stay_put',
+          reason: 'no_savings',
+        },
+      ],
     } as unknown as Response);
 
     const result = await runEvalComparison(
@@ -1139,29 +1147,31 @@ describe('runEvalComparison (verdict + retailer name resolution)', () => {
     mockFetch.mockReset();
     mockFetch.mockResolvedValue({
       ok: true,
-      json: async () => ({
-        comparisons: [
-          {
-            plan_name: 'Good Night Plan',
-            retailer_id: 'contact-energy',
-            projected_cost_cents: 24000,
-            current_cost_cents: 25000,
-            saving_cents: 1000,
-            confidence: 0.85,
-            stay_where_you_are: false,
-          },
-          {
-            plan_name: 'Pre-existing Plan',
-            retailer_name: 'Pre-existing Name',
-            retailer_id: 'retailer-c',
-            projected_cost_cents: 25000,
-            current_cost_cents: 25000,
-            saving_cents: 0,
-            confidence: 0.9,
-            stay_where_you_are: true,
-          },
-        ],
-      }),
+      json: async () => [
+        {
+          plan_name: 'Good Night Plan',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 24000,
+          current_cost_cents: 25000,
+          saving_cents: 1000,
+          confidence: 0.85,
+          stay_where_you_are: false,
+          recommendation: 'switch',
+          reason: null,
+        },
+        {
+          plan_name: 'Pre-existing Plan',
+          retailer_name: 'Pre-existing Name',
+          retailer_id: 'retailer-c',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+          recommendation: 'switch',
+          reason: null,
+        },
+      ],
     } as unknown as Response);
 
     const retailers = await import('../models/retailers');
@@ -1191,6 +1201,173 @@ describe('runEvalComparison (verdict + retailer name resolution)', () => {
     // MOCK_COMPARE_RESPONSE has 2 comparison rows + the latest bill's retailer.
     expect(result.comparisons).toHaveLength(2);
     expect(retailers.getRetailerNamesByIds).toHaveBeenCalledTimes(1);
+  });
+
+  // --- /compare wire contract (snake_case body + bare-array response) -------
+  //
+  // runEvalComparison must speak the SAME contract as planComparator.comparePlans:
+  // snake_case usage_profile/current_plan/available_plans/bill_history, and the
+  // response parsed as a bare ranked list (NOT {comparisons: [...]}).
+
+  it('POSTs a snake_case body matching comparePlans’ wireBody and parses the bare-array response', async () => {
+    await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(url).toBe('http://test-python:8000/compare');
+    const body = JSON.parse((init as RequestInit).body as string);
+
+    // Snake_case boundary keys present.
+    expect(body.usage_profile).toEqual(
+      expect.objectContaining({
+        avg_daily_kwh: expect.any(Number),
+        meter_type: 'standard',
+        seasonal_weight: expect.objectContaining({ summer: expect.any(Number), winter: expect.any(Number) }),
+      })
+    );
+    // 800 kWh / 30 days ≈ 26.67 kWh/day.
+    expect(body.usage_profile.avg_daily_kwh).toBeCloseTo(26.67, 1);
+    expect(body.current_plan).toEqual(
+      expect.objectContaining({ plan_name: 'Good Night Plan', retailer_id: 'contact-energy' })
+    );
+    expect(Array.isArray(body.available_plans)).toBe(true);
+    expect(body.bill_history).toHaveLength(1);
+    expect(body.bill_history[0]).toEqual(
+      expect.objectContaining({
+        id: 'bill-123',
+        usage_kwh: 800,
+        total_cents: 25000,
+        period_start: '2026-04-01',
+        period_end: '2026-04-30',
+        days: 30,
+        break_fee_cents: 0,
+      })
+    );
+
+    // camelCase keys must be ABSENT (sending them made Python 400).
+    expect(body).not.toHaveProperty('usageProfile');
+    expect(body).not.toHaveProperty('currentPlan');
+    expect(body).not.toHaveProperty('availablePlans');
+    expect(body).not.toHaveProperty('billHistory');
+    expect(body.bill_history[0]).not.toHaveProperty('usageKwh');
+  });
+
+  it('uses Python’s stay_put recommendation even when a positive sub-threshold saving would locally derive switch', async () => {
+    // A $3/yr saving is positive but below the $200 switch threshold, so Python
+    // stamps recommendation 'stay_put' (reason 'low_savings') even though the
+    // row is technically switchable (saving > 0, not stay). The local
+    // derivation would say 'switch' — Python's verdict must win.
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          plan_name: 'Good Night Plan',
+          retailer_name: 'Contact Energy',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 24700,
+          current_cost_cents: 25000,
+          saving_cents: 300, // $3/yr — below the $200 threshold
+          confidence: 0.85,
+          stay_where_you_are: false,
+          recommendation: 'stay_put',
+          reason: 'low_savings',
+        },
+        {
+          plan_name: 'Good Night Plan',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+          recommendation: 'stay_put',
+          reason: 'low_savings',
+        },
+      ],
+    } as unknown as Response);
+
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+    expect(result.verdict).not.toBeNull();
+    expect(result.verdict!.recommendation).toBe('stay_put');
+  });
+
+  it('passes Python’s reason through to createComparison instead of hardcoded null', async () => {
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          plan_name: 'Good Night Plan',
+          retailer_name: 'Contact Energy',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+          recommendation: 'stay_put',
+          reason: 'no_savings',
+        },
+      ],
+    } as unknown as Response);
+
+    await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+
+    const comp = await import('../models/comparisons');
+    expect(comp.createComparison).toHaveBeenCalledTimes(1);
+    const persisted = (comp.createComparison as ReturnType<typeof vi.fn>).mock.calls[0]![1];
+    expect(persisted.recommendation).toBe('stay_put');
+    expect(persisted.reason).toBe('no_savings');
+  });
+
+  it('falls back to the local recommendation derivation when Python omits the field', async () => {
+    // Legacy response shape with no recommendation/reason stamped. The local
+    // derivation must still produce a verdict so the page never renders blank.
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          plan_name: 'Good Night Plan',
+          retailer_name: 'Contact Energy',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 24000,
+          current_cost_cents: 25000,
+          saving_cents: 1000,
+          confidence: 0.85,
+          stay_where_you_are: false,
+        },
+        {
+          plan_name: 'Good Night Plan',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+        },
+      ],
+    } as unknown as Response);
+
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+    expect(result.verdict!.recommendation).toBe('switch');
+    const comp = await import('../models/comparisons');
+    const persisted = (comp.createComparison as ReturnType<typeof vi.fn>).mock.calls[0]![1];
+    // No reason from Python → null, never a fabricated value.
+    expect(persisted.reason).toBeNull();
   });
 });
 

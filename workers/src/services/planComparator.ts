@@ -132,7 +132,7 @@ const SAVING_THRESHOLD_CENTS = 20000; // $200/yr NZD minimum saving to notify
 const RECENT_SWITCH_COOLDOWN_DAYS = 90;
 
 function billToSummary(bill: { id: string; usageKwh: number | null; totalCents: number | null; periodStart: string | null; periodEnd: string | null; days: number | null; breakFeeCents: number | null }): ComparisonBillSummary | null {
-  if (bill.usageKwh == null || bill.totalCents == null || !bill.periodStart || !bill.periodEnd || bill.days == null) return null;
+  if (bill.usageKwh == null || bill.totalCents == null || !bill.periodStart || !bill.periodEnd || bill.days == null || bill.days <= 0) return null;
   return {
     id: bill.id,
     usageKwh: bill.usageKwh,

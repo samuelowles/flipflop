@@ -291,7 +291,7 @@ export function renderProgressPage(userId: string, setupLog: string[], _isError 
         return '<tr class="' + (stay ? 'row-stay' : '') + '">'
           + '<td>' + esc(planName) + '<br><span class="retailer-sub">' + esc(retailer) + '</span></td>'
           + '<td class="num">$' + formatCents(projected) + '</td>'
-          + '<td class="num ' + savingClass + '">' + (saving > 0 ? '$' + formatSavings(saving) : '$0') + '</td>'
+          + '<td class="num ' + savingClass + '">' + (saving > 0 ? formatSavings(saving) : '$0') + '</td>'
           + '<td class="num">' + Math.round(confidence * 100) + '%</td>'
           + '<td>' + badge + '</td>'
           + '</tr>';

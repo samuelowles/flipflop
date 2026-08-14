@@ -277,4 +277,31 @@ describe('compareUserWithPowerswitch — E2E (#222)', () => {
     expect(payload.userId).toBe('user-1');
     expect(payload.recommendation).toBe('switch');
   });
+
+  it('excludes a bill with non-positive days from bill_history (live usage guard)', async () => {
+    // A parser mis-extraction (period_end before period_start) yields days <= 0;
+    // letting it through lets a negative value SUBTRACT from totalDays and
+    // inflate average daily usage, and a zero contribute usage with no days. The
+    // live Powerswitch compare path must reject it the same way eval does.
+    vi.mocked(readCachedResults).mockResolvedValueOnce(fixtureResults());
+    vi.mocked(getBillsByUserId).mockResolvedValueOnce([
+      makeParsedBill({ id: 'bad-days', days: -5, usageKwh: 600 }),
+    ]);
+    mockFetch.mockResolvedValueOnce(mockOk(pythonSwitchResult()));
+    vi.mocked(createComparison).mockResolvedValueOnce({} as PlanComparison);
+    const { db } = fakeDb();
+
+    const out = await compareUserWithPowerswitch('user-1', {
+      DB: db, KV: {} as KVNamespace, PYTHON_SERVICE_URL: 'http://python.test',
+    });
+    expect(out.status).toBe('ok');
+
+    // The bad bill was dropped from bill_history...
+    const [, init] = mockFetch.mock.calls[0]!;
+    const body = JSON.parse((init as RequestInit).body as string);
+    expect(body.bill_history).toEqual([]);
+    // ...so usage fell back to the Powerswitch estimate (annualKwh/365), not the
+    // corrupted 600/-5 = -120 kWh/day.
+    expect(body.usage_profile.avg_daily_kwh).toBeCloseTo(7007.6875 / 365, 1);
+  });
 });

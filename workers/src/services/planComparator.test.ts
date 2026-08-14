@@ -267,6 +267,37 @@ describe('runComparison — happy path (#70)', () => {
     expect(getCanonicalPlans).not.toHaveBeenCalled();
     expect(mockFetch).not.toHaveBeenCalled();
   });
+
+  it('excludes a bill with non-positive days from the usage profile (live usage guard)', async () => {
+    // A parser mis-extraction (period_end before period_start) yields days <= 0.
+    // Letting it through lets a negative days value SUBTRACT from totalDays and
+    // inflate average daily usage (worked example: 300+600 kWh over 30-5 days
+    // reads as 36 kWh/day instead of 10). The live COMPARE_QUEUE path must
+    // reject such bills the same way the eval debug path does.
+    vi.mocked(getBillsByUserId).mockResolvedValueOnce([
+      makeParsedBill(), // good: 675 kWh / 31 days
+      makeParsedBill({ id: 'bill-bad', days: -5, usageKwh: 600 }),
+    ]);
+    vi.mocked(getPlansByRetailer).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(getCanonicalPlans).mockResolvedValueOnce(canonicalPlans);
+    vi.mocked(createComparison).mockResolvedValueOnce(mockComparison('cmp-bad'));
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      json: async () => pythonResult,
+    } as unknown as Response);
+
+    const result = await runComparison('user-1', env);
+    expect(result).toEqual({ comparisonId: 'cmp-bad' });
+
+    // The bad bill was dropped from bill_history (only the good bill-1 remains).
+    const body = JSON.parse((mockFetch.mock.calls[0]![1] as RequestInit).body as string);
+    expect(body.bill_history).toHaveLength(1);
+    expect(body.bill_history[0].id).toBe('bill-1');
+    // avg_daily_kwh reflects ONLY the good bill (675/31 ≈ 21.77), not the
+    // corrupted (675+600)/(31-5) ≈ 49 the negative-days bill would force.
+    expect(body.usage_profile.avg_daily_kwh).toBe(21.77);
+  });
 });
 
 describe('runComparison — stay_put recommendation surfacing (#72)', () => {

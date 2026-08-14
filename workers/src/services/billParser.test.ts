@@ -294,6 +294,34 @@ describe('handleParseJob', () => {
       expect(updateUser).not.toHaveBeenCalled();
     });
 
+    it('does not overwrite when period_end is an empty/whitespace string (parser emitted "" not null)', async () => {
+      // Some parsers (python/parsers/contact_parser.py) emit "" rather than null
+      // for a missing period_end. With "" as the recency value, "" >= "" is true,
+      // so a bill with no billing period could win "most recent" and overwrite a
+      // good address. An empty/whitespace-only period_end must be treated exactly
+      // like null — never a candidate for overwriting.
+      vi.mocked(getUserById).mockResolvedValue({
+        id: 'user123',
+        phone: '+64211234567',
+        installationAddress: '99 Existing Way, Wellington 6011',
+      } as never);
+      // MAX over bills whose only period_end values are empty strings → "".
+      // Without the fix this makes "" >= "" true and the address is overwritten.
+      vi.mocked(getLatestBillPeriodEnd).mockResolvedValue('');
+      globalThis.fetch = vi.fn().mockResolvedValue({
+        ok: true,
+        json: async () => ({
+          usage_kwh: 500, total_cents: 12500, confidence: 0.92,
+          period_end: '   ', address: ADDRESS,
+        }),
+      });
+      const env = makeEnv('bills/empty.pdf', new Uint8Array([10]));
+
+      await handleParseJob('bill-addr', 'bills/empty.pdf', env);
+
+      expect(updateUser).not.toHaveBeenCalled();
+    });
+
     it('does not overwrite when the extracted address is the same after normalisation (newer bill, no-op)', async () => {
       // Same address as on file, differing only in whitespace/case — must be a
       // no-op even though this bill is the most recent.

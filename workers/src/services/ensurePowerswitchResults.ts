@@ -34,7 +34,7 @@
 import type { EncryptionEnv } from '../models/encryption';
 import { getUserById } from '../models/users';
 import { resolveUserAddress, isPowerswitchLive } from './powerswitchSession';
-import { replayQuestionnaire, readCachedResults } from './powerswitchReplay';
+import { replayQuestionnaire, readCachedResults, clearCachedResults } from './powerswitchReplay';
 import type { ParsedResults } from './powerswitchRscParser';
 
 export interface EnsurePowerswitchEnv extends EncryptionEnv {
@@ -53,17 +53,33 @@ export async function ensurePowerswitchResults(
 ): Promise<EnsureOutcome> {
   const replayEnv = { KV: env.KV, POWERSWITCH_LIVE: env.POWERSWITCH_LIVE };
 
-  // 1. Cache hit — no outbound requests.
+  // 1. Read the cache AND the user up front. The user read is now unavoidable
+  //    on a cache hit: a null powerswitchPxid is the address-changed signal
+  //    (billParser nulls it on a move), and a stale cache entry cached against
+  //    the PREVIOUS property would otherwise keep serving the wrong plans for
+  //    up to the cache's 7-day TTL (powerswitchReplay RESULTS_TTL_SECONDS) —
+  //    the exact failure the address work exists to prevent. The old code
+  //    deliberately avoided this DB read on a cache hit; that shortcut is no
+  //    longer safe, so we pay one D1 read to check the pxid before trusting it.
   const cached = await readCachedResults(replayEnv, userId);
-  if (cached) return { status: 'ok', results: cached, source: 'cache' };
+  const user = await getUserById(env.DB, env, userId);
 
-  // 2. Live gate.
+  // 2. Cache fast-path — but ONLY when the user's pxid is intact. A null pxid
+  //    means the address changed since these results were cached, so the entry
+  //    is stale: drop it and fall through to the live path to rebuild.
+  if (cached && user?.powerswitchPxid) {
+    return { status: 'ok', results: cached, source: 'cache' };
+  }
+  if (cached) {
+    await clearCachedResults(replayEnv, userId);
+  }
+
+  // 3. Live gate.
   if (!isPowerswitchLive({ DB: env.DB, KV: env.KV, POWERSWITCH_LIVE: env.POWERSWITCH_LIVE })) {
     return { status: 'unavailable', reason: 'live_disabled' };
   }
 
-  // 3. Need the user's pxid; resolve from installation_address if absent.
-  const user = await getUserById(env.DB, env, userId);
+  // 4. Need the user's pxid; resolve from installation_address if absent.
   if (!user) return { status: 'unavailable', reason: 'user_not_found' };
 
   let pxid = user.powerswitchPxid;
@@ -83,7 +99,7 @@ export async function ensurePowerswitchResults(
     pxid = resolved.pxid;
   }
 
-  // 4. Replay (sequential, budgeted, drift-guarded; caches on success).
+  // 5. Replay (sequential, budgeted, drift-guarded; caches on success).
   const outcome = await replayQuestionnaire(replayEnv, userId, pxid);
   if (outcome.status !== 'ok') {
     return { status: 'unavailable', reason: `replay_${outcome.status}` };
