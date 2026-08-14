@@ -1480,10 +1480,10 @@ describe('Issue #227 — Gmail bill discovery overhaul', () => {
 //
 // Ingest ONLY bills sent directly by the retailer — never forwarded copies.
 // The From header is the sole retailer signal: buildSearchQuery emits from:
-// terms only (no subject: union), and processMessage rejects forwarded mail
-// (Fwd:/FW: Subject or X-Forwarded-* header) and any unmatched sender. These
-// cover the search-query shape, the forwarded guard, and Mercury's registered
-// billing domain (migration 0019).
+// terms only (no subject: union), and processMessage rejects a Fwd:/FW: Subject
+// and any unmatched sender. Auto-forwarded mail (X-Forwarded-*) is deliberately
+// still ingested. These cover the search-query shape, the forwarded guard, and
+// Mercury's registered billing domain (migration 0019).
 
 const MERCURY_ID = '2951d6b6-436e-474b-8ea9-7fb5092cc069';
 const MERCURY_ENTRY = {
@@ -1584,10 +1584,11 @@ describe('Direct-from-retailer ingestion (no forwarded bills)', () => {
     expect(downloadAttachment).not.toHaveBeenCalled();
   });
 
-  // Gmail filter-based auto-forwarding sets X-Forwarded-For / X-Forwarded-To.
-  // A retailer-lookalike forward carrying one is skipped even without a Fwd:
-  // subject prefix.
-  it('skips a retailer-from message carrying an X-Forwarded-For header as skipped_forwarded', async () => {
+  // Gmail stamps X-Forwarded-For / X-Forwarded-To on EVERY message a filter
+  // forwards, so rejecting on those headers meant a customer funnelling an old
+  // inbox into the connected account lost every bill. An auto-forwarded
+  // retailer bill is still direct from the retailer — it must be ingested.
+  it('ingests a retailer-from message carrying an X-Forwarded-For header', async () => {
     const env = makeEnv();
 
     vi.mocked(getMessage).mockResolvedValue({
@@ -1620,10 +1621,10 @@ describe('Direct-from-retailer ingestion (no forwarded bills)', () => {
       [MERCURY_ENTRY]
     );
 
-    expect(result.billsFound).toBe(0);
-    expect(result.skipReason).toBe('skipped_forwarded');
-    expect(createBill).not.toHaveBeenCalled();
-    expect(downloadAttachment).not.toHaveBeenCalled();
+    expect(result.billsFound).toBe(1);
+    expect(result.skipReason).toBeUndefined();
+    expect(createBill).toHaveBeenCalled();
+    expect(downloadAttachment).toHaveBeenCalled();
   });
 
   // An unknown sender can no longer be rescued by a bill-like subject. This
@@ -1719,33 +1720,26 @@ describe('Direct-from-retailer ingestion (no forwarded bills)', () => {
 
 describe('isForwarded (forwarded-message guard)', () => {
   it('detects a leading Fwd: subject marker', () => {
-    expect(isForwarded([], 'Fwd: Your Mercury Online Bill')).toBe(true);
+    expect(isForwarded('Fwd: Your Mercury Online Bill')).toBe(true);
   });
 
   it('detects repeated markers and leading whitespace', () => {
-    expect(isForwarded([], '  Fwd: Fwd: Your bill')).toBe(true);
+    expect(isForwarded('  Fwd: Fwd: Your bill')).toBe(true);
   });
 
   it('detects FW: and Fw: case-insensitively', () => {
-    expect(isForwarded([], 'FW: your bill')).toBe(true);
-    expect(isForwarded([], 'fw: your bill')).toBe(true);
+    expect(isForwarded('FW: your bill')).toBe(true);
+    expect(isForwarded('fw: your bill')).toBe(true);
   });
 
   it('does not match a body word or a non-prefixed subject', () => {
-    expect(isForwarded([], 'Your Power Bill')).toBe(false);
+    expect(isForwarded('Your Power Bill')).toBe(false);
     // "Forward:" is not one of the supported markers (Fwd/Fw/FW only).
-    expect(isForwarded([], 'Forward: something')).toBe(false);
+    expect(isForwarded('Forward: something')).toBe(false);
   });
 
-  it('detects an X-Forwarded-For / X-Forwarded-To header', () => {
-    expect(isForwarded([{ name: 'X-Forwarded-For', value: 'x@y.com' }], 'Your bill')).toBe(true);
-    expect(isForwarded([{ name: 'X-Forwarded-To', value: 'x@y.com' }], 'Your bill')).toBe(true);
-  });
-
-  it('returns false for a direct retailer send (no marker, no forward header)', () => {
-    expect(
-      isForwarded([{ name: 'From', value: 'mercury@mercury.co.nz' }], 'Your Mercury Online Bill')
-    ).toBe(false);
+  it('returns false for a direct retailer send', () => {
+    expect(isForwarded('Your Mercury Online Bill')).toBe(false);
   });
 });
 

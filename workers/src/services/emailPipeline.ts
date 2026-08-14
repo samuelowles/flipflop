@@ -197,14 +197,6 @@ export function matchRetailer(
 }
 
 /**
- * Headers set by Gmail's filter-based auto-forwarding. Compared lower-cased:
- * RFC 5322 field names are case-insensitive and the Gmail API echoes whatever
- * casing the sending agent used, so an exact-case check would silently miss
- * `x-forwarded-for`.
- */
-const FORWARD_HEADER_NAMES = new Set(['x-forwarded-for', 'x-forwarded-to']);
-
-/**
  * Matches a leading forward marker on the Subject — case-insensitive
  * Fwd:/Fw:/FW:, allowing leading whitespace and repeated markers
  * (e.g. "Fwd: Fwd: "). Anchored at the start so a body word never matches.
@@ -212,32 +204,26 @@ const FORWARD_HEADER_NAMES = new Set(['x-forwarded-for', 'x-forwarded-to']);
 const FORWARD_SUBJECT_PATTERN = /^(?:\s*(?:fwd|fw)\s*:\s*)+/i;
 
 /**
- * Detect a forwarded message using only headers already fetched in
- * processMessage (no extra Gmail round-trip). Returns true when EITHER:
- *   - the Subject begins with a forward marker (case-insensitive Fwd:/Fw:/FW:,
- *     allowing leading whitespace and repeated markers like "Fwd: Fwd: "), OR
- *   - the message carries an X-Forwarded-For or X-Forwarded-To header (set by
- *     Gmail's filter-based auto-forwarding).
+ * Detect a MANUALLY forwarded message from its Subject line.
  *
- * Known limitation, stated honestly: a server-side auto-forward configured to
- * preserve the original From header and add no X-Forwarded-* header is
- * indistinguishable from a direct send and is NOT caught here.
+ * Deliberately does NOT test X-Forwarded-For/X-Forwarded-To. Gmail stamps those
+ * on every message a filter forwards, so rejecting on them meant a customer who
+ * funnels an old inbox into the connected account lost EVERY bill — the scan
+ * reported all of them as "skipped (forwarded)" with nothing they could do
+ * about it. An auto-forwarded retailer bill is still direct from the retailer,
+ * merely routed through another mailbox of the customer's own, and the From
+ * header (the real gate in processMessage) is unchanged by that routing.
  *
- * Pure over its inputs — exported for direct unit testing.
+ * What this catches is the case the From gate cannot: a person forwarding a
+ * bill on, where the Subject carries the marker. A forward that strips the
+ * marker AND preserves a retailer From header is indistinguishable from a
+ * direct send and is not caught — accepted knowingly, since that shape is
+ * almost always the customer's own mail.
+ *
+ * Pure over its input — exported for direct unit testing.
  */
-export function isForwarded(
-  headers: ReadonlyArray<{ readonly name: string; readonly value: string }>,
-  subject: string
-): boolean {
-  if (FORWARD_SUBJECT_PATTERN.test(subject)) {
-    return true;
-  }
-  for (const h of headers) {
-    if (FORWARD_HEADER_NAMES.has(h.name.toLowerCase())) {
-      return true;
-    }
-  }
-  return false;
+export function isForwarded(subject: string): boolean {
+  return FORWARD_SUBJECT_PATTERN.test(subject);
 }
 
 interface MessageToProcess {
@@ -359,11 +345,12 @@ export async function processMessage(
     // Recursive MIME walk to find PDF attachments at any nesting depth.
     const pdfParts = findPdfParts(fullMsg.payload);
 
-    // Forwarded-message guard. A manual forward has the forwarder as its From
-    // (already excluded by the unmatched-sender check below), but a
-    // retailer-lookalike forward can survive that check, so reject forwarded
-    // mail explicitly using only headers already fetched here.
-    if (isForwarded(headers, subject)) {
+    // Forwarded-message guard. A manual forward usually has the forwarder as
+    // its From (already excluded by the unmatched-sender check below), but a
+    // retailer-lookalike forward can survive that check, so reject a subject
+    // carrying a forward marker explicitly. Auto-forwarded mail is NOT rejected
+    // — see isForwarded for why.
+    if (isForwarded(subject)) {
       console.log(JSON.stringify({
         type: 'gmail_message_skip',
         messageId: msg.messageId,
