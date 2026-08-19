@@ -96,12 +96,39 @@ if (!APPLY) {
 }
 
 console.log(`\n  Applying...\n`);
+
+// Order matters. `git checkout -- .` re-materialises the tree from the index,
+// which would revert a .gitattributes written before it — the renormalise would
+// then run under the OLD rules and silently do nothing. Discard first, write
+// the rule second.
+execSync("git checkout -- .", { stdio: "inherit" });
+
 writeFileSync(".gitattributes", RULE);
 console.log("  wrote .gitattributes");
 
-// Discard the churn, then let git re-materialise every file under the new rule.
-execSync("git checkout -- .", { stdio: "inherit" });
 execSync("git add --renormalize .", { stdio: "inherit" });
+
+// `binary` stops git CONVERTING a file; it does not stop --renormalize staging
+// one that is already CRLF-smudged in the working tree. test_eval.pdf was
+// smudged by a checkout predating the *.pdf rule, and `git checkout -- .` skips
+// it because the stat cache reports it clean — so --renormalize force-read the
+// corrupt bytes and staged a 329 -> 350 byte PDF. Never let that reach a commit.
+const stagedBinary = sh("git diff --cached --numstat")
+  .split("\n")
+  .filter(Boolean)
+  .filter((l) => l.startsWith("-\t-\t"))
+  .map((l) => l.split("\t")[2]);
+
+if (stagedBinary.length) {
+  console.error(`\n  Refusing to continue — renormalise staged binary file(s):\n`);
+  for (const f of stagedBinary) console.error(`    ${f}`);
+  console.error(
+    `\n  These are corrupt in the working tree, not in the blob. Restore each:\n` +
+    `    git restore --staged <file> && rm <file> && git checkout -- <file>\n\n` +
+    `  Then re-run.\n`
+  );
+  process.exit(1);
+}
 
 const staged = sh("git diff --cached --name-only").split("\n").filter(Boolean);
 console.log(`\n  renormalised         ${staged.length} file(s)`);
