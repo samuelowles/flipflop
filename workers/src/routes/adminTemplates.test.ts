@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { Hono } from 'hono';
-import { adminListTemplates, adminTemplateStatus } from './adminTemplates';
+import { adminListTemplates, adminTemplateStatus, adminSubmitTemplates } from './adminTemplates';
 import { adminAuth } from '../middleware/adminAuth';
 import * as sentTemplates from '../services/sentTemplates';
 
@@ -190,5 +190,108 @@ describe('adminTemplateStatus', () => {
     const logged = JSON.stringify(consoleLogSpy.mock.calls) as string;
     expect(logged).toContain('admin_template_status_error');
     expect(logged).toContain('switch_update');
+  });
+});
+const mockSubmitTemplate = vi.spyOn(sentTemplates, 'submitTemplate');
+
+describe('POST /admin/templates/submit (re-registering after a copy change)', () => {
+  /**
+   * `submitTemplate` had ZERO callers since Epic #2, so the registry could be
+   * edited but never re-registered with Sent. #265 corrected `saving_alert`
+   * (the amount passed to it is annual, but the body said "3 months" — a 4x
+   * overstatement) and the corrected copy had no route to approval.
+   */
+  // mockReset() alone lets the spy fall through to the real implementation,
+  // which then hits the Sent API. Always give it an implementation.
+  beforeEach(() => {
+    mockSubmitTemplate.mockReset();
+    mockSubmitTemplate.mockResolvedValue({ id: 'sub_default', status: 'pending', submittedAt: '2026-08-07T00:00:00Z' });
+  });
+
+  function submitApp() {
+    const app = new Hono();
+    app.post('/admin/templates/submit', adminSubmitTemplates);
+    return app;
+  }
+
+  const env = { SENT_API_KEY: 'test-key' };
+
+  function ok(id = 'sub_1') {
+    return { id, status: 'pending' as const, submittedAt: '2026-08-07T00:00:00Z' };
+  }
+
+  it('submits only the named template when names are given', async () => {
+    mockSubmitTemplate.mockResolvedValue(ok());
+
+    const res = await submitApp().request(
+      '/admin/templates/submit',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: ['saving_alert'] }) },
+      env
+    );
+
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { results: Array<{ name: string; submitted: boolean }> };
+    expect(body.results).toHaveLength(1);
+    expect(body.results[0]!.name).toBe('saving_alert');
+    expect(body.results[0]!.submitted).toBe(true);
+    expect(mockSubmitTemplate).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends the CORRECTED body, which is the entire point', async () => {
+    mockSubmitTemplate.mockResolvedValue(ok());
+    await submitApp().request(
+      '/admin/templates/submit',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: ['saving_alert'] }) },
+      env
+    );
+    const submitted = mockSubmitTemplate.mock.calls[0]![1];
+    expect(submitted.content).toContain('12 months');
+    expect(submitted.content).not.toContain('3 months');
+  });
+
+  it('submits all six when no names are given', async () => {
+    mockSubmitTemplate.mockResolvedValue(ok());
+    const res = await submitApp().request('/admin/templates/submit', { method: 'POST' }, env);
+    expect(res.status).toBe(200);
+    expect(mockSubmitTemplate).toHaveBeenCalledTimes(6);
+  });
+
+  it('reports per-template so one failure does not hide the rest', async () => {
+    mockSubmitTemplate
+      .mockRejectedValueOnce(new Error('Sent template submit error (403)'))
+      .mockResolvedValue(ok());
+
+    const res = await submitApp().request('/admin/templates/submit', { method: 'POST' }, env);
+    expect(res.status, 'partial success is 207, not a blanket 500').toBe(207);
+    const body = (await res.json()) as { results: Array<{ submitted: boolean }> };
+    expect(body.results.filter((r) => !r.submitted)).toHaveLength(1);
+    expect(body.results.filter((r) => r.submitted)).toHaveLength(5);
+  });
+
+  it('400s when a known name is mixed with an unknown one, submitting neither', async () => {
+    const res = await submitApp().request(
+      '/admin/templates/submit',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names: ['saving_alert', 'saving_alrt'] }),
+      },
+      env
+    );
+
+    expect(res.status, 'a typo beside a real name must not report success').toBe(400);
+    const body = (await res.json()) as { unknown: string[] };
+    expect(body.unknown).toEqual(['saving_alrt']);
+    expect(mockSubmitTemplate).not.toHaveBeenCalled();
+  });
+
+  it('400s on an unknown name rather than silently submitting nothing', async () => {
+    const res = await submitApp().request(
+      '/admin/templates/submit',
+      { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ names: ['nope'] }) },
+      env
+    );
+    expect(res.status).toBe(400);
+    expect(mockSubmitTemplate).not.toHaveBeenCalled();
   });
 });

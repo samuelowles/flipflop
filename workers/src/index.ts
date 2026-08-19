@@ -6,7 +6,7 @@ import { adminAuth } from './middleware/adminAuth';
 import { messagingWebhook } from './routes/messaging';
 import { gmailConnectPage, gmailLogin, gmailCallback, gmailScanStatus, gmailEvalStatus } from './routes/gmail';
 import { evalUploadPage, evalUploadHandler, evalResultPage, evalStatus } from './routes/eval';
-import { adminListTemplates, adminTemplateStatus } from './routes/adminTemplates';
+import { adminListTemplates, adminTemplateStatus, adminSubmitTemplates } from './routes/adminTemplates';
 import { adminRateLimitStatus } from './routes/adminRateLimit';
 import { adminListNotifications } from './routes/adminNotifications';
 import { createSwitchRoute } from './routes/switch';
@@ -99,6 +99,9 @@ app.use('/admin/*', adminAuth);
 // catch-all so Hono's first-match routing resolves these).
 app.get('/admin/templates', adminListTemplates);
 app.get('/admin/templates/status', adminTemplateStatus);
+// Re-register templates with Sent after a copy change (#265 needed this and
+// there was no wired path). Inherits the /admin/* adminAuth middleware.
+app.post('/admin/templates/submit', adminSubmitTemplates);
 
 // Issue #37 AC #4: admin visibility into per-user rate-limit state.
 // Registered before the /admin/* catch-all.  Auth-gated via ADMIN_API_KEY.

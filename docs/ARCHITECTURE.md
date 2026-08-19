@@ -86,6 +86,7 @@ Plus `SENT_API_BASE_URL` read via `cloudflare:workers` (defaults to `https://api
 | POST | `/api/switch` | **none — known gap** | 30/300 per 60s |
 | GET | `/admin/templates` | `adminAuth` (Bearer) | — |
 | GET | `/admin/templates/status` | `adminAuth` | — |
+| POST | `/admin/templates/submit` | `adminAuth` | — |
 | GET | `/admin/rate-limit/:userKey` | `adminAuth` | — |
 | GET | `/admin/notifications` | `adminAuth` | — |
 | GET | `/admin/flow-link` | `adminAuth` | — |

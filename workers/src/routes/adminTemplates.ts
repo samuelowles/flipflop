@@ -7,7 +7,7 @@
  */
 
 import type { Context } from 'hono';
-import { SENT_TEMPLATES, getTemplateStatus, type SentTemplateStatus } from '../services/sentTemplates';
+import { SENT_TEMPLATES, getTemplateStatus, submitTemplate, type SentTemplateStatus } from '../services/sentTemplates';
 
 interface AdminTemplatesEnv {
   readonly SENT_API_KEY: string;
@@ -67,4 +67,59 @@ export async function adminTemplateStatus(c: Context): Promise<Response> {
   );
 
   return c.json({ templates: results });
+}
+/**
+ * POST /admin/templates/submit — (re)submit registry templates to Sent.
+ *
+ * `submitTemplate` has existed since Epic #2 with ZERO callers, so the registry
+ * could be changed but never actually re-registered. That bit immediately:
+ * #265 corrected `saving_alert` from "over the next 3 months" to "12 months"
+ * (the number passed to it is annual, so the old copy overstated every alert by
+ * 4x), and there was no wired way to get the corrected body approved — the fix
+ * was merged and deployed but could not reach WhatsApp.
+ *
+ * Body: `{"names": ["saving_alert"]}` to target specific templates, or omit for
+ * all six. Per-template results, so one rejection does not hide the others.
+ *
+ * This submits; it does not approve. Meta approval is asynchronous (1-4 weeks
+ * per DEPLOY.md) — poll `GET /admin/templates/status` for the outcome. SMS
+ * delivery is unaffected by approval state and uses the same body verbatim.
+ */
+export async function adminSubmitTemplates(c: Context): Promise<Response> {
+  const env = c.env as AdminTemplatesEnv;
+
+  let names: string[] | undefined;
+  const body = (await c.req.json().catch(() => null)) as { names?: unknown } | null;
+  if (body && Array.isArray(body.names)) {
+    // Non-strings are kept, not dropped, so they surface as unknown names below.
+    names = body.names.map((n) => (typeof n === 'string' ? n : String(n)));
+  }
+
+  // Reject on ANY unknown name, not just when every name is unknown: a typo
+  // alongside a real one would otherwise report success while the typo's
+  // template was never submitted — the exact silent gap this route exists to close.
+  const unknown = (names ?? []).filter((n) => !SENT_TEMPLATES.some((t) => t.name === n));
+  if (unknown.length > 0 || (names !== undefined && names.length === 0)) {
+    return c.json(
+      { error: 'No matching templates', code: 'unknown_template', unknown, known: SENT_TEMPLATES.map((t) => t.name) },
+      400
+    );
+  }
+
+  const targets = names ? SENT_TEMPLATES.filter((t) => names.includes(t.name)) : SENT_TEMPLATES;
+
+  const results = await Promise.all(
+    targets.map(async (t) => {
+      try {
+        const receipt = await submitTemplate(env.SENT_API_KEY, t);
+        return { name: t.name, submitted: true, id: receipt.id, status: receipt.status };
+      } catch (err) {
+        // One failure must not mask the rest — report per template.
+        return { name: t.name, submitted: false, error: (err as Error).message };
+      }
+    })
+  );
+
+  const anyFailed = results.some((r) => !r.submitted);
+  return c.json({ results }, anyFailed ? 207 : 200);
 }
