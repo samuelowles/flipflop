@@ -104,6 +104,7 @@ export function renderProgressPage(userId: string, setupLog: string[], _isError 
       <div class="stat"><span class="stat-label">Already imported (previous scans)</span><span class="stat-value" id="stat-duplicates">—</span></div>
       <div class="stat"><span class="stat-label">Skipped (no bill subject)</span><span class="stat-value" id="stat-nosubject">—</span></div>
       <div class="stat"><span class="stat-label">Skipped (no PDF)</span><span class="stat-value" id="stat-nopdf">—</span></div>
+      <div class="stat"><span class="stat-label">Skipped (forwarded)</span><span class="stat-value" id="stat-forwarded">—</span></div>
       <div class="stat"><span class="stat-label">Status</span><span class="stat-value" id="stat-status"><span class="spinner"></span>Running...</span></div>
     </div>
   </div>
@@ -290,13 +291,32 @@ export function renderProgressPage(userId: string, setupLog: string[], _isError 
         return '<tr class="' + (stay ? 'row-stay' : '') + '">'
           + '<td>' + esc(planName) + '<br><span class="retailer-sub">' + esc(retailer) + '</span></td>'
           + '<td class="num">$' + formatCents(projected) + '</td>'
-          + '<td class="num ' + savingClass + '">' + (saving > 0 ? '$' + formatSavings(saving) : '$0') + '</td>'
+          + '<td class="num ' + savingClass + '">' + (saving > 0 ? formatSavings(saving) : '$0') + '</td>'
           + '<td class="num">' + Math.round(confidence * 100) + '%</td>'
           + '<td>' + badge + '</td>'
           + '</tr>';
       }).join('');
 
-      var html = '<div style="margin-top:16px;"><h4 style="margin-bottom:8px;font-size:0.9rem;">Parsed Bill</h4>'
+      // Verdict headline — the single answer, rendered above the full table.
+      // Degrades to exactly today's behaviour when there is no verdict.
+      var verdict = data.verdict;
+      var headline = '';
+      if (verdict) {
+        if (verdict.recommendation === 'switch') {
+          headline = '<div style="margin-bottom:16px;padding:16px;border-radius:8px;background:#fffbea;border:1px solid #ffe58f;">'
+            + '<div style="font-size:1.15rem;font-weight:600;">Switch to ' + esc(verdict.planName) + '</div>'
+            + '<div class="retailer-sub" style="margin:2px 0 8px;">' + esc(verdict.retailerName) + '</div>'
+            + '<span class="badge badge-switch saving-positive" style="font-size:0.95rem;">Save ' + formatSavings(verdict.savingCents) + '/year</span>'
+            + '</div>';
+        } else {
+          headline = '<div style="margin-bottom:16px;padding:16px;border-radius:8px;background:#f4fbf6;border:1px solid #b7eb8f;">'
+            + '<span class="badge badge-stay saving-neutral" style="font-size:0.95rem;">Stay where you are</span>'
+            + '<div class="retailer-sub saving-neutral" style="margin-top:6px;">You are already on the best plan visible to us.</div>'
+            + '</div>';
+        }
+      }
+
+      var html = headline + '<div style="margin-top:16px;"><h4 style="margin-bottom:8px;font-size:0.9rem;">Parsed Bill</h4>'
         + '<div style="margin-bottom:16px;">' + billRows + '</div>'
         + '<h4 style="margin-bottom:8px;font-size:0.9rem;">Plan Comparison</h4>'
         + '<table><thead><tr>'
@@ -351,6 +371,7 @@ export function renderProgressPage(userId: string, setupLog: string[], _isError 
       document.getElementById('stat-duplicates').textContent = data.billsAlreadyImported || 0;
       document.getElementById('stat-nosubject').textContent = data.messagesSkippedNoSubject;
       document.getElementById('stat-nopdf').textContent = data.messagesSkippedNoPdf;
+      document.getElementById('stat-forwarded').textContent = data.messagesSkippedForwarded || 0;
 
       if (data.complete) {
         document.getElementById('stat-status').innerHTML = 'Done' + (data.finishedAt ? ' at ' + new Date(data.finishedAt).toLocaleTimeString() : '');

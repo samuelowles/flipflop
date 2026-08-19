@@ -24,6 +24,7 @@ venv/
 # Ruflo runtime (local agent state, not project code)
 .claude-flow/
 .swarm/
+.remember/
 ruvector.db
 
 # Temp files
@@ -56,3 +57,7 @@ scripts/capture-log.txt
 .tmp-issues/
 scripts/probe*.mjs
 scripts/triage_digest.*
+
+# Real-bill corpus for the accuracy bar (issue #286) — 12 MB of retailer PDFs.
+# Kept locally, never tracked: binary blobs that would live in history forever.
+example bills/

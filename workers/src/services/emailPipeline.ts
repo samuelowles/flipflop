@@ -101,18 +101,19 @@ export interface RetailerSearchEntry {
 
 /**
  * Issue #227 — Build Gmail search query as a UNION of retailer sender DOMAINS
- * (migration 0017 `retailers.email_domains`), retailer NAME keywords, AND a
- * `subject:` term for each name keyword.
+ * (migration 0017 `retailers.email_domains`) plus retailer NAME keywords.
  *
- * Domains are the reliable signal (`from:contactenergy.co.nz` matches any
- * display name on that domain); name keywords are retained so nothing that
+ * Direct-from-retailer only: the query matches the SENDER and never the
+ * subject. Domains are the reliable signal (`from:contactenergy.co.nz` matches
+ * any display name on that domain); name keywords are retained so nothing that
  * matched before stops matching (third-party mailers where the display name
- * carries the retailer name but the domain is a shared bulk-sender). The
- * `subject:` terms make FORWARDED bills discoverable: a forwarded bill's From
- * header is the forwarder's own address (so every `from:` term misses), but the
- * Subject still names the retailer (e.g. "Fwd: Your Mercury Online Bill").
+ * carries the retailer name but the domain is a shared bulk-sender). There are
+ * NO `subject:` terms: a forwarded bill is intentionally NOT discoverable here.
+ * Its From header is the forwarder's own address (so every `from:` term misses),
+ * and processMessage now rejects forwarded mail outright (see isForwarded) —
+ * widening the search to the subject would only surface mail we then drop.
  *
- * Example: {from:contactenergy.co.nz OR from:"Contact Energy" OR from:mercury.co.nz OR from:Mercury OR ... OR subject:Mercury OR subject:"Electric Kiwi" OR ...} has:attachment after:YYYY/MM/DD
+ * Example: {from:contactenergy.co.nz OR from:"Contact Energy" OR from:mercury.co.nz OR from:Mercury OR ...} has:attachment after:YYYY/MM/DD
  */
 export function buildSearchQuery(
   retailers: readonly RetailerSearchEntry[],
@@ -122,31 +123,21 @@ export function buildSearchQuery(
     throw new Error('No active retailers configured');
   }
 
-  // Collect every from: term (sender domains + name keywords) AND a subject:
-  // term for each name keyword, across all retailers (handles multi-retailer
-  // users). The subject: terms catch FORWARDED bills: a forwarded bill's From
-  // header is the forwarder's own address, but its Subject still names the
-  // retailer (e.g. "Fwd: Your Mercury Online Bill"), and Gmail's from: operator
-  // does not search the body. Generic subject words (subject:bill) are
-  // deliberately omitted — they would pull in bank and insurance statements and
-  // defeat processMessage's unknown-sender gate. Order is cosmetic but
-  // deterministic (Set insertion order; domains before keywords per retailer).
+  // Collect every from: term (sender domains + name keywords), across all
+  // retailers (handles multi-retailer users). No subject: terms — see the doc
+  // comment above. Order is cosmetic but deterministic (Set insertion order;
+  // domains before keywords per retailer).
   const fromTerms = new Set<string>();
-  const subjectTerms = new Set<string>();
   for (const r of retailers) {
     for (const domain of r.emailDomains) {
       fromTerms.add(domain);
     }
     for (const kw of nameToSearchKeywords(r.name)) {
       fromTerms.add(kw);
-      subjectTerms.add(kw);
     }
   }
 
-  const group = [
-    ...[...fromTerms].map((t) => `from:${t}`),
-    ...[...subjectTerms].map((t) => `subject:${t}`),
-  ].join(' OR ');
+  const group = [...[...fromTerms].map((t) => `from:${t}`)].join(' OR ');
   let query = `{${group}} has:attachment`;
   if (afterDate) {
     const d = new Date(afterDate);
@@ -205,13 +196,43 @@ export function matchRetailer(
   return null;
 }
 
+/**
+ * Matches a leading forward marker on the Subject — case-insensitive
+ * Fwd:/Fw:/FW:, allowing leading whitespace and repeated markers
+ * (e.g. "Fwd: Fwd: "). Anchored at the start so a body word never matches.
+ */
+const FORWARD_SUBJECT_PATTERN = /^(?:\s*(?:fwd|fw)\s*:\s*)+/i;
+
+/**
+ * Detect a MANUALLY forwarded message from its Subject line.
+ *
+ * Deliberately does NOT test X-Forwarded-For/X-Forwarded-To. Gmail stamps those
+ * on every message a filter forwards, so rejecting on them meant a customer who
+ * funnels an old inbox into the connected account lost EVERY bill — the scan
+ * reported all of them as "skipped (forwarded)" with nothing they could do
+ * about it. An auto-forwarded retailer bill is still direct from the retailer,
+ * merely routed through another mailbox of the customer's own, and the From
+ * header (the real gate in processMessage) is unchanged by that routing.
+ *
+ * What this catches is the case the From gate cannot: a person forwarding a
+ * bill on, where the Subject carries the marker. A forward that strips the
+ * marker AND preserves a retailer From header is indistinguishable from a
+ * direct send and is not caught — accepted knowingly, since that shape is
+ * almost always the customer's own mail.
+ *
+ * Pure over its input — exported for direct unit testing.
+ */
+export function isForwarded(subject: string): boolean {
+  return FORWARD_SUBJECT_PATTERN.test(subject);
+}
+
 interface MessageToProcess {
   messageId: string;
   accessToken: string;
 }
 
 /** Structured skip reason for per-message cron logging (issue #227 fix 4). */
-type SkipReason = 'skipped_no_retailer_match' | 'skipped_no_pdf' | 'skipped_duplicate';
+type SkipReason = 'skipped_no_retailer_match' | 'skipped_no_pdf' | 'skipped_duplicate' | 'skipped_forwarded';
 
 export interface ProcessMessageResult {
   billsFound: number;
@@ -283,12 +304,18 @@ function findPdfParts(payload: GmailMessage['payload']): readonly MimeNode[] {
  * Process a single Gmail message: fetch, filter, download PDFs, store, enqueue.
  * Pure logic shared by both pollAllUsers and pollSingleUser.
  *
- * Issue #227 overhauls:
- *   - Dedup via getBillBySourceMessageId (fix 1).
- *   - Recursive MIME walk (fix 2).
- *   - Subject demoted to signal when retailer matched + PDF present (fix 4);
- *     hard gate only when retailer match failed.
+ * Direct-from-retailer only:
+ *   - The From header is the ONLY accepted retailer signal. An unmatched sender
+ *     is an unconditional skip (skipped_no_retailer_match); the Subject can no
+ *     longer rescue an unknown sender.
+ *   - A forwarded message is rejected (skipped_forwarded) even when its From
+ *     matches a retailer — see isForwarded.
+ *   - Dedup via getBillBySourceMessageId.
+ *   - Recursive MIME walk.
  *   - Per-message skip reasons logged.
+ *
+ * subjectMatched is still computed, logged and returned for callers, but it is
+ * no longer a gate.
  */
 export async function processMessage(
   env: GmailPollingEnv,
@@ -308,29 +335,45 @@ export async function processMessage(
     const subject = headers.find((h) => h.name === 'Subject')?.value ?? '';
     const subjectMatched = SUBJECT_PATTERN.test(subject);
 
-    // Retailer match is the primary signal (domain first, then name). On a
-    // FORWARDED bill the From header is the forwarder's own address and carries
-    // no retailer signal, so fall back to the Subject — which still names the
-    // retailer (e.g. "Fwd: Your Mercury Online Bill"). Strict widening only:
-    // the hard gate below (retailerId === null && !subjectMatched) is unchanged.
-    const retailerId = matchRetailer(retailers, from) ?? matchRetailer(retailers, subject);
+    // Direct-from-retailer only: the From header is the ONLY accepted retailer
+    // signal. A forwarded bill's From header is the forwarder's own address and
+    // carries no retailer signal, so it must NOT be rescued by the Subject
+    // (which still names the retailer on a manual forward, e.g. "Fwd: Your
+    // Mercury Online Bill"). The Subject is matched only for logging/return.
+    const retailerId = matchRetailer(retailers, from);
 
     // Recursive MIME walk to find PDF attachments at any nesting depth.
     const pdfParts = findPdfParts(fullMsg.payload);
 
-    // Unknown-sender protection: if the retailer didn't match, the subject
-    // filter stays a HARD gate (an unknown sender with a PDF and no bill-like
-    // subject is not a bill we want to ingest).
-    if (retailerId === null && !subjectMatched) {
+    // Forwarded-message guard. A manual forward usually has the forwarder as
+    // its From (already excluded by the unmatched-sender check below), but a
+    // retailer-lookalike forward can survive that check, so reject a subject
+    // carrying a forward marker explicitly. Auto-forwarded mail is NOT rejected
+    // — see isForwarded for why.
+    if (isForwarded(subject)) {
+      console.log(JSON.stringify({
+        type: 'gmail_message_skip',
+        messageId: msg.messageId,
+        userId,
+        reason: 'skipped_forwarded',
+        subjectMatched,
+        timestamp: new Date().toISOString(),
+      }));
+      return { billsFound: 0, skipReason: 'skipped_forwarded', subjectMatched, duplicatesSkipped: 0, sender: from };
+    }
+
+    // Unknown-sender protection: an unmatched From header is an unconditional
+    // skip — the Subject can no longer rescue an unknown sender.
+    if (retailerId === null) {
       console.log(JSON.stringify({
         type: 'gmail_message_skip',
         messageId: msg.messageId,
         userId,
         reason: 'skipped_no_retailer_match',
-        subjectMatched: false,
+        subjectMatched,
         timestamp: new Date().toISOString(),
       }));
-      return { billsFound: 0, skipReason: 'skipped_no_retailer_match', subjectMatched: false, duplicatesSkipped: 0, sender: from };
+      return { billsFound: 0, skipReason: 'skipped_no_retailer_match', subjectMatched, duplicatesSkipped: 0, sender: from };
     }
 
     if (pdfParts.length === 0) {

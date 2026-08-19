@@ -1,473 +1,303 @@
-﻿# Flip -- Architecture
+# Flip — Architecture
 
-## System Overview
+**Version 2.0 · 2026-08-18** · Derived from source, not from memory.
+Precedence: **deployed > `master` > this document.**
 
-```
-┌─────────────────────────────────────────────────────────────────────────────┐
-│                              USER INTERFACE LAYER                            │
-│                                                                             │
-│   ┌──────────────┐                              ┌──────────────┐            │
-│   │   WhatsApp   │                              │     SMS      │            │
-│   │  (primary)   │                              │  (fallback)  │            │
-│   └──────┬───────┘                              └──────┬───────┘            │
-│          │                                             │                    │
-└──────────┼─────────────────────────────────────────────┼────────────────────┘
-           │                                             │
-           ▼                                             ▼
-    ┌──────────────────────────────────────────────────────────┐
-    │                      SENT LAYER                           │
-    │                   (sent.dm unified API)                   │
-    │                                                          │
-    │  ┌──────────────────────────────────────────────────┐    │
-    │  │  Single API — automatic channel routing           │    │
-    │  │  WhatsApp ───► sent.message() ───► fallback SMS   │    │
-    │  │  Unified webhook for all inbound messages         │    │
-    │  │  Template management + approval tracking          │    │
-    │  └──────────────────────┬───────────────────────────┘    │
-    └─────────────────────────┼────────────────────────────────┘
-                              │
-                              ▼
-    ┌──────────────────────────────────────────────────────────┐
-    │                   CLOUDFLARE WORKERS                      │
-    │                   (Hono + TypeScript)                     │
-    │                                                          │
-    │  ┌──────────────────────────────────────────────────┐    │
-    │  │              Route Handlers                       │    │
-    │  │  POST /webhook/messaging     (Sent unified)       │    │
-    │  │  POST /webhook/stripe        GET  /webhook/email/*│    │
-    │  │  GET  /admin/*               GET  /health          │    │
-    │  └──────────────────────────────────────────────────┘    │
-    │                         │                                │
-    │  ┌──────────────────────────────────────────────────┐    │
-    │  │                  Services                         │    │
-    │  │  messaging.ts      (Sent API, channel routing)     │    │
-    │  │  conversation.ts   (state machine, KV-backed)      │    │
-    │  │  parser.ts         (bill parser interface)         │    │
-    │  │  comparator.ts     (plan comparison interface)     │    │
-    │  │  switchService.ts  (switch lifecycle)              │    │
-    │  │  notification.ts   (threshold eval + dispatch)     │    │
-    │  │  emailPoller.ts    (Gmail/Outlook bill polling)    │    │
-    │  │  deepseek.ts       (Flash/Pro NLU routing)         │    │
-    │  └──────────────────────────────────────────────────┘    │
-    └──────────────────────────────────────────────────────────┘
-           │              │              │              │
-           ▼              ▼              ▼              ▼
-    ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐
-    │    D1    │  │  Queues  │  │    KV    │  │    R2    │
-    │ (SQLite) │  │ (async)  │  │ (state)  │  │ (files)  │
-    └──────────┘  └────┬─────┘  └──────────┘  └──────────┘
-                       │
-                       ▼
-    ┌──────────────────────────────────────────────────────────┐
-    │                   PYTHON ENGINE                           │
-    │                                                          │
-    │  ┌──────────────────┐    ┌──────────────────────────┐    │
-    │  │  Bill Parsers    │    │  Plan Comparator          │    │
-    │  │  (retailer-      │    │  (deterministic math)     │    │
-    │  │   specific)      │    │  - usage profile in       │    │
-    │  │  - contact.py    │    │  - available plans in     │    │
-    │  │  - mercury.py    │    │  - ranked costs out       │    │
-    │  │  - genesis.py    │    │  - confidence score       │    │
-    │  │  - ...            │    │                          │    │
-    │  └──────────────────┘    └──────────────────────────┘    │
-    │                                                          │
-    │  ┌──────────────────────────────────────────────────┐    │
-    │  │  EIEP14A Ingestion                                │    │
-    │  │  - fetch product data from Electricity Authority   │    │
-    │  │  - validate + transform to plans table             │    │
-    │  │  - daily refresh via Cron trigger                  │    │
-    │  └──────────────────────────────────────────────────┘    │
-    └──────────────────────────────────────────────────────────┘
-           │
-           ▼
-    ┌──────────────────────────────────────────────────────────┐
-    │                    EXTERNAL APIs                          │
-    │                                                          │
-    │  ┌──────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐ │
-    │  │ DeepSeek │  │  Gmail   │  │ Outlook  │  │  Stripe  │ │
-    │  │  v4 API  │  │   API    │  │  Graph   │  │          │ │
-    │  │ (NLU)    │  │ (email)  │  │ (email)  │  │ (billing)│ │
-    │  └──────────┘  └──────────┘  └──────────┘  └──────────┘ │
-    └──────────────────────────────────────────────────────────┘
-```
+Sections marked **→ Decided** record a change agreed in the alignment questionnaire that is **not yet built**. Everything else describes what runs today.
 
-## Data Flow: Bill Ingestion
+---
 
-1. User forwards bill (PDF or photo) via WhatsApp to Flip's number
-2. Sent receives the message, POSTs webhook to `POST /webhook/messaging`
-3. Worker validates Sent webhook signature
-4. Worker downloads media from Sent, stores raw file in R2 (`bills/{user_id}/{timestamp}.{ext}`)
-5. Worker creates bill record in D1 (status: `pending_parse`)
-6. Worker enqueues parse job to `flip-parse-queue` with `{ bill_id, r2_key, retailer_hint }`
-7. Queue consumer invokes Python bill parser: retailer-specific parser if retailer is known, generic fallback otherwise
-8. Python parser extracts structured data, returns JSON: `{ retailer, plan_name, meter_type, icp_number, usage_kwh, days, total_cents, c_per_kwh, c_per_day, fixed_term_expiry, break_fee, confidence }`
-9. Worker validates extracted data (sanity checks on value ranges)
-10. Worker updates bill record in D1 (status: `parsed` or `needs_review` based on confidence)
-11. Worker sends confirmation message to user via Sent:
-
-   > "Got your Contact Energy bill. 847 kWh over 31 days, $212.34 total. That's 25.1 c/kWh + $0.90/day. I'll compare your plans now."
-
-12. If `needs_review`: bill enters manual review queue; admin dashboard flag raised. User is NOT told about the review -- they see the normal confirmation.
-
-## Data Flow: Plan Comparison
-
-1. Trigger: new bill parsed successfully (status `parsed`) OR monthly Cron trigger OR plan data refreshed OR user requests "compare"
-2. Worker fetches user's full usage history (last 12 months) from D1 `bills` table
-3. Worker fetches all active plans for user's region from D1 `plans` table (populated from EIEP14A + manual entry)
-4. Worker enqueues comparison job to `flip-compare-queue` with `{ user_id, bill_ids[], plan_ids[] }`
-5. Queue consumer invokes Python plan comparator
-6. Python comparator computes projected cost for each plan against actual usage, produces ranked list with savings vs current plan
-7. Results stored in D1 `plan_comparisons` table: `(user_id, plan_id, projected_cost, current_cost, saving_cents, confidence, compared_at)`
-8. Notification evaluation: if best non-current plan saves > user's threshold AND user hasn't been notified in the cooldown period, enqueue notification to `flip-notify-queue`
-9. If notification triggered, worker sends proactive message via Sent. Sent's intelligent routing selects the optimal channel (WhatsApp first, SMS fallback):
-
-   > "You could save ~$84 over the next 3 months by switching from Contact to Mercury. Based on your last 3 bills (winter usage). Want me to switch you?"
-
-## Data Flow: Switching
-
-1. User replies "switch me" or "yes" to a plan recommendation
-2. Worker looks up the most recent comparison for this user (within 30 days)
-3. Worker validates: target plan is still available, user's current plan hasn't changed, savings still above threshold
-4. Worker fetches user's account details: ICP number, installation address, current retailer
-5. Worker initiates switch: submits to target retailer's switching API (if available) or sends structured email to retailer's switching desk
-6. Worker creates switch record in D1 (status: `requested`, `from_retailer_id`, `to_plan_id`)
-7. Cron-triggered switch tracker checks switch status daily (polls retailer API or checks for confirmation email)
-8. Worker sends status updates at milestones:
-   - "Switch requested with Mercury. They'll confirm within 2 business days."
-   - "Switch confirmed! Mercury takes over from [date]. Your final Contact bill will be sent to you directly."
-   - "Switch complete. You're now with Mercury on their [Plan Name] plan. I'll keep watching your bills."
-9. On completion: worker updates user's `current_plan_id` in D1, closes switch record
-
-## Data Flow: Email Integration
-
-1. User connects email via OAuth flow on minimal Cloudflare Pages portal (`flip.nz/connect`)
-2. OAuth flow completes: Gmail (`gmail.readonly` scope) or Outlook (`Mail.Read` scope)
-3. OAuth tokens stored encrypted in D1 `oauth_tokens` table (encrypted via WebCrypto API)
-4. Cron-triggered worker (`emailPoller.ts`) runs daily for each connected user:
-   - Refreshes OAuth token if needed
-   - Searches for emails from known retailer domains (e.g., `@contactenergy.co.nz`, `@mercury.co.nz`)
-   - Searches for emails matching power bill patterns in subject/body
-   - Downloads matching email attachments (PDFs)
-5. Found bills enter the same pipeline as manual forwarding: store in R2 → create bill record → enqueue parse
-6. Backdating: all historical bills found are parsed, building up to 12 months of usage baseline
-7. User notified: "I found 3 new bills from Contact Energy in your Gmail -- analyzing now."
-
-## Conversation State Machine
+## 1. Shape
 
 ```
-                          ┌─────────────┐
-                          │     NEW     │ (first ever message)
-                          └──────┬──────┘
-                                 │ user sends first message
-                                 ▼
-                          ┌─────────────┐
-                          │ ONBOARDING  │ (awaiting first bill)
-                          └──────┬──────┘
-                                 │ first bill parsed
-                                 ▼
-                    ┌────────────────────────┐
-                    │        ACTIVE          │◄──────────────────────────────┐
-                    │  (monitoring, can be   │                               │
-                    │   free_tier or paid)   │                               │
-                    └───┬────┬────┬────┬─────┘                               │
-                        │    │    │    │                                      │
-           ┌────────────┘    │    │    └────────────┐                         │
-           ▼                 │    │                 ▼                         │
-    ┌────────────┐           │    │          ┌────────────┐                   │
-    │ AWAITING   │           │    │          │ SWITCHING  │                   │
-    │ _BILL      │           │    │          │ (in        │                   │
-    │ (user said │           │    │          │  progress) │                   │
-    │  they'd    │           │    │          └─────┬──────┘                   │
-    │  send one) │           │    │                │ switch complete          │
-    └─────┬──────┘           │    │                └──────────────────────────┘
-          │ bill received    │    │
-          └──────────────────┘    │
-                                  │ user requests switch
-                                  ▼
-                           ┌──────────────────┐
-                           │ AWAITING_SWITCH  │
-                           │ _CONFIRM         │
-                           │ (plan recommended,│
-                           │  awaiting "yes")  │
-                           └────┬─────────────┘
-                                │ user confirms
-                                └──────► SWITCHING
-
-          ┌────────────┐                    ┌────────────┐
-          │ INACTIVE   │ (no bills in       │ UNSUBSCRIBED│ (user texted
-          │ (6+ months)│  6+ months)        │             │  "stop")
-          └────────────┘                    └────────────┘
+        flipflop.co.nz                    app.flipflop.co.nz
+        (Cloudflare Pages)                (Cloudflare Worker "flip-api")
+        signup · account · legal    ─────▶ webhooks · OAuth · admin · trace
+                                              │
+                    ┌─────────────────────────┼──────────────────────────┐
+                    ▼                         ▼                          ▼
+            D1 "flip-db"              KV + R2 "flip-bills"        3 Queues + 1 DO
+                                                                          │
+                                              ┌───────────────────────────┘
+                                              ▼
+                              Python service (Flask, Google Cloud Run)
+                              /parse · /compare
 ```
 
-| State | Trigger Events | Valid User Commands |
+**→ Decided:** the Worker moves to `app.flipflop.co.nz`; the Pages project at `flipflop.co.nz` owns the signup flow, account area and legal pages. OAuth redirect URIs and the CORS posture change with it.
+
+## 2. Worker runtime
+
+`workers/src/index.ts` — Hono, exports `{ fetch, queue, scheduled }` plus the `RateLimiter` Durable Object class.
+`compatibility_date = 2026-05-14`, `compatibility_flags = ["nodejs_compat"]`.
+
+### 2.1 Bindings
+
+| Kind | Binding | Target |
 |---|---|---|
-| NEW | First inbound message | help, any greeting |
-| ONBOARDING | Registration complete, awaiting bill | help, bill |
-| ACTIVE | Bill parsed, monitoring | help, usage, bill, compare, switch, status, stop |
-| AWAITING_BILL | User said they'd send a bill | bill, help, status |
-| AWAITING_SWITCH_CONFIRM | Plan recommended | yes/switch me, no/stay, help |
-| SWITCHING | Switch in progress | status, help, stop |
-| INACTIVE | No bills in 6+ months | help, bill (re-activates) |
-| UNSUBSCRIBED | User texted "stop" | help (can re-subscribe) |
+| D1 | `DB` | `flip-db` (`9bdbc913-…`) |
+| KV | `KV` | `6f4e28e8…` |
+| R2 | `BILLS` | `flip-bills` |
+| Queue producer | `PARSE_QUEUE` | `flip-parse-queue` |
+| Queue producer | `COMPARE_QUEUE` | `flip-compare-queue` |
+| Queue producer | `NOTIFY_QUEUE` | `flip-notify-queue` |
+| Durable Object | `RATE_LIMITER` | class `RateLimiter`, migration tag `v1` |
 
-## DeepSeek v4 Integration
+No `[[rules]]`, no `[env.*]` blocks. **→ Decided:** add a `staging` environment with its own D1, KV and queues, and `FLOW_TEST_MODE` enabled.
 
-DeepSeek v4 is used for natural language understanding -- interpreting what the user means from free-text WhatsApp/SMS messages. It is categorically NOT used for financial calculations or plan comparisons.
+### 2.2 Vars and flags
 
-### Flash Model (real-time routing)
+<!-- generated:flags — derived from [vars] in workers/wrangler.toml · verified by engine/drift.mjs · do not hand-edit inside this block -->
+| Var | Value | Gates |
+|---|---|---|
+| `ENVIRONMENT` | `production` | Passed to the notification engine; `production` hard-disables `FLOW_TEST_MODE` |
+| `EIF_EIEP14A_ENABLED` | `false` | EIEP14A ingestion on the 03:00 cron. **Inert until the EA feed lands in October.** |
+| `POWERSWITCH_SCRAPER_ENABLED` | `false` | Public plan-page scrape on the 03:00 cron |
+| `POWERSWITCH_LIVE` | `true` | Per-user Powerswitch replay in the compare consumer, and live calls in the canary |
+| `FLOW_TEST_MODE` | `false` | Bypasses threshold and both cooldowns for traced users |
+| `F1_HINT_CONFIDENCE_THRESHOLD` | `0.85` | Below this, a parsed bill routes to review |
+| `SERVICE_VERSION` | `0.1.0` | **Declared and never read** — `/` and `/health` use a hardcoded literal |
+<!-- /generated:flags -->
 
-Used for every inbound message to classify intent. Runs in the Worker's request path, target latency <500ms.
+Inventories wrapped in `<!-- generated:<id> … -->` / `<!-- /generated:<id> -->` markers are derived from source, not written by hand. `engine/drift.mjs` re-derives every one of them on each run; `node engine/drift.mjs --report` proves they are in sync. Regenerate a block by re-deriving it from the source named in its opening marker — do not hand-edit inside the markers.
+
+### 2.3 Secrets
+
+`ADMIN_API_KEY` · `DEEPSEEK_API_KEY` · `EIEP14A_API_KEY` · `ENCRYPTION_KEY` · `GMAIL_CLIENT_ID` · `GMAIL_CLIENT_SECRET` · `OPS_EMAIL` · `PYTHON_SERVICE_AUTH_TOKEN` · `PYTHON_SERVICE_URL` · `RESEND_API_KEY` · `SENT_API_KEY` · `SENT_WEBHOOK_SECRET`
+Plus `SENT_API_BASE_URL` read via `cloudflare:workers` (defaults to `https://api.sent.dm/v1`).
+
+`docs/OPERATIONS.md` is the canonical list and is enforced by `scripts/check-env-docs.mjs` in CI.
+
+## 3. HTTP surface
+
+<!-- generated:routes — derived from app.<method>(…) registrations in workers/src/index.ts · verified by engine/drift.mjs · do not hand-edit inside this block -->
+| Method | Path | Auth | Rate limit |
+|---|---|---|---|
+| GET | `/`, `/health` | — | bypassed |
+| POST | `/webhook/messaging` | `sentAuth` (HMAC-SHA256 over raw body) | 100/user, 1000/global per 60s |
+| GET | `/auth/gmail`, `/auth/gmail/` | — | — |
+| POST | `/auth/gmail/login` | — | — |
+| GET | `/auth/gmail/callback` | — | — |
+| GET | `/auth/gmail/scan-status` | signed link (`u`+`exp`+`sig`) | — |
+| GET | `/auth/gmail/eval-status` | signed link | — |
+| GET | `/eval`, `/eval/` | — **→ Decided: `adminAuth`** | — |
+| POST | `/eval/upload` | — **→ Decided: `adminAuth`** | 5/IP per 60s (inline KV) |
+| GET | `/eval/result`, `/eval/status` | — **→ Decided: `adminAuth`** | 30/300 per 60s |
+| POST | `/api/switch` | **none — known gap** | 30/300 per 60s |
+| GET | `/admin/templates` | `adminAuth` (Bearer) | — |
+| GET | `/admin/templates/status` | `adminAuth` | — |
+| GET | `/admin/rate-limit/:userKey` | `adminAuth` | — |
+| GET | `/admin/notifications` | `adminAuth` | — |
+| GET | `/admin/flow-link` | `adminAuth` | — |
+| POST | `/admin/test-run/reset` | `adminAuth` | — |
+| GET | `/admin/*` (catch-all) | `adminAuth` | 501 stub |
+| GET | `/flow/status`, `/flow/status.json` | admin Bearer OR signed link | — |
+| POST | `/webhook/stripe` | — | **501 stub** |
+| GET | `/webhook/email/*` | — | **501 stub** |
+<!-- /generated:routes -->
+
+**→ Decided:** `POST /api/switch` must require the HMAC signed link or a session. Reuse `flowLink.ts`, which already mints and verifies signed links for `/flow/status`.
+
+### 3.1 Middleware
+
+- `errorHandler` — global; strips phone, email, ICP and street-address patterns from logged messages.
+- `sentAuth` — HMAC-SHA256 hex in `X-Sent-Signature`; sets `phone_hash` on the context.
+- `adminAuth` — `Authorization: Bearer <ADMIN_API_KEY>`, timing-safe compare.
+- `rateLimit` — Durable Object backed. Key preference: `phone_hash` → hashed phone → hashed `ip:<CF-Connecting-IP>` → `unknown`. **Fails closed** when the DO is unreachable.
+
+The rate limiter is a **Durable Object**, not the KV sliding window some older docs described. KV raced; the DO gives atomic per-key counting. It stores an array of millisecond timestamps per key and trims on read.
+
+## 4. Data flow
+
+### 4.1 Ingestion → alert
 
 ```
-User: "what am I paying right now"
-Flash → { intent: "usage", confidence: 0.97, entities: { timeframe: "current" } }
-
-User: "is genesis any good"
-Flash → { intent: "compare", confidence: 0.82, entities: { retailer: "Genesis" } }
-
-User: "nah that doesn't seem worth it"
-Flash → { intent: "decline", confidence: 0.94 }
-
-User: "yeah go on then"
-Flash → { intent: "confirm_switch", confidence: 0.91 }
+bill arrives (WhatsApp/SMS media · Gmail poll · web upload)
+   └─▶ R2 BILLS + bills row (status=pending_parse)
+        └─▶ PARSE_QUEUE
+             └─▶ Python /parse ──▶ bills row updated (parsed | needs_review | failed)
+                  └─▶ COMPARE_QUEUE
+                       └─▶ Powerswitch replay ──▶ plan set
+                            └─▶ Python /compare ──▶ plan_comparisons row
+                                 └─▶ NOTIFY_QUEUE
+                                      └─▶ evaluateAndNotify ──▶ sent.dm
 ```
 
-Intent taxonomy: `help`, `usage`, `bill`, `compare`, `switch`, `confirm_switch`, `decline`, `status`, `stop`, `unknown`
+### 4.2 Queues
 
-### Pro Model (complex disambiguation)
+| Queue | Batch | Concurrency | Retries | DLQ |
+|---|---|---|---|---|
+| `flip-parse-queue` | 1 | 3 | 3, `retry_delay=30` | `flip-parse-dlq` |
+| `flip-compare-queue` | 1 | 2 | none declared | none |
+| `flip-notify-queue` | 1 | 5 | none declared | none |
 
-Used when Flash confidence is below threshold (<0.85) or when the conversation is multi-turn and needs context.
+**Parse** classifies failures: `ParseError.transient` retries with backoff `30 × attempts`; terminal errors (4xx, `extract_failed`, `no_media`) write `updateBillFailed` and ack without retry.
 
-```
-User: "that seems high"
-  (Flash confidence 0.72 -- could mean usage, cost, or rate)
-Pro → Clarify: "Are you saying your bill total seems high, or the rate per kWh? 
-      Your current bill is $212. The average for similar households this month is $195."
+**Compare** has no transient/terminal distinction — every error retries to exhaustion then acks, writing no failure state. Known asymmetry.
 
-User: "last winter was cheaper"
-Pro → Context: "Your bills from last winter (Jun-Aug 2025) averaged $178/month. 
-      This winter's bills so far average $201/month. That's about $23/month higher. 
-      The difference is mostly usage -- you used 940 kWh in July 2026 vs 820 kWh in July 2025. 
-      Your rate hasn't changed. Want me to check if another plan would help with higher winter usage?"
-```
+### 4.3 Cron
 
-### What DeepSeek Does NOT Do
+<!-- generated:cron — derived from crons = [...] in workers/wrangler.toml · verified by engine/drift.mjs · do not hand-edit inside this block -->
+| Cron (UTC) | Runs |
+|---|---|
+| `0 3` | EIEP14A refresh (flag-gated) · Powerswitch public scrape (flag-gated) · purge `llm_audit` >30d · purge `notification_audit` >90d |
+| `0 6` | Gmail poll, all users |
+| `0 8` | Plan-diff consumer → re-compare · **free-tier check-in (day 1 of month)** · fixed-term expiry scan · switch sanity check |
+| `0 10` | Powerswitch drift canary |
+| `0 14` | Gmail poll, all users |
+<!-- /generated:cron -->
 
-- Does NOT calculate projected costs (Python comparator does this)
-- Does NOT extract data from bill PDFs (Python parsers do this)
-- Does NOT make switching recommendations (threshold logic does this)
-- Does NOT store or learn from user bill data (no fine-tuning on user data)
+**→ Decided:** the free-tier check-in is **removed entirely**. Delete `freeTierCheckin.ts`, `getFreeTierUsers` and the day-of-month branch. Replace with a monthly reassurance for paying customers in months where no saving alert fired.
 
-## Database Schema (D1)
+Dispatch is by **exact string equality** on the cron expression — adding a trigger without adding a branch silently does nothing.
 
-### users
-| Column | Type | Description |
+## 5. Database
+
+14 tables from 21 migrations. Full column detail lives in the migration files; this is the map.
+
+<!-- generated:tables — derived from CREATE TABLE across workers/migrations/, replayed in order · verified by engine/drift.mjs · do not hand-edit inside this block -->
+| Table | Purpose | Notes |
 |---|---|---|
-| id | TEXT (UUID) | Primary key |
-| phone | TEXT | NZ mobile number (unique) |
-| sent_contact_id | TEXT | Sent contact ID |
-| name | TEXT | User's preferred name |
-| email | TEXT | For email integration |
-| subscription_tier | TEXT | 'free' or 'paid' |
-| stripe_customer_id | TEXT | Stripe customer reference |
-| current_retailer_id | TEXT | FK → retailers |
-| current_plan_name | TEXT | From most recent bill |
-| icp_number | TEXT | Installation control point |
-| installation_address | TEXT | Service address |
-| notification_threshold_cents | INTEGER | Minimum saving to notify (default 5000 = $50) |
-| state | TEXT | Conversation state machine state |
-| created_at | TEXT | ISO 8601 |
-| updated_at | TEXT | ISO 8601 |
+| `users` | Identity, state machine, threshold | `phone` unique; `phone_encrypted` + `phone_hash` blind index; `powerswitch_pxid`/`_location_id` |
+| `bills` | One row per ingested bill | `source ∈ whatsapp\|sms\|gmail\|outlook\|web`; `source_message_id` UNIQUE (Gmail dedup) |
+| `retailers` | 25 seeded | `email_domains` JSON array drives sender matching |
+| `plans` | Comparison targets | `provenance ∈ eiep14a\|powerswitch\|manual`; migration 0020 expired every seeded manual plan |
+| `plan_comparisons` | Comparison output | `recommendation ∈ switch\|stay_put` |
+| `switches` + `switch_transitions` | Switch state machine + audit | `transitionSwitch` is the trust boundary |
+| `messages` | Inbound/outbound log | `body_encrypted` |
+| `oauth_tokens` | Gmail tokens, encrypted | `provider ∈ gmail\|outlook` |
+| `notifications` | What was sent | `type` includes `free_tier_checkin` — **→ retiring** |
+| `notification_audit` | Sent/suppressed/failed, with reason | 90-day purge |
+| `usage_metrics` | Derived usage intelligence | |
+| `llm_audit` | Metadata only, never content | 30-day purge |
+| `plan_data_provenance` | Ingestion lineage | No indexes |
+<!-- /generated:tables -->
 
-### bills
-| Column | Type | Description |
+### 5.1 Known schema facts worth carrying
+
+- **Threshold column, → Decided (D-04).** `users.notification_threshold_cents` carries a column default of **5000** while `createUser` explicitly binds **20000**, and migration 0021 moved every existing row. The default is deliberately unreachable — a trap for any insert path that does not go through `createUser`, and for anyone reasoning from the schema.
+  - Set the column default to **`20000`**.
+  - **Rename it `alert_threshold_cents`**, so its scope is unambiguous.
+  - The web preview threshold is a **separate named constant**, `WEB_PREVIEW_THRESHOLD_CENTS = 5000`, and does **not** live on the user row — it is a global product rule, not a per-user preference.
+
+  Two thresholds sharing one column is how the original $50/$200 confusion arose; naming them apart is the cheapest prevention available.
+- `idx_comparisons_user_id` and `idx_plan_comparisons_user_id` are duplicate indexes on the same column with different names (0001 and 0014).
+- No user FK cascades. `dataDeletion.ts` deletes child rows in explicit order because of this.
+
+### 5.2 Migration ledger — unresolved
+
+The remote D1 has **no `d1_migrations` ledger**, so `wrangler d1 migrations apply` must not be run against it. Nobody knows with certainty which of the 21 migrations production is on.
+
+**→ Decided, and human-gated:** dump the live schema, diff against all 21 migrations, hand-insert the correct ledger rows, then resume normal migration flow. Getting this wrong is unrecoverable.
+
+## 6. Notification engine
+
+`evaluateAndNotify(userId, comparisonId, env)` is the only path to a proactive message.
+
+Guards today:
+
+| Guard | Key | Window |
 |---|---|---|
-| id | TEXT (UUID) | Primary key |
-| user_id | TEXT | FK → users |
-| retailer_id | TEXT | FK → retailers (nullable until parsed) |
-| plan_name | TEXT | From bill |
-| meter_type | TEXT | standard, low_user, day_night, controlled |
-| period_start | TEXT | Billing period start (ISO 8601) |
-| period_end | TEXT | Billing period end |
-| days | INTEGER | Days in billing period |
-| usage_kwh | REAL | Total kWh |
-| total_cents | INTEGER | Total bill in cents (NZD) |
-| c_per_kwh | REAL | Effective rate |
-| c_per_day | REAL | Fixed daily charge |
-| fixed_term_expiry | TEXT | Contract end date (if applicable) |
-| break_fee_cents | INTEGER | Break fee if switching early |
-| status | TEXT | pending_parse, parsing, parsed, needs_review |
-| confidence | REAL | Parser confidence (0-1) |
-| raw_r2_key | TEXT | R2 key for original file |
-| parsed_json | TEXT | Full parser output JSON |
-| source | TEXT | whatsapp, sms, gmail, outlook |
-| created_at | TEXT | ISO 8601 |
+| Send dedup | `dedup:` | 1 hour |
+| Per-user-per-plan cooldown | `cooldown:` | 7 days |
+| Per-comparison | `notified:` | 30 days |
+| Threshold | `users.notification_threshold_cents` | — |
 
-### retailers
-| Column | Type | Description |
+**→ Decided:** remove the 7-day per-plan cooldown. Saving alerts are immediate and uncapped; the 1-hour dedup stays. Reassurance is monthly and paid-only.
+
+`FLOW_TEST_MODE` bypasses threshold and both cooldowns, and is structurally disabled when `ENVIRONMENT="production"`.
+
+## 7. Plan data
+
+Three sources exist in code; **one is live**.
+
+| Source | Flag | State |
 |---|---|---|
-| id | TEXT (UUID) | Primary key |
-| name | TEXT | Display name (e.g., "Contact Energy") |
-| domain | TEXT | Email domain for bill detection |
-| parser_id | TEXT | Python parser module name (e.g., "contact") |
-| is_active | INTEGER | 0 or 1 |
+| Per-user Powerswitch replay | `POWERSWITCH_LIVE=true` | **Live — the only source** |
+| EIEP14A feed | `EIF_EIEP14A_ENABLED=false` | Built, inert. **→ becomes primary in October** |
+| Public plan-page scrape | `POWERSWITCH_SCRAPER_ENABLED=false` | Built, inert |
 
-### plans
-| Column | Type | Description |
+The Powerswitch path: `powerswitchSession` resolves an address to a `pxid` and location id (persisted on the user row) → `powerswitchReplay` replays the questionnaire over HTTP → `powerswitchRscParser` parses the React Server Components flight stream → `powerswitchPlanMapper` shapes it for the comparator. `powerswitchCanary` runs daily against a fixture address to detect schema drift and sets a 48-hour KV flag.
+
+Seeded plans were removed from live comparison (migration 0020). When Powerswitch returns nothing, fail honest — do not substitute fabricated data.
+
+## 8. AI surfaces
+
+**Model: `deepseek-v4-pro`.** `deepseek-chat` and `deepseek-reasoner` were **retired by DeepSeek on 24 July 2026**; code still referencing them is broken.
+
+| Module | Role |
+|---|---|
+| `deepseek.ts` | Intent classification, escalation, disambiguation |
+| `ingestionIntelligence.ts` | Retailer classification · **advisory validation of parser output** · bill summaries |
+| `usageIntelligence.ts` | Trend, seasonality and anomaly narration |
+| `comparisonIntelligence.ts` | Plain-language comparison explanation |
+
+**Rule:** arithmetic always overrides the model. `reconcile_total` in the Python parser is the authority on whether a bill parsed correctly; the model advises and never decides.
+
+Prompts live in `services/prompts/*.md` and are **duplicated as TS constants in `services/prompts.ts`**, because Workers cannot read `.md` at runtime. The duplication is a known maintenance hazard.
+
+## 9. Python service
+
+Flask + gunicorn on **Google Cloud Run** (`flip-python-360483648756.australia-southeast1.run.app`).
+
+**→ Decided:** `python/fly.toml` is deleted and `python/DEPLOY.md` rewritten. Cloud Run is what runs; confirm no Fly app is still billing.
+
+| Route | Auth | Purpose |
 |---|---|---|
-| id | TEXT (UUID) | Primary key |
-| retailer_id | TEXT | FK → retailers |
-| name | TEXT | Plan name |
-| region | TEXT | NZ region(s) plan is available in |
-| c_per_kwh | REAL | Standard variable rate |
-| c_per_day | REAL | Standard daily charge |
-| tier_thresholds_json | TEXT | Tiered pricing structure |
-| prompt_payment_discount | REAL | Discount percentage |
-| conditions_json | TEXT | Any conditional pricing |
-| low_user_eligible | INTEGER | 0 or 1 |
-| source | TEXT | eiep14a or manual |
-| eiep14a_id | TEXT | EIEP14A plan identifier |
-| effective_from | TEXT | ISO 8601 |
-| effective_to | TEXT | ISO 8601 (null if current) |
+| `GET /health` | — | liveness |
+| `POST /parse` | Bearer `SERVICE_AUTH_TOKEN` — **no-op if the env var is unset** | bill → structured fields |
+| `POST /compare` | same | usage + plans → ranked comparison |
 
-### plan_comparisons
-| Column | Type | Description |
+**Parse strategy:** the retailer-specific parser runs, then `GenericParser` **always** runs as well, and the higher-confidence result wins.
+
+**Parsers:** contact, mercury, genesis, meridian, trustpower, nova, electric_kiwi, powershop, flick, pulse, plus generic. **→ Decided:** add Black Box Power, Grey Power and Electra.
+
+**Validation:** `reconcile_total` with `RECONCILE_TOLERANCE = 0.10`; failure drops confidence to `RECONCILE_FAIL_CONFIDENCE = 0.5`. This — not a c/kWh range check — is the real guard.
+
+**Comparator:** `SWITCH_THRESHOLD_CENTS = 20000`, `LOW_USER_ANNUAL_KWH_THRESHOLD = 8000`, `GST_RATE = 0.15`. GST basis is normalised before comparison.
+
+## 10. External services
+
+<!-- generated:hosts — derived from outbound https:// hosts in workers/src · verified by engine/drift.mjs · do not hand-edit inside this block -->
+| Host | Purpose | From |
 |---|---|---|
-| id | TEXT (UUID) | Primary key |
-| user_id | TEXT | FK → users |
-| plan_id | TEXT | FK → plans |
-| bill_ids_json | TEXT | Bill IDs used for comparison |
-| projected_cost_cents | INTEGER | What user would pay on this plan |
-| current_cost_cents | INTEGER | What user paid on current plan |
-| saving_cents | INTEGER | projected - current (negative = saving) |
-| confidence | REAL | 0-1 based on data freshness/completeness |
-| compared_at | TEXT | ISO 8601 |
+| `api.sent.dm` | WhatsApp/SMS send, templates, media | `messaging.ts`, `sentTemplates.ts` |
+| `api.deepseek.com` | All four AI surfaces | four services |
+| `accounts.google.com`, `oauth2.googleapis.com`, `www.googleapis.com` | Gmail OAuth and API | `gmailAuth.ts` |
+| `www.powerswitch.org.nz` | Plan data | `powerswitchSession.ts`, `powerswitchScraper.ts` |
+| `api.resend.com` | Ops and transactional email | `email.ts` |
+| `www.emi.ea.govt.nz` | EIEP14A feed | `eiep14a.ts` (TS), `eiep14a/fetcher.py` |
+| Cloud Run | Parse and compare | `billParser.ts`, `planComparator.ts` |
+<!-- /generated:hosts -->
 
-### switches
-| Column | Type | Description |
-|---|---|---|
-| id | TEXT (UUID) | Primary key |
-| user_id | TEXT | FK → users |
-| from_retailer_id | TEXT | FK → retailers |
-| to_plan_id | TEXT | FK → plans |
-| status | TEXT | requested, confirmed, in_progress, completed, failed |
-| requested_at | TEXT | ISO 8601 |
-| confirmed_at | TEXT | ISO 8601 |
-| completed_at | TEXT | ISO 8601 |
+Outbound hosts Flip calls and processors that receive customer-derived data are different sets. `www.emi.ea.govt.nz` is an inbound plan-data feed — Flip sends it no customer data, so it is not a processor; the NZ retailer domains that appear in source are user-facing switch instructions, never fetched. Conversely, two processors are not outbound hosts at all: Cloudflare, because it is the platform Flip runs on, and Stripe, which is not live yet. The canonical processor list for privacy-policy purposes is PRD §10.2.
 
-### messages
-| Column | Type | Description |
-|---|---|---|
-| id | TEXT (UUID) | Primary key |
-| user_id | TEXT | FK → users |
-| direction | TEXT | inbound or outbound |
-| channel | TEXT | whatsapp or sms |
-| body | TEXT | Message text |
-| media_url | TEXT | Sent media URL (if any) |
-| sent_message_id | TEXT | Sent message ID |
-| intent | TEXT | Classified intent (if inbound) |
-| created_at | TEXT | ISO 8601 |
+## 11. Security posture
 
-### oauth_tokens
-| Column | Type | Description |
-|---|---|---|
-| id | TEXT (UUID) | Primary key |
-| user_id | TEXT | FK → users |
-| provider | TEXT | gmail or outlook |
-| access_token_encrypted | TEXT | Encrypted access token |
-| refresh_token_encrypted | TEXT | Encrypted refresh token |
-| expiry | TEXT | Token expiry (ISO 8601) |
-| created_at | TEXT | ISO 8601 |
+- **Encryption:** AES-256-GCM via WebCrypto for phone and message body; SHA-256 blind index for phone lookup.
+- **R2 bill PDFs:** Cloudflare default at-rest encryption only. Accepted.
+- **Rate limiting:** DO-backed, fails closed.
+- **Admin:** Bearer token only. No Cloudflare Access, no IP allowlist.
+- **Turnstile:** not present. **→ Decided:** add to the public web signup flow.
+- **PII in logs:** stripped by `errorHandler`.
 
-### notifications
-| Column | Type | Description |
-|---|---|---|
-| id | TEXT (UUID) | Primary key |
-| user_id | TEXT | FK → users |
-| type | TEXT | saving_alert, stay_put, fixed_term_expiry, free_tier_checkin, switch_update |
-| content_json | TEXT | Template variables |
-| sent_at | TEXT | ISO 8601 |
-| responded_at | TEXT | ISO 8601 (null if no response) |
-| response | TEXT | user's response (if any) |
+### Known gaps
+1. `POST /api/switch` unauthenticated.
+2. `/eval` unauthenticated and writes production `users`/`bills` rows.
+3. Remote migration ledger unknown (§5.2).
+4. Data deletion not verified to cover R2 objects and Google OAuth token revocation.
 
-## Key Directories
+## 12. Testing
 
-```
-Flip/
-├── docs/                    # Project documentation
-│   ├── PRD.md
-│   ├── ARCHITECTURE.md
-│   ├── AI_RULES.md
-│   ├── PLAN.md
-│   └── DEPLOY.md
-├── workers/                 # Cloudflare Workers (TypeScript + Hono)
-│   ├── src/
-│   │   ├── index.ts         # Worker entry point, Hono router
-│   │   ├── routes/
-│   │   │   ├── messaging.ts  # POST /webhook/messaging (Sent unified)
-│   │   │   ├── stripe.ts    # POST /webhook/stripe
-│   │   │   ├── email.ts     # GET /webhook/email/gmail|outlook/callback
-│   │   │   └── admin.ts     # Admin endpoints (manual review, health)
-│   │   ├── services/
-│   │   │   ├── messaging.ts      # Sent API (unified WhatsApp + SMS)
-│   │   │   ├── parser.ts           # Bill parser interface (invokes Python)
-│   │   │   ├── comparator.ts       # Plan comparison interface (invokes Python)
-│   │   │   ├── switchService.ts    # Switch lifecycle management
-│   │   │   ├── notification.ts     # Notification evaluation + dispatch
-│   │   │   ├── conversation.ts     # Conversation state machine
-│   │   │   ├── emailPoller.ts      # Gmail/Outlook bill polling (Cron)
-│   │   │   └── deepseek.ts         # DeepSeek v4 Flash/Pro routing
-│   │   ├── middleware/
-│   │   │   ├── sentAuth.ts        # Sent webhook signature validation
-│   │   │   ├── rateLimit.ts        # KV-based sliding window rate limiter
-│   │   │   └── errorHandler.ts     # Global error boundary + structured logging
-│   │   ├── models/          # D1 data access layer
-│   │   │   ├── users.ts
-│   │   │   ├── bills.ts
-│   │   │   ├── plans.ts
-│   │   │   ├── comparisons.ts
-│   │   │   ├── switches.ts
-│   │   │   └── messages.ts
-│   │   └── types/           # TypeScript interfaces
-│   ├── migrations/          # D1 schema migrations
-│   │   └── 0001_initial.sql
-│   ├── wrangler.toml
-│   ├── tsconfig.json
-│   └── package.json
-├── python/                  # Bill parsing + plan comparison engine
-│   ├── parsers/
-│   │   ├── __init__.py
-│   │   ├── base.py          # Base parser class + shared extraction logic
-│   │   ├── contact.py
-│   │   ├── mercury.py
-│   │   ├── genesis.py
-│   │   ├── meridian.py
-│   │   ├── trustpower.py
-│   │   ├── nova.py
-│   │   ├── electric_kiwi.py
-│   │   ├── powershop.py
-│   │   ├── flick.py
-│   │   └── pulse.py
-│   ├── comparator/
-│   │   ├── __init__.py
-│   │   └── engine.py        # Deterministic plan comparison math
-│   ├── eiep14a/
-│   │   ├── __init__.py
-│   │   └── ingest.py        # EIEP14A data fetch + validate + store
-│   ├── tests/
-│   │   ├── parsers/
-│   │   │   └── test_contact.py
-│   │   └── comparator/
-│   │       └── test_engine.py
-│   └── requirements.txt
-├── pages/                   # Cloudflare Pages (minimal web portal)
-│   └── src/
-│       ├── connect/         # OAuth connection page (Gmail + Outlook buttons)
-│       ├── account/         # Minimal account management
-│       └── legal/           # Privacy Policy, Terms of Service
-├── legal/                   # Legal documents (Privacy Policy, TOS)
-│   ├── privacy.md
-│   └── terms.md
-└── .claude/                 # Claude Code settings
-    └── settings.local.json
-```
+- **Workers:** Vitest 3 with `@cloudflare/vitest-pool-workers` (real workerd, real bindings). 59 test files. Coverage thresholds set at 80% but `--coverage` is disabled in CI pending workerd support.
+- **E2E:** `vitest.e2e.config.ts` — exists, passes, **not in CI**. **→ Decided:** add `npm run test:all`.
+- **Python:** pytest, 23 modules, plus `scripts/eval_parser.py` which runs every committed fixture against its expected output and exits non-zero on mismatch.
+- **CI:** `.github/workflows/ci.yml` — env-doc check, `tsc --noEmit`, eslint, vitest, `wrangler deploy --dry-run`, then pytest and the parser eval.
+
+## 13. Deployment
+
+Worker deploys via **Cloudflare Workers Builds** Git integration, production branch `master`.
+Python deploys via `gcloud run deploy`.
+Pages project serves `flipflop.co.nz`.
+
+See `docs/OPERATIONS.md` for the runbook, secrets and environment detail.

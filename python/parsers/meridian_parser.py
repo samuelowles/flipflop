@@ -105,7 +105,9 @@ class MeridianParser(BaseParser):
             period_start = None
 
         # --- Daily charge ---
-        c_per_day = extract_daily_charge(full_text)
+        c_per_day = self._extract_meridian_daily_charge(full_text)
+        if c_per_day is None:
+            c_per_day = extract_daily_charge(full_text)
         if c_per_day is not None and validate_c_per_day(c_per_day):
             fields_found += 1
         else:
@@ -115,7 +117,9 @@ class MeridianParser(BaseParser):
             c_per_day = 0.0
 
         # --- Per-kWh rate ---
-        c_per_kwh = extract_per_kwh(full_text)
+        c_per_kwh = self._extract_meridian_per_kwh(full_text)
+        if c_per_kwh is None:
+            c_per_kwh = extract_per_kwh(full_text)
         if c_per_kwh is not None and validate_c_per_kwh(c_per_kwh):
             fields_found += 1
         else:
@@ -187,8 +191,15 @@ class MeridianParser(BaseParser):
         Meridian day/night bills list day and night components separately
         before a total; this prefers an explicit "Total units/usage" label
         so the aggregate is returned rather than the first component.
+
+        Split-period bills print the aggregate on a "Property charges for
+        this period NNN.N kWh" line. That is matched FIRST: none of the
+        other patterns reach it, so without this the method returns None
+        and the caller falls through to the shared extract_kwh(), which
+        returns the FIRST segment's volume instead of the period total.
         """
         patterns = [
+            re.compile(r"Property\s+charges\s+for\s+this\s+period\s+([\d,]+(?:\.\d+)?)\s*kWh"),
             re.compile(r"[Tt]otal\s*(?:units|usage|consumption|kWh)[\s:#-]*([\d,]+(?:\.\d+)?)"),
             re.compile(r"(?:[Tt]otal|Consumption)[\s:#-]*([\d,]+(?:\.\d+)?)\s*kWh", re.IGNORECASE),
         ]
@@ -217,10 +228,18 @@ class MeridianParser(BaseParser):
     def _extract_meridian_total(text: str) -> Optional[int]:
         """Meridian bills use 'Total to pay' as the canonical total label.
 
-        Falls back to the shared extract_dollars if the Meridian-specific
-        label is not found.
+        "Total charges" is preferred ABOVE every other label: it is THIS
+        period's charge, whereas "Total amount due"/"Your bill"/"Total to
+        pay" fold in any unpaid prior balance (a real bill showed $489.15
+        amount due against $231.01 of current charges — the $258.14 gap was
+        the previous month's unpaid bill). On a bill with no arrears the two
+        figures are equal, so preferring "Total charges" is strictly safer.
+
+        Falls back to the shared extract_dollars if no Meridian-specific
+        label is found.
         """
         patterns = [
+            re.compile(r"[Tt]otal\s*[Cc]harges?[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"),
             re.compile(r"[Tt]otal\s*[Tt]o\s*[Pp]ay[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"),
             re.compile(r"[Pp]lease\s*[Pp]ay[\s:#$-]*\$?\s*([\d,]+(?:\.\d{2})?)"),
         ]
@@ -232,6 +251,79 @@ class MeridianParser(BaseParser):
                 except ValueError:
                     continue
         return extract_dollars(text)
+
+    @staticmethod
+    def _extract_meridian_per_kwh(text: str) -> Optional[float]:
+        """Volume-weighted c/kWh across split-period charge segments.
+
+        A re-rated or price-changed Meridian bill itemises two
+        "NN.NN c/kWh NNN.N kWh" segments at different rates; the shared
+        extract_per_kwh() returns the first (pre-change) rate, so the
+        period never reconciles. This blends the segments by volume:
+        sum(rate * kwh) / sum(kwh).
+
+        Returns None for fewer than two segments, or when every segment
+        shares a rate — single-rate bills are unchanged and fall back to
+        the shared extract_per_kwh() path.
+        """
+        segment = re.compile(
+            r"([\d.]+)\s*c(?:ents?)?\s*(?:/|per)\s*kWh\s+([\d,]+(?:\.\d+)?)\s*kWh",
+            re.IGNORECASE,
+        )
+        segments = []
+        for match in segment.finditer(text):
+            try:
+                rate = float(match.group(1))
+                kwh = float(match.group(2).replace(",", ""))
+            except ValueError:
+                continue
+            segments.append((rate, kwh))
+
+        if len(segments) < 2:
+            return None
+        if len({rate for rate, _ in segments}) == 1:
+            return None
+
+        total_kwh = sum(kwh for _, kwh in segments)
+        if total_kwh <= 0:
+            return None
+        return round(sum(rate * kwh for rate, kwh in segments) / total_kwh, 2)
+
+    @staticmethod
+    def _extract_meridian_daily_charge(text: str) -> Optional[float]:
+        """Day-weighted c/day across split-period daily-charge segments.
+
+        Mirrors _extract_meridian_per_kwh: a split-period bill carries two
+        "Daily Charge (NNN.NN c/day x NN days)" lines, and the shared
+        extract_daily_charge() returns the first. This blends them by day
+        count: sum(rate * days) / sum(days).
+
+        Returns None for fewer than two segments, or when every segment
+        shares a rate — single-rate bills are unchanged and fall back to
+        the shared extract_daily_charge() path.
+        """
+        segment = re.compile(
+            r"[Dd]aily\s*[Cc]harge\s*\(\s*([\d.]+)\s*c(?:ents?)?\s*(?:/|per)\s*day"
+            r"\s*[x×]\s*(\d+)\s*days?\s*\)",
+        )
+        segments = []
+        for match in segment.finditer(text):
+            try:
+                rate = float(match.group(1))
+                days = int(match.group(2))
+            except ValueError:
+                continue
+            segments.append((rate, days))
+
+        if len(segments) < 2:
+            return None
+        if len({rate for rate, _ in segments}) == 1:
+            return None
+
+        total_days = sum(days for _, days in segments)
+        if total_days <= 0:
+            return None
+        return round(sum(rate * days for rate, days in segments) / total_days, 2)
 
     @staticmethod
     def _compute_days(period_start: Optional[str], period_end: Optional[str]) -> int:

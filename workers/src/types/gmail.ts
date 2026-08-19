@@ -82,6 +82,8 @@ export interface ScanProgress {
   messagesScanned: number;
   messagesSkippedNoSubject: number;
   messagesSkippedNoPdf: number;
+  /** Messages skipped because they are forwarded, not direct-from-retailer. */
+  messagesSkippedForwarded: number;
   /** Messages whose bill(s) were already ingested on a previous scan (dedup). */
   billsAlreadyImported: number;
   billsFound: number;

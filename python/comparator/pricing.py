@@ -110,8 +110,14 @@ def calculate_bill_cost(kwh: float, days: int, plan: dict) -> int:
     Returns:
         Total cost in integer cents (NZD).
     """
-    c_per_kwh = float(plan.get("c_per_kwh", 0))
-    c_per_day = float(plan.get("c_per_day", 0))
+    # `or 0` is load-bearing, not defensive noise: dict.get's default applies
+    # only when the KEY IS ABSENT, and these plans come straight from D1 where
+    # the columns are nullable and usually present-but-NULL. float(None) raises
+    # TypeError, which surfaced as a bare 500 from /compare and left the caller
+    # showing "still analysing" forever. Pricing an unpriceable plan at 0 is not
+    # a risk here: is_unsupported_plan already excluded those before this point.
+    c_per_kwh = float(plan.get("c_per_kwh") or 0)
+    c_per_day = float(plan.get("c_per_day") or 0)
 
     # Apply tiered pricing if configured
     tiers = _get_tiers(plan)
@@ -128,8 +134,10 @@ def calculate_bill_cost(kwh: float, days: int, plan: dict) -> int:
 
     subtotal = energy_cents + daily_cents
 
-    # Prompt payment discount
-    discount_pct = float(plan.get("prompt_payment_discount", 0))
+    # Prompt payment discount. NULL on 12 of the 17 currently-seeded plans, so
+    # this is the line that actually fired in production (see the `or 0` note
+    # above) — the field is optional and its absence means "no discount".
+    discount_pct = float(plan.get("prompt_payment_discount") or 0)
     if discount_pct > 0:
         subtotal = apply_discount(subtotal, discount_pct)
 

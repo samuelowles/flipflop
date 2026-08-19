@@ -12,6 +12,7 @@ import { createBill, getBillsByUserId, updateBillParsedData } from '../models/bi
 import { createUser as _createUser, findOrCreateByPhone } from '../models/users';
 import { createComparison } from '../models/comparisons';
 import { getPlansByRegion, getPlansByRetailer } from '../models/plans';
+import { getRetailerNamesByIds } from '../models/retailers';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -51,13 +52,35 @@ interface ComparisonResultItem {
   readonly saving_cents: number;
   readonly confidence: number;
   readonly stay_where_you_are: boolean;
+  // Python stamps the user-level verdict onto EVERY row identically
+  // (plan_comparator.py: _derive_recommendation → for r in results: stamp).
+  // Optional because older unit-test fixtures omit it; the verdict derivation
+  // falls back to the local logic when these are absent.
+  readonly recommendation?: 'switch' | 'stay_put';
+  readonly reason?: string | null;
+}
+
+/**
+ * The user-level verdict surfaced at the top of the comparison page. Derived
+ * from the SAME recommendation/verdictItem the plan_comparisons summary-row
+ * write uses (see runEvalComparison) — never recomputed by separate logic.
+ * All money is annual cents.
+ */
+export interface EvalVerdict {
+  readonly recommendation: 'switch' | 'stay_put';
+  readonly planName: string;
+  readonly retailerName: string;
+  readonly currentCostCents: number;
+  readonly projectedCostCents: number;
+  readonly savingCents: number;
+  readonly confidence: number;
 }
 
 // ---------------------------------------------------------------------------
 // Helpers (extracted from planComparator.ts to avoid queue/Sent coupling)
 // ---------------------------------------------------------------------------
 
-function billToSummary(bill: {
+export function billToSummary(bill: {
   id: string;
   usageKwh: number | null;
   totalCents: number | null;
@@ -66,12 +89,18 @@ function billToSummary(bill: {
   days: number | null;
   breakFeeCents: number | null;
 }): BillSummary | null {
+  // A non-positive day count is a parser mis-extraction (e.g. period_end before
+  // period_start). Letting it through lets a negative value SUBTRACT from
+  // totalDays in computeAvgDailyKwh and inflate average daily usage, and lets a
+  // zero contribute usage with no days. Exclude such bills from the usage
+  // profile here, in this one place, rather than guarding again downstream.
   if (
     bill.usageKwh == null ||
     bill.totalCents == null ||
     !bill.periodStart ||
     !bill.periodEnd ||
-    bill.days == null
+    bill.days == null ||
+    bill.days <= 0
   ) {
     return null;
   }
@@ -86,7 +115,7 @@ function billToSummary(bill: {
   };
 }
 
-function computeAvgDailyKwh(summaries: readonly BillSummary[]): number {
+export function computeAvgDailyKwh(summaries: readonly BillSummary[]): number {
   if (summaries.length === 0) return 0;
   const totalKwh = summaries.reduce((s, b) => s + b.usageKwh, 0);
   const totalDays = summaries.reduce((s, b) => s + b.days, 0);
@@ -99,7 +128,7 @@ function getSeason(m: number): 'summer' | 'winter' | 'shoulder' {
   return 'shoulder';
 }
 
-function computeSeasonalWeights(
+export function computeSeasonalWeights(
   summaries: readonly BillSummary[]
 ): { summer: number; winter: number } {
   const seasonal = { summer: 0, winter: 0 };
@@ -297,7 +326,7 @@ function renderResultPage(
         return `<tr class="${stay ? 'row-stay' : ''}">
           <td>${escapeHtml(planName)}<br><span class="retailer-sub">${escapeHtml(retailer)}</span></td>
           <td class="num">$${formatCents(projected)}</td>
-          <td class="num ${savingClass}">${saving > 0 ? '$' + formatSavings(saving) : '$0'}</td>
+          <td class="num ${savingClass}">${saving > 0 ? formatSavings(saving) : '$0'}</td>
           <td class="num">${Math.round(confidence * 100)}%</td>
           <td>${badge}</td>
         </tr>`;
@@ -385,6 +414,10 @@ export async function runEvalComparison(
    *  "nothing to compare" (the callback page pends on these — #242 live run). */
   billsTotal: number;
   billsParsed: number;
+  /** Headline verdict for the callback page, derived from the same
+   *  recommendation/verdictItem as the plan_comparisons summary-row write.
+   *  Null only when there is nothing to compare (parsedBills.length === 0). */
+  verdict: EvalVerdict | null;
 }> {
   const pythonUrl = env.PYTHON_SERVICE_URL ?? 'http://localhost:8000';
   const allBills = await getBillsByUserId(env.DB, userId);
@@ -392,7 +425,7 @@ export async function runEvalComparison(
   const counts = { billsTotal: allBills.length, billsParsed: parsedBills.length };
 
   if (parsedBills.length === 0) {
-    return { parsedData: null, comparisons: [], ...counts };
+    return { parsedData: null, comparisons: [], ...counts, verdict: null };
   }
 
   const billSummaries = parsedBills
@@ -462,17 +495,39 @@ export async function runEvalComparison(
   const compareController = new AbortController();
   const compareTimeout = setTimeout(() => compareController.abort(), 30000);
 
+  // Boundary serialization: mirror planComparator.comparePlans' wireBody
+  // EXACTLY. The Python /compare contract is snake_case
+  // (usage_profile.avg_daily_kwh, bill_history[].usage_kwh, …) and the handler
+  // returns the BARE ranked list (jsonify(results)), not an object keyed by
+  // `comparisons`. Sending the camelCase TS input verbatim made Python 400 with
+  // "current_plan is required" and the route swallowed it as `pending`, so the
+  // feature never rendered. The two sites are intentionally not shared:
+  // comparePlans has queue/Sent coupling this eval path deliberately avoids.
+  const wireBody = {
+    usage_profile: {
+      avg_daily_kwh: usageProfile.avgDailyKwh,
+      meter_type: usageProfile.meterType,
+      seasonal_weight: usageProfile.seasonalWeights,
+    },
+    current_plan: currentPlan,
+    available_plans: planDicts,
+    bill_history: billSummaries.map((b) => ({
+      id: b.id,
+      usage_kwh: b.usageKwh,
+      total_cents: b.totalCents,
+      period_start: b.periodStart,
+      period_end: b.periodEnd,
+      days: b.days,
+      break_fee_cents: b.breakFeeCents,
+    })),
+  };
+
   let compareResponse: Response;
   try {
     compareResponse = await fetch(`${pythonUrl}/compare`, {
       method: 'POST',
       headers: compareHeaders,
-      body: JSON.stringify({
-        usageProfile,
-        currentPlan,
-        availablePlans: planDicts,
-        billHistory: billSummaries,
-      }),
+      body: JSON.stringify(wireBody),
       signal: compareController.signal,
     });
   } finally {
@@ -483,31 +538,63 @@ export async function runEvalComparison(
     throw new Error(`Comparison service returned ${compareResponse.status}`);
   }
 
-  const compareResult = (await compareResponse.json()) as {
-    comparisons: ComparisonResultItem[];
-  };
+  // Python returns the bare ranked list (jsonify(results)), so parse it as an
+  // array of ComparisonResultItem — never an object with a `comparisons` key.
+  const compareResult = (await compareResponse.json()) as ComparisonResultItem[];
+
+  // Resolve retailer UUIDs → human names in ONE batched query. The Python
+  // /compare response carries retailer_id (a UUID) on every row, and the
+  // latest bill's retailer is also a UUID; without this the callback page
+  // prints a UUID where a retailer name belongs. Comparison rows that already
+  // carry a retailer_name from Python are preserved below — only filled in.
+  const retailerIds = new Set<string>();
+  if (latestBill.retailerId) retailerIds.add(latestBill.retailerId);
+  for (const item of compareResult) {
+    if (item.retailer_id) retailerIds.add(item.retailer_id);
+  }
+  const retailerNames = await getRetailerNamesByIds(
+    env.DB,
+    Array.from(retailerIds)
+  );
+  /** retailer id → display name, falling back to the raw id when no row exists. */
+  const nameFor = (id: string): string => retailerNames.get(id) ?? id;
 
   // Store ONE summary row per run (AC #73 / #226), matching the live
   // COMPARE_QUEUE write shape. The per-plan items are still carried in the
   // returned `storedComparisons` for the result-page render, but only the
   // verdict row is persisted to plan_comparisons.
   const storedComparisons: Record<string, unknown>[] = [];
-  for (const item of compareResult.comparisons) {
-    storedComparisons.push({ ...item });
+  for (const item of compareResult) {
+    const copy: Record<string, unknown> = { ...item };
+    // Only FILL IN retailer_name when absent/empty — never overwrite a name
+    // the Python /compare response already supplied.
+    if (!copy.retailer_name) {
+      const resolved = item.retailer_id ? nameFor(item.retailer_id) : '';
+      if (resolved) copy.retailer_name = resolved;
+    }
+    storedComparisons.push(copy);
   }
 
-  // Derive the user-level verdict. Eval's Python response uses
-  // stay_where_you_are (inverse of switchable); the live path uses an explicit
-  // recommendation field, but eval does not receive one, so derive it here.
-  const switchable = compareResult.comparisons.filter(
+  // Derive the user-level verdict. Python owns this decision: it stamps the
+  // recommendation (and reason) onto every row in plan_comparator.py after
+  // applying SWITCH_THRESHOLD_CENTS ($200/yr) plus fixed-term and break-fee
+  // guards. Use Python's value verbatim so the headline the user reads agrees
+  // with the notification engine; fall back to the local derivation ONLY when
+  // Python omits the field. There remains exactly ONE derivation of the
+  // headline a user sees: the Python-stamped verdict below.
+  const pythonRecommendation = compareResult[0]?.recommendation;
+  const switchable = compareResult.filter(
     item => !item.stay_where_you_are && item.saving_cents > 0
   );
   const topSwitch = switchable.length > 0 ? switchable[0] : null;
-  const recommendation = topSwitch ? 'switch' : 'stay_put';
+  const recommendation: 'switch' | 'stay_put' = pythonRecommendation
+    ?? (topSwitch ? 'switch' : 'stay_put');
 
+  // verdictItem selection is unchanged: the best switchable row when switching,
+  // else the stay-put row, else the first row.
   const verdictItem = topSwitch
-    ?? compareResult.comparisons.find(item => item.stay_where_you_are)
-    ?? compareResult.comparisons[0]!;
+    ?? compareResult.find(item => item.stay_where_you_are)
+    ?? compareResult[0]!;
 
   const matchedRecommended = availablePlans.find(
     p => p.retailerId === verdictItem.retailer_id && p.name === verdictItem.plan_name
@@ -525,13 +612,15 @@ export async function runEvalComparison(
       projectedAnnualCost: verdictItem.projected_cost_cents,
       savings: verdictItem.saving_cents,
       recommendation,
-      reason: null,
+      reason: verdictItem.reason ?? null,
     });
   }
 
   // Build parsed data snapshot from latest bill
   const parsedData: Record<string, unknown> = {
-    retailer_name: latestBill.retailerId,
+    retailer_name: latestBill.retailerId
+      ? nameFor(latestBill.retailerId)
+      : latestBill.retailerId,
     plan_name: latestBill.planName,
     meter_type: latestBill.meterType,
     icp_number: '', // not stored on bills table
@@ -547,7 +636,19 @@ export async function runEvalComparison(
     confidence: latestBill.confidence,
   };
 
-  return { parsedData, comparisons: storedComparisons, ...counts };
+  // Surface the SAME verdict the summary-row write derives — not recomputed.
+  // savingCents is clamped non-negative; money stays annual cents throughout.
+  const verdict: EvalVerdict = {
+    recommendation,
+    planName: verdictItem.plan_name,
+    retailerName: nameFor(verdictItem.retailer_id),
+    currentCostCents: verdictItem.current_cost_cents,
+    projectedCostCents: verdictItem.projected_cost_cents,
+    savingCents: Math.max(0, verdictItem.saving_cents),
+    confidence: verdictItem.confidence,
+  };
+
+  return { parsedData, comparisons: storedComparisons, ...counts, verdict };
 }
 
 // ---------------------------------------------------------------------------

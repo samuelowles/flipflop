@@ -11,12 +11,13 @@ vi.mock('./powerswitchSession', async (importOriginal) => {
 vi.mock('./powerswitchReplay', () => ({
   replayQuestionnaire: vi.fn(),
   readCachedResults: vi.fn(),
+  clearCachedResults: vi.fn(async () => undefined),
 }));
 
 import { ensurePowerswitchResults } from './ensurePowerswitchResults';
 import { getUserById } from '../models/users';
 import { resolveUserAddress } from './powerswitchSession';
-import { replayQuestionnaire, readCachedResults } from './powerswitchReplay';
+import { replayQuestionnaire, readCachedResults, clearCachedResults } from './powerswitchReplay';
 import { retailerParserSlug } from '../models/retailers';
 import type { User } from '../types/user';
 import type { ParsedResults } from './powerswitchRscParser';
@@ -34,12 +35,32 @@ function user(): User {
 describe('ensurePowerswitchResults (#242 pipeline wiring)', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns cached results without touching the user or the live path', async () => {
+  it('returns cached results when the pxid is intact (no live path)', async () => {
+    // The user read is now unavoidable on a cache hit: a null pxid is the
+    // address-changed signal, so we must load the user to confirm the pxid is
+    // still intact before trusting a cached entry.
     vi.mocked(readCachedResults).mockResolvedValueOnce(RESULTS);
+    vi.mocked(getUserById).mockResolvedValueOnce({ ...user(), powerswitchPxid: 'px9' } as User);
     const out = await ensurePowerswitchResults(ENV, 'u1');
     expect(out).toEqual({ status: 'ok', results: RESULTS, source: 'cache' });
-    expect(getUserById).not.toHaveBeenCalled();
     expect(replayQuestionnaire).not.toHaveBeenCalled();
+    expect(resolveUserAddress).not.toHaveBeenCalled();
+    expect(clearCachedResults).not.toHaveBeenCalled();
+  });
+
+  it('treats cached results as stale and clears them when the pxid is null (address changed)', async () => {
+    // billParser nulls powerswitchPxid on a move; a null pxid means any cached
+    // results belong to the PREVIOUS property, so they must be dropped and the
+    // live path must run to rebuild for the new address.
+    vi.mocked(readCachedResults).mockResolvedValueOnce(RESULTS);
+    vi.mocked(getUserById).mockResolvedValueOnce(user()); // pxid null
+    vi.mocked(resolveUserAddress).mockResolvedValueOnce({ status: 'resolved', pxid: 'px2', locationId: '267', confidence: 'exact' });
+    vi.mocked(replayQuestionnaire).mockResolvedValueOnce({ status: 'ok', results: RESULTS, cached: false });
+    const out = await ensurePowerswitchResults(ENV, 'u1');
+    expect(out).toEqual({ status: 'ok', results: RESULTS, source: 'live' });
+    // Stale cache cleared before rebuilding.
+    expect(clearCachedResults).toHaveBeenCalledWith(expect.anything(), 'u1');
+    expect(replayQuestionnaire).toHaveBeenCalledWith(expect.anything(), 'u1', 'px2');
   });
 
   it('is unavailable when POWERSWITCH_LIVE is off (no live calls)', async () => {
@@ -52,7 +73,7 @@ describe('ensurePowerswitchResults (#242 pipeline wiring)', () => {
   it('resolves the address then replays when the user has no pxid', async () => {
     vi.mocked(readCachedResults).mockResolvedValueOnce(null);
     vi.mocked(getUserById).mockResolvedValueOnce(user());
-    vi.mocked(resolveUserAddress).mockResolvedValueOnce({ status: 'resolved', pxid: 'px1', locationId: '267' });
+    vi.mocked(resolveUserAddress).mockResolvedValueOnce({ status: 'resolved', pxid: 'px1', locationId: '267', confidence: 'exact' });
     vi.mocked(replayQuestionnaire).mockResolvedValueOnce({ status: 'ok', results: RESULTS, cached: false });
     const out = await ensurePowerswitchResults(ENV, 'u1');
     expect(out).toEqual({ status: 'ok', results: RESULTS, source: 'live' });

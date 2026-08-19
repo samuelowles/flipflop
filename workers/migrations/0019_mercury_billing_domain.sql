@@ -7,13 +7,16 @@
 -- contain the substring `mercury.co.nz`, so:
 --   (a) `emailPipeline.matchRetailer`'s domain check (a substring match on
 --       `@<domain>` / bare domain) missed a directly-delivered Mercury bill, and
---   (b) Gmail's `from:mercury.co.nz` query did not match it either.
--- A directly-delivered Mercury bill was therefore invisible to the scan even
--- before forwarding. Adding `mercuryonline.co.nz` fixes both the `from:` search
--- term (the forwarded case is already covered by the `subject:Mercury` term
--- added in emailPipeline.buildSearchQuery) and the From-header retailer match
--- in `processMessage`, so the bill row gets the correct retailer_id and thus
--- the retailer-specific Python parser.
+--   (b) emailPipeline.buildSearchQuery builds the Gmail query as a from:-only
+--       OR group over `retailers.email_domains` (plus retailer NAME keywords) —
+--       there are NO `subject:` terms, so a bill whose From domain was not in
+--       that array was never surfaced by the scan.
+-- A directly-delivered Mercury bill was therefore invisible to the scan.
+-- Adding `mercuryonline.co.nz` to the array fixes both the `from:` search term
+-- (buildSearchQuery now emits `from:mercuryonline.co.nz` alongside
+-- `from:mercury.co.nz`) and the From-header retailer match in `processMessage`,
+-- so the bill row gets the correct retailer_id and thus the retailer-specific
+-- Python parser.
 --
 -- Source: observed on a real customer bill (From:
 -- onlinebills@mercuryonline.co.nz), 2026-08-06.

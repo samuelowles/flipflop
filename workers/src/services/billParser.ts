@@ -1,4 +1,4 @@
-import { getBillById, markBillCompareEnqueued, updateBillStatus, updateBillParsedData } from '../models/bills';
+import { getBillById, getLatestBillPeriodEnd, markBillCompareEnqueued, updateBillStatus, updateBillParsedData } from '../models/bills';
 import { getUserById, updateUser } from '../models/users';
 import { sendAndLog } from './messaging';
 import { getRetailerById, retailerParserSlug } from '../models/retailers';
@@ -81,6 +81,15 @@ function validateMeterType(raw: string | undefined): MeterType | undefined {
   if (!raw) return undefined;
   const normalized = raw.toLowerCase().trim();
   return VALID_METER_TYPES.includes(normalized) ? (normalized as MeterType) : undefined;
+}
+
+/**
+ * Normalise a supply address for COMPARISON ONLY: trim, collapse internal
+ * whitespace runs to single spaces, case-insensitive. The normalised form is
+ * never stored — the address is persisted exactly as extracted.
+ */
+function normalizeAddress(address: string): string {
+  return address.trim().replace(/\s+/g, ' ').toLowerCase();
 }
 
 /**
@@ -289,20 +298,71 @@ export async function handleParseJob(
   //      (encrypted by updateUser). Gmail-onboarded users have a phone only;
   //      the bill is the one place their address already exists, and
   //      ensurePowerswitchResults needs it to resolve a Powerswitch pxid.
-  //      Only-when-absent (never overwrite) and best-effort (a failure here
-  //      must never fail the parse job).
+  //
+  //      Most-recent-wins, NOT first-seen-forever: a customer who moves house
+  //      must not keep the old address or every Powerswitch comparison runs
+  //      against the property they left. Recency is defined by the bill's
+  //      period_end, never by parse order — the 365-day backfill enqueues a
+  //      year of bills that parse concurrently, so "the address from whichever
+  //      bill happened to parse last" would be wrong. Best-effort throughout:
+  //      any throw is caught and logged and never fails the parse job.
+  // Treat an empty/whitespace-only period_end exactly like a missing one. Some
+  // parsers emit "" rather than null for a missing billing period
+  // (python/parsers/contact_parser.py), and the recency test below compares
+  // period_end strings, where "" >= "" is true — so a bill with no billing
+  // period could otherwise win the "most recent" test and overwrite a good
+  // address. Normalising it to null here makes such a bill never a candidate
+  // for overwriting, matching the null case.
+  const periodEnd =
+    parseResult.period_end != null && parseResult.period_end.trim() !== ''
+      ? parseResult.period_end
+      : null;
   const user = await getUserById(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId);
-  if (extractedAddress && user && !user.installationAddress) {
+  if (extractedAddress && user) {
     try {
-      await updateUser(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId, {
-        installationAddress: extractedAddress,
-      });
-      console.log(JSON.stringify({
-        type: 'parse_address_persisted',
-        billId,
-        userId: bill.userId,
-        timestamp: new Date().toISOString(),
-      }));
+      if (!user.installationAddress) {
+        // No address yet — write the first one we see.
+        await updateUser(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId, {
+          installationAddress: extractedAddress,
+        });
+        console.log(JSON.stringify({
+          type: 'parse_address_persisted',
+          billId,
+          userId: bill.userId,
+          timestamp: new Date().toISOString(),
+        }));
+      } else {
+        // Already have an address. Normalise for comparison only (trim, collapse
+        // internal whitespace, case-insensitive); store the address exactly as
+        // extracted, never the normalised form.
+        const sameAddress =
+          normalizeAddress(extractedAddress) === normalizeAddress(user.installationAddress);
+        if (!sameAddress && periodEnd !== null) {
+          // Ordering dependency: updateBillParsedData (step 6) has ALREADY
+          // written THIS bill's period_end to its row, so the MAX below already
+          // includes this bill — that is what makes `>=` the correct test for
+          // "this is the most recent bill".
+          const latestPeriodEnd = await getLatestBillPeriodEnd(env.DB, bill.userId);
+          if (latestPeriodEnd !== null && periodEnd >= latestPeriodEnd) {
+            await updateUser(env.DB, { ENCRYPTION_KEY: env.ENCRYPTION_KEY }, bill.userId, {
+              installationAddress: extractedAddress,
+              // Clear the stale Powerswitch resolution cache in the SAME update:
+              // these two columns cache the pxid/location resolved from the
+              // PREVIOUS address, and leaving them populated would keep every
+              // future Powerswitch run pointed at the old property.
+              powerswitchPxid: null,
+              powerswitchLocationId: null,
+            });
+            // Do NOT log either address value — they are PII. userId + billId only.
+            console.log(JSON.stringify({
+              type: 'parse_address_changed',
+              billId,
+              userId: bill.userId,
+              timestamp: new Date().toISOString(),
+            }));
+          }
+        }
+      }
     } catch (addrErr) {
       console.log(JSON.stringify({
         type: 'parse_address_persist_failed',

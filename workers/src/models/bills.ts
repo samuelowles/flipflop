@@ -220,6 +220,29 @@ export async function markBillCompareEnqueued(
 }
 
 /**
+ * Return the latest bill period_end (ISO) for a user, or null when the user has
+ * no bill with a non-null period_end. Used by the parse stage's
+ * most-recent-address-wins logic: an extracted supply address should overwrite
+ * the stored one only when the bill it came from is the most recent by
+ * period_end (recency by billing period, never by parse/ingest order).
+ *
+ * Callers MUST have already persisted THIS bill's period_end before calling —
+ * the MAX therefore includes the current bill, which is what makes a `>=`
+ * comparison against the result a correct "is this the most recent" test.
+ */
+export async function getLatestBillPeriodEnd(
+  db: D1Database,
+  userId: string
+): Promise<string | null> {
+  const stmt = db.prepare(
+    `SELECT MAX(period_end) AS period_end FROM bills
+     WHERE user_id = ?1 AND period_end IS NOT NULL`
+  );
+  const result = await stmt.bind(userId).first<{ period_end: string | null }>();
+  return result?.period_end ?? null;
+}
+
+/**
  * Issue #78 — return the most recent fixed-term expiry (ISO date) for a user,
  * or null when the user has no fixed-term bill on file. The free-tier check-in
  * uses this to decide the `wait_until_date` variant: if the user is locked into

@@ -1,0 +1,723 @@
+[
+  {
+    "label": "H-rural-real",
+    "address": "1837 State Highway 2, RD 2, Te Puke 3182",
+    "completions": []
+  },
+  {
+    "label": "H-rural-no-rd",
+    "address": "1837 State Highway 2, Te Puke 3182",
+    "completions": []
+  },
+  {
+    "label": "H-rural-sh-abbrev",
+    "address": "1837 SH2, RD 2, Te Puke 3182",
+    "completions": []
+  },
+  {
+    "label": "I-macron-real",
+    "address": "1 Ōtāhuhu Road, Ōtāhuhu, Auckland 1062",
+    "completions": [
+      {
+        "a": "1 Nikau Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-Wn8WI4QgfW_4YZGWwm45",
+        "v": 1
+      },
+      {
+        "a": "1-5 Lippiatt Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-MNWRM4d.7EJeG.Xfl7bG",
+        "v": 0
+      },
+      {
+        "a": "1 Gordon Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-VShJwgGo$G5X6rDf3k4I",
+        "v": 0
+      },
+      {
+        "a": "1 Papaku Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-WwPw7dJvPKz6_nhRne8.",
+        "v": 1
+      },
+      {
+        "a": "1 Ronaki Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-XG3XTtHlRlAic7LVKElH",
+        "v": 1
+      },
+      {
+        "a": "1A Nikau Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-RPdFuFn9Bv1SCu.V8nw.",
+        "v": 1
+      },
+      {
+        "a": "1B Nikau Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-UCocZq5BJzhw9TbFckdU",
+        "v": 1
+      },
+      {
+        "a": "1 Pukeora Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-X4hRVyKVGvWDeV$VMewl",
+        "v": 1
+      },
+      {
+        "a": "1 Lippiatt Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-MNWRM4d.7EJeG.Xfl7bG",
+        "v": 0
+      },
+      {
+        "a": "1A Pukeora Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-SA92C6rGI2W18kezQ.Wv",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "I-macron-folded",
+    "address": "1 Otahuhu Road, Otahuhu, Auckland 1062",
+    "completions": [
+      {
+        "a": "1 Nikau Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-Wn8WI4QgfW_4YZGWwm45",
+        "v": 1
+      },
+      {
+        "a": "1-5 Lippiatt Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-MNWRM4d.7EJeG.Xfl7bG",
+        "v": 0
+      },
+      {
+        "a": "1 Gordon Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-VShJwgGo$G5X6rDf3k4I",
+        "v": 0
+      },
+      {
+        "a": "1 Papaku Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-WwPw7dJvPKz6_nhRne8.",
+        "v": 1
+      },
+      {
+        "a": "1 Ronaki Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-XG3XTtHlRlAic7LVKElH",
+        "v": 1
+      },
+      {
+        "a": "1A Nikau Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-RPdFuFn9Bv1SCu.V8nw.",
+        "v": 1
+      },
+      {
+        "a": "1B Nikau Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-UCocZq5BJzhw9TbFckdU",
+        "v": 1
+      },
+      {
+        "a": "1 Pukeora Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-X4hRVyKVGvWDeV$VMewl",
+        "v": 1
+      },
+      {
+        "a": "1 Lippiatt Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-MNWRM4d.7EJeG.Xfl7bG",
+        "v": 0
+      },
+      {
+        "a": "1A Pukeora Road, Ōtāhuhu, Auckland 1062",
+        "pxid": "2-SA92C6rGI2W18kezQ.Wv",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "J-taupo-macron",
+    "address": "46 Tūwharetoa Street, Taupō 3330",
+    "completions": [
+      {
+        "a": "46 Tūwharetoa Street, Taupō 3330",
+        "pxid": "2-2OXcBdZUxdd5KDM1HP_zH",
+        "v": 1
+      },
+      {
+        "a": "46 St James Street, Richmond Heights, Taupō 3330",
+        "pxid": "2-2ORh4L.6UDKZSkt_XXd29",
+        "v": 0
+      },
+      {
+        "a": "46 Horomātangi Street, Taupō 3330",
+        "pxid": "2-2NxDA.qxeVUEEtSrvt5$k",
+        "v": 1
+      },
+      {
+        "a": "46 Huia Street, Taupō 3330",
+        "pxid": "2-2N$ms$OwiKfy$PTBp77Wg",
+        "v": 1
+      },
+      {
+        "a": "46 Kākā Street, Taupō 3330",
+        "pxid": "2-2O0.U6_xCh6vS5$cv1ULE",
+        "v": 1
+      },
+      {
+        "a": "46 Laughton Street, Taupō 3330",
+        "pxid": "2-2O4kFWmH84GQvYOjDeUmZ",
+        "v": 1
+      },
+      {
+        "a": "46 Rotokawa Street, Taupō 3330",
+        "pxid": "2-2OOqUoqNgbY9KCmX8P1iU",
+        "v": 1
+      },
+      {
+        "a": "46 Ruapehu Street, Taupō 3330",
+        "pxid": "2-2OP6aUdFD8q03gwtgMHM0",
+        "v": 1
+      },
+      {
+        "a": "46 Tui Street, Taupō 3330",
+        "pxid": "2-2OXFdezexH9pR6oC075H_",
+        "v": 0
+      },
+      {
+        "a": "46 Wheretia Street, Taupō 3330",
+        "pxid": "2-2Ock4Z7DWDG7u7hYco6e4",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "J-taupo-folded",
+    "address": "46 Tuwharetoa Street, Taupo 3330",
+    "completions": [
+      {
+        "a": "46 Tūwharetoa Street, Taupō 3330",
+        "pxid": "2-2OXcBdZUxdd5KDM1HP_zH",
+        "v": 1
+      },
+      {
+        "a": "46 St James Street, Richmond Heights, Taupō 3330",
+        "pxid": "2-2ORh4L.6UDKZSkt_XXd29",
+        "v": 0
+      },
+      {
+        "a": "46 Horomātangi Street, Taupō 3330",
+        "pxid": "2-2NxDA.qxeVUEEtSrvt5$k",
+        "v": 1
+      },
+      {
+        "a": "46 Huia Street, Taupō 3330",
+        "pxid": "2-2N$ms$OwiKfy$PTBp77Wg",
+        "v": 1
+      },
+      {
+        "a": "46 Kākā Street, Taupō 3330",
+        "pxid": "2-2O0.U6_xCh6vS5$cv1ULE",
+        "v": 1
+      },
+      {
+        "a": "46 Laughton Street, Taupō 3330",
+        "pxid": "2-2O4kFWmH84GQvYOjDeUmZ",
+        "v": 1
+      },
+      {
+        "a": "46 Rotokawa Street, Taupō 3330",
+        "pxid": "2-2OOqUoqNgbY9KCmX8P1iU",
+        "v": 1
+      },
+      {
+        "a": "46 Ruapehu Street, Taupō 3330",
+        "pxid": "2-2OP6aUdFD8q03gwtgMHM0",
+        "v": 1
+      },
+      {
+        "a": "46 Tui Street, Taupō 3330",
+        "pxid": "2-2OXFdezexH9pR6oC075H_",
+        "v": 0
+      },
+      {
+        "a": "46 Wheretia Street, Taupō 3330",
+        "pxid": "2-2Ock4Z7DWDG7u7hYco6e4",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "K-avenue-abbrev",
+    "address": "12 Great South Rd, Papakura, Auckland 2110",
+    "completions": [
+      {
+        "a": "12 Great South Road, Papakura 2110",
+        "pxid": "2-.1.z.4.1rxR",
+        "v": 1
+      },
+      {
+        "a": "12 Great South Road, Takanini, Auckland 2112",
+        "pxid": "2-2Ugtzse9XdWRZFIRhZ_CCh",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "K-lowercase-all",
+    "address": "12 great south road, papakura, auckland 2110",
+    "completions": [
+      {
+        "a": "12 Great South Road, Papakura 2110",
+        "pxid": "2-.1.z.4.1rxR",
+        "v": 1
+      },
+      {
+        "a": "12 Great South Road, Takanini, Auckland 2112",
+        "pxid": "2-2Ugtzse9XdWRZFIRhZ_CCh",
+        "v": 0
+      }
+    ]
+  },
+  {
+    "label": "L-apartment-word",
+    "address": "Apartment 12, 35 Hobson Street, Auckland Central, Auckland 1010",
+    "completions": [
+      {
+        "a": "Apartment 12, 35 Albert Street, Auckland Central, Auckland 1010",
+        "pxid": "3-176BJS0bnQQ51Sdwp5P_13",
+        "v": 1
+      },
+      {
+        "a": "Unit 12, 27-35 Victoria Street West, Auckland Central, Auckland 1010",
+        "pxid": "3-17ugXfW8SM5nc9C6zb0lXK",
+        "v": 0
+      },
+      {
+        "a": "Unit 12, 35 Victoria Street West, Auckland Central, Auckland 1010",
+        "pxid": "3-1pT8bovcvPl$EQ3vp_SI$j",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "L-level-prefix",
+    "address": "Level 3, 48 Emily Place, Auckland Central, Auckland 1010",
+    "completions": [
+      {
+        "a": "Level 3, 48 High Street, Auckland Central, Auckland 1010",
+        "pxid": "3-tDho6ACwJnX7CQUWo_G2q",
+        "v": 1
+      },
+      {
+        "a": "Level 3, 48 Shortland Street, Auckland Central, Auckland 1010",
+        "pxid": "3-.Je",
+        "v": 0
+      },
+      {
+        "a": "Floor 3, 48 Emily Place, Auckland Central, Auckland 1010",
+        "pxid": "3-1pTJ$FH7sVY$2Xd30xOYrj",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "M-suburb-only-no-city",
+    "address": "25 Riddiford Street, Newtown 6021",
+    "completions": [
+      {
+        "a": "25 Daniell Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.FotA",
+        "v": 0
+      },
+      {
+        "a": "25 Ferguson Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.Kws",
+        "v": 1
+      },
+      {
+        "a": "25 Hall Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.QxV",
+        "v": 1
+      },
+      {
+        "a": "25 Lawrence Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.ZxC",
+        "v": 1
+      },
+      {
+        "a": "25 Mein Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.corG",
+        "v": 0
+      },
+      {
+        "a": "25 Owen Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.lxm",
+        "v": 1
+      },
+      {
+        "a": "25 Paeroa Street, Newtown, Wellington 6021",
+        "pxid": "2-2WrbnJp..Hw56lqq16lEbT",
+        "v": 1
+      },
+      {
+        "a": "25 Rhodes Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.rxR",
+        "v": 0
+      },
+      {
+        "a": "25 Rintoul Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.sorQ",
+        "v": 1
+      },
+      {
+        "a": "25 Wilson Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z..xE",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "M-city-only",
+    "address": "25 Riddiford Street, Wellington",
+    "completions": [
+      {
+        "a": "25 St George Street, Watlington, Timaru 7910",
+        "pxid": "2-.3.3z.G.LxY",
+        "v": 1
+      },
+      {
+        "a": "25 Wellington Street, Feilding 4702",
+        "pxid": "2-.6.L.1.5BxX",
+        "v": 0
+      },
+      {
+        "a": "25 Wellington Street, Hāwera 4610",
+        "pxid": "2-1rDDNfRoS5dgu8LZMAuE8",
+        "v": 1
+      },
+      {
+        "a": "25 Wellington Street, Papakura 2110",
+        "pxid": "2-.1.z.4.4txU",
+        "v": 0
+      },
+      {
+        "a": "25 Wellington Street, Picton 7220",
+        "pxid": "2-.7.j.1.1Nw.",
+        "v": 1
+      },
+      {
+        "a": "25 Wellington Street, Pukekohe 2120",
+        "pxid": "2-.1.17.1.4Tt5U",
+        "v": 1
+      },
+      {
+        "a": "25 Wellington Street, Russell 0202",
+        "pxid": "2-.9.1u.300x1",
+        "v": 1
+      },
+      {
+        "a": "25 Benares Street, Khandallah, Wellington 6035",
+        "pxid": "2-.F.1W.L.AxC",
+        "v": 1
+      },
+      {
+        "a": "25 Buckingham Street, Melrose, Wellington 6023",
+        "pxid": "2-.F.1W.S.6x8",
+        "v": 1
+      },
+      {
+        "a": "25 Chelsea Street, Miramar, Wellington 6022",
+        "pxid": "2-.F.1W.T.Kx0",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "N-double-comma",
+    "address": "25 Riddiford Street,, Newtown, Wellington 6021",
+    "completions": [
+      {
+        "a": "25 Daniell Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.FotA",
+        "v": 0
+      },
+      {
+        "a": "25 Ferguson Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.Kws",
+        "v": 1
+      },
+      {
+        "a": "25 Hall Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.QxV",
+        "v": 1
+      },
+      {
+        "a": "25 Lawrence Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.ZxC",
+        "v": 1
+      },
+      {
+        "a": "25 Mein Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.corG",
+        "v": 0
+      },
+      {
+        "a": "25 Owen Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.lxm",
+        "v": 1
+      },
+      {
+        "a": "25 Paeroa Street, Newtown, Wellington 6021",
+        "pxid": "2-2WrbnJp..Hw56lqq16lEbT",
+        "v": 1
+      },
+      {
+        "a": "25 Rhodes Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.rxR",
+        "v": 0
+      },
+      {
+        "a": "25 Rintoul Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.sorQ",
+        "v": 1
+      },
+      {
+        "a": "25 Wilson Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z..xE",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "N-semicolon",
+    "address": "25 Riddiford Street; Newtown; Wellington 6021",
+    "completions": [
+      {
+        "a": "25 Daniell Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.FotA",
+        "v": 0
+      },
+      {
+        "a": "25 Ferguson Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.Kws",
+        "v": 1
+      },
+      {
+        "a": "25 Hall Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.QxV",
+        "v": 1
+      },
+      {
+        "a": "25 Lawrence Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.ZxC",
+        "v": 1
+      },
+      {
+        "a": "25 Mein Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.corG",
+        "v": 0
+      },
+      {
+        "a": "25 Owen Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.lxm",
+        "v": 1
+      },
+      {
+        "a": "25 Paeroa Street, Newtown, Wellington 6021",
+        "pxid": "2-2WrbnJp..Hw56lqq16lEbT",
+        "v": 1
+      },
+      {
+        "a": "25 Rhodes Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.rxR",
+        "v": 0
+      },
+      {
+        "a": "25 Rintoul Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.sorQ",
+        "v": 1
+      },
+      {
+        "a": "25 Wilson Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z..xE",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "O-tab-sep",
+    "address": "25 Riddiford Street\tNewtown\tWellington 6021",
+    "completions": [
+      {
+        "a": "25 Daniell Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.FotA",
+        "v": 0
+      },
+      {
+        "a": "25 Ferguson Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.Kws",
+        "v": 1
+      },
+      {
+        "a": "25 Hall Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.QxV",
+        "v": 1
+      },
+      {
+        "a": "25 Lawrence Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.ZxC",
+        "v": 1
+      },
+      {
+        "a": "25 Mein Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.corG",
+        "v": 0
+      },
+      {
+        "a": "25 Owen Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.lxm",
+        "v": 1
+      },
+      {
+        "a": "25 Paeroa Street, Newtown, Wellington 6021",
+        "pxid": "2-2WrbnJp..Hw56lqq16lEbT",
+        "v": 1
+      },
+      {
+        "a": "25 Rhodes Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.rxR",
+        "v": 0
+      },
+      {
+        "a": "25 Rintoul Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z.sorQ",
+        "v": 1
+      },
+      {
+        "a": "25 Wilson Street, Newtown, Wellington 6021",
+        "pxid": "2-.F.1W.Z..xE",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "P-attn-prefix",
+    "address": "Attn: Account Holder 25 Riddiford Street, Newtown, Wellington 6021",
+    "completions": []
+  },
+  {
+    "label": "Q-nelson",
+    "address": "27 Trafalgar Street, Nelson South, Nelson 7010",
+    "completions": [
+      {
+        "a": "27 Alfred Street, Nelson South, Nelson 7010",
+        "pxid": "2-.8.2.G.1$Q",
+        "v": 1
+      },
+      {
+        "a": "27 Brougham Street, Nelson South, Nelson 7010",
+        "pxid": "2-.8.2.G.7$n",
+        "v": 1
+      },
+      {
+        "a": "27 Brunner Street, Nelson South, Nelson 7010",
+        "pxid": "2-.8.2.G.8$D",
+        "v": 1
+      },
+      {
+        "a": "27 Franklyn Street, Nelson South, Nelson 7010",
+        "pxid": "2-.8.2.G.F$D",
+        "v": 1
+      },
+      {
+        "a": "27 Ngatitama Street, Nelson South, Nelson 7010",
+        "pxid": "2-.8.2.G.T$R",
+        "v": 1
+      },
+      {
+        "a": "27 Tipahi Street, Nelson South, Nelson 7010",
+        "pxid": "2-.8.2.G.f$A",
+        "v": 1
+      },
+      {
+        "a": "27 Tukuka Street, Nelson South, Nelson 7010",
+        "pxid": "2-.8.2.G.j$E",
+        "v": 1
+      },
+      {
+        "a": "27 Wellington Street, Nelson South, Nelson 7010",
+        "pxid": "2-.8.2.G.n$d",
+        "v": 1
+      },
+      {
+        "a": "Flat 1, 27 Motueka Street, Nelson South, Nelson 7010",
+        "pxid": "3-.8.2.G.R0TbW",
+        "v": 1
+      },
+      {
+        "a": "Flat 2, 27 Motueka Street, Nelson South, Nelson 7010",
+        "pxid": "3-17N1KJGmX567DgbZmr3Mvz",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "R-invercargill",
+    "address": "18 Don Street, Invercargill 9810",
+    "completions": [
+      {
+        "a": "18 Albany Street, Kingswell, Invercargill 9812",
+        "pxid": "2-.B.1I.M.3xF",
+        "v": 0
+      },
+      {
+        "a": "18 Alice Street, Gladstone, Invercargill 9810",
+        "pxid": "2-.B.1I.A.5x2",
+        "v": 1
+      },
+      {
+        "a": "18 Anglesey Street, Hawthorndale, Invercargill 9810",
+        "pxid": "2-.B.1I.G.4x0",
+        "v": 1
+      },
+      {
+        "a": "18 Argyle Street, Kew, Invercargill 9812",
+        "pxid": "2-.B.1I.L.3x5",
+        "v": 1
+      },
+      {
+        "a": "18 Arthur Street, Gladstone, Invercargill 9810",
+        "pxid": "2-.B.1I.A.7x1",
+        "v": 1
+      },
+      {
+        "a": "18 Cushen Street, Clifton, Invercargill 9812",
+        "pxid": "2-.B.1I.8.Aw_",
+        "v": 1
+      },
+      {
+        "a": "18 Dublin Street, Windsor, Invercargill 9810",
+        "pxid": "2-.B.1I.r.9x1",
+        "v": 1
+      },
+      {
+        "a": "18 Enniskillen Street, Clifton, Invercargill 9812",
+        "pxid": "2-.B.1I.8.Bx1",
+        "v": 1
+      },
+      {
+        "a": "18 Farrar Street, Heidelberg, Invercargill 9812",
+        "pxid": "2-.B.1I.H.Ax5",
+        "v": 1
+      },
+      {
+        "a": "18 Holloway Street, Waikiwi, Invercargill 9810",
+        "pxid": "2-.B.1I.m.JxU",
+        "v": 1
+      }
+    ]
+  },
+  {
+    "label": "S-napier",
+    "address": "70 Marine Parade, Napier South, Napier 4110",
+    "completions": [
+      {
+        "a": "70 Marine Parade, Napier South, Napier 4110",
+        "pxid": "2-.5.b.F.V0_B",
+        "v": 0
+      }
+    ]
+  }
+]

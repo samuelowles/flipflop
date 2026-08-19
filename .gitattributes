@@ -1,3 +1,19 @@
-# PDFs are binary — core.autocrlf=true was CRLF-smudging fixture PDFs on
-# Windows checkout, corrupting them (xref offsets shift). Blobs are pristine.
-*.pdf binary
+# Normalise line endings. Without this, editing on Windows under a synced
+# folder rewrites whole files and every diff becomes unreadable.
+* text=auto eol=lf
+
+# Binary — never touch. core.autocrlf was CRLF-smudging fixture PDFs on Windows
+# checkout and corrupting them (xref offsets shift).
+*.pdf   binary
+*.png   binary
+*.jpg   binary
+*.jpeg  binary
+*.gif   binary
+*.ico   binary
+*.zip   binary
+*.db    binary
+*.sqlite binary
+
+# Keep shell scripts LF regardless of platform.
+*.sh    text eol=lf
+*.mjs   text eol=lf

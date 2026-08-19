@@ -5,6 +5,10 @@ import {
   evalUploadHandler,
   evalResultPage,
   evalStatus,
+  runEvalComparison,
+  billToSummary,
+  computeAvgDailyKwh,
+  computeSeasonalWeights,
 } from './eval';
 
 // ---------------------------------------------------------------------------
@@ -40,6 +44,10 @@ vi.mock('../models/comparisons', () => ({
 vi.mock('../models/plans', () => ({
   getPlansByRegion: vi.fn(),
   getPlansByRetailer: vi.fn(),
+}));
+
+vi.mock('../models/retailers', () => ({
+  getRetailerNamesByIds: vi.fn(async () => new Map<string, string>()),
 }));
 
 // ---------------------------------------------------------------------------
@@ -144,30 +152,36 @@ const MOCK_PLANS = [
   },
 ];
 
-const MOCK_COMPARE_RESPONSE = {
-  comparisons: [
-    {
-      plan_name: 'Good Night Plan',
-      retailer_name: 'Contact Energy',
-      retailer_id: 'contact-energy',
-      projected_cost_cents: 24000,
-      current_cost_cents: 25000,
-      saving_cents: 1000,
-      confidence: 0.85,
-      stay_where_you_are: false,
-    },
-    {
-      plan_name: 'Current (retailer C)',
-      retailer_name: 'Retailer C',
-      retailer_id: 'retailer-c',
-      projected_cost_cents: 25000,
-      current_cost_cents: 25000,
-      saving_cents: 0,
-      confidence: 0.9,
-      stay_where_you_are: true,
-    },
-  ],
-};
+// Python /compare returns the BARE ranked list (jsonify(results)), NOT an
+// object keyed by `comparisons`. Each row carries Python's stamped
+// recommendation/reason (the user-level verdict applied identically to every
+// row in plan_comparator.py).
+const MOCK_COMPARE_RESPONSE = [
+  {
+    plan_name: 'Good Night Plan',
+    retailer_name: 'Contact Energy',
+    retailer_id: 'contact-energy',
+    projected_cost_cents: 24000,
+    current_cost_cents: 25000,
+    saving_cents: 1000,
+    confidence: 0.85,
+    stay_where_you_are: false,
+    recommendation: 'switch',
+    reason: null,
+  },
+  {
+    plan_name: 'Current (retailer C)',
+    retailer_name: 'Retailer C',
+    retailer_id: 'retailer-c',
+    projected_cost_cents: 25000,
+    current_cost_cents: 25000,
+    saving_cents: 0,
+    confidence: 0.9,
+    stay_where_you_are: true,
+    recommendation: 'switch',
+    reason: null,
+  },
+];
 
 // ---------------------------------------------------------------------------
 // Mock helpers
@@ -385,9 +399,10 @@ describe('POST /eval/upload', () => {
     expect(parsed.isAnonymous).toBe(false);
 
     // #226 — eval writes ONE summary row (not per-plan), matching the live
-    // COMPARE_QUEUE shape. The verdict is derived from stay_where_you_are:
-    // the first comparison is switchable (saving_cents 1000 > 0, not stay),
-    // so recommendation === 'switch' and the recommended plan is plan-1.
+    // COMPARE_QUEUE shape. The verdict comes from Python's stamped
+    // recommendation on every row: MOCK_COMPARE_RESPONSE stamps 'switch', the
+    // first row is the switchable one (Good Night Plan), so recommendation ===
+    // 'switch' and the recommended plan is plan-1.
     const comp = await import('../models/comparisons');
     expect(comp.createComparison).toHaveBeenCalledTimes(1);
     const persisted = (comp.createComparison as ReturnType<typeof vi.fn>).mock.calls[0]![1];
@@ -990,5 +1005,596 @@ describe('GET /eval/status', () => {
     const body = (await res.json()) as Record<string, unknown>;
     expect(body.found).toBe(false);
     expect(body.error).toContain('Could not read results');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// runEvalComparison — verdict surfacing + retailer UUID → name resolution
+//
+// The verdict logic ALREADY EXISTED (it drove the plan_comparisons summary-row
+// write); these tests pin the contract that it is now plumbed out to the page
+// unchanged, plus that retailer UUIDs resolve to human names in one query.
+// ---------------------------------------------------------------------------
+
+describe('runEvalComparison (verdict + retailer name resolution)', () => {
+  let env: Record<string, unknown>;
+
+  beforeEach(async () => {
+    env = makeEnv();
+
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => MOCK_COMPARE_RESPONSE,
+    } as unknown as Response);
+
+    const bills = await import('../models/bills');
+    (bills.getBillsByUserId as ReturnType<typeof vi.fn>).mockResolvedValue([
+      MOCK_PARSED_BILL,
+    ]);
+
+    const plans = await import('../models/plans');
+    (plans.getPlansByRetailer as ReturnType<typeof vi.fn>).mockResolvedValue(
+      MOCK_PLANS.filter((p) => p.retailerId === 'contact-energy')
+    );
+    (plans.getPlansByRegion as ReturnType<typeof vi.fn>).mockResolvedValue(
+      MOCK_PLANS
+    );
+
+    const comp = await import('../models/comparisons');
+    (comp.createComparison as ReturnType<typeof vi.fn>).mockReset();
+    (comp.createComparison as ReturnType<typeof vi.fn>).mockResolvedValue(
+      undefined
+    );
+
+    const retailers = await import('../models/retailers');
+    (retailers.getRetailerNamesByIds as ReturnType<typeof vi.fn>).mockReset();
+    (
+      retailers.getRetailerNamesByIds as ReturnType<typeof vi.fn>
+    ).mockResolvedValue(new Map<string, string>());
+  });
+
+  it('surfaces a switch verdict taken from Python’s stamped recommendation', async () => {
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+
+    // Python stamps recommendation 'switch' on every MOCK_COMPARE_RESPONSE row;
+    // the verdict takes that value. The first row is the switchable one (Good
+    // Night Plan, saving 1000), so the verdict names it.
+    expect(result.verdict).not.toBeNull();
+    expect(result.verdict!.recommendation).toBe('switch');
+    expect(result.verdict!.planName).toBe('Good Night Plan');
+    expect(result.verdict!.currentCostCents).toBe(25000);
+    expect(result.verdict!.projectedCostCents).toBe(24000);
+    expect(result.verdict!.savingCents).toBe(1000);
+    expect(result.verdict!.confidence).toBe(0.85);
+
+    // The summary-row write still happens with the SAME shape — verdict
+    // surfacing is additive and must not change the persisted write.
+    const comp = await import('../models/comparisons');
+    expect(comp.createComparison).toHaveBeenCalledTimes(1);
+  });
+
+  it('derives a stay_put verdict when no plan is switchable', async () => {
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          plan_name: 'Current Plan',
+          retailer_name: 'Contact Energy',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+          recommendation: 'stay_put',
+          reason: 'no_savings',
+        },
+      ],
+    } as unknown as Response);
+
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+    expect(result.verdict).not.toBeNull();
+    expect(result.verdict!.recommendation).toBe('stay_put');
+    expect(result.verdict!.planName).toBe('Current Plan');
+    expect(result.verdict!.savingCents).toBe(0);
+  });
+
+  it('returns a null verdict when there is nothing to compare', async () => {
+    const bills = await import('../models/bills');
+    (bills.getBillsByUserId as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+    expect(result.verdict).toBeNull();
+    expect(result.parsedData).toBeNull();
+    expect(result.comparisons).toEqual([]);
+
+    // No retailer lookup and no summary-row write on the early-return path.
+    const retailers = await import('../models/retailers');
+    expect(retailers.getRetailerNamesByIds).not.toHaveBeenCalled();
+    const comp = await import('../models/comparisons');
+    expect(comp.createComparison).not.toHaveBeenCalled();
+  });
+
+  it('resolves the retailer UUID to a name in parsedData and the verdict', async () => {
+    const retailers = await import('../models/retailers');
+    (
+      retailers.getRetailerNamesByIds as ReturnType<typeof vi.fn>
+    ).mockResolvedValue(new Map([['contact-energy', 'Contact Energy']]));
+
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+    expect(result.parsedData!.retailer_name).toBe('Contact Energy');
+    expect(result.verdict!.retailerName).toBe('Contact Energy');
+  });
+
+  it('fills retailer_name into a comparison item that lacks one, but keeps an existing name', async () => {
+    // First row carries NO retailer_name (Python omitted it) → filled in.
+    // Second row carries a name that must win even though the map resolves
+    // its id to something different.
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          plan_name: 'Good Night Plan',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 24000,
+          current_cost_cents: 25000,
+          saving_cents: 1000,
+          confidence: 0.85,
+          stay_where_you_are: false,
+          recommendation: 'switch',
+          reason: null,
+        },
+        {
+          plan_name: 'Pre-existing Plan',
+          retailer_name: 'Pre-existing Name',
+          retailer_id: 'retailer-c',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+          recommendation: 'switch',
+          reason: null,
+        },
+      ],
+    } as unknown as Response);
+
+    const retailers = await import('../models/retailers');
+    (
+      retailers.getRetailerNamesByIds as ReturnType<typeof vi.fn>
+    ).mockResolvedValue(
+      new Map([
+        ['contact-energy', 'Contact Energy'],
+        ['retailer-c', 'Different From Pre-existing'],
+      ])
+    );
+
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+    expect(result.comparisons[0]!.retailer_name).toBe('Contact Energy');
+    expect(result.comparisons[1]!.retailer_name).toBe('Pre-existing Name');
+  });
+
+  it('issues exactly one batched retailer lookup regardless of comparison count', async () => {
+    const retailers = await import('../models/retailers');
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+    // MOCK_COMPARE_RESPONSE has 2 comparison rows + the latest bill's retailer.
+    expect(result.comparisons).toHaveLength(2);
+    expect(retailers.getRetailerNamesByIds).toHaveBeenCalledTimes(1);
+  });
+
+  // --- /compare wire contract (snake_case body + bare-array response) -------
+  //
+  // runEvalComparison must speak the SAME contract as planComparator.comparePlans:
+  // snake_case usage_profile/current_plan/available_plans/bill_history, and the
+  // response parsed as a bare ranked list (NOT {comparisons: [...]}).
+
+  it('POSTs a snake_case body matching comparePlans’ wireBody and parses the bare-array response', async () => {
+    await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url, init] = mockFetch.mock.calls[0]!;
+    expect(url).toBe('http://test-python:8000/compare');
+    const body = JSON.parse((init as RequestInit).body as string);
+
+    // Snake_case boundary keys present.
+    expect(body.usage_profile).toEqual(
+      expect.objectContaining({
+        avg_daily_kwh: expect.any(Number),
+        meter_type: 'standard',
+        seasonal_weight: expect.objectContaining({ summer: expect.any(Number), winter: expect.any(Number) }),
+      })
+    );
+    // 800 kWh / 30 days ≈ 26.67 kWh/day.
+    expect(body.usage_profile.avg_daily_kwh).toBeCloseTo(26.67, 1);
+    expect(body.current_plan).toEqual(
+      expect.objectContaining({ plan_name: 'Good Night Plan', retailer_id: 'contact-energy' })
+    );
+    expect(Array.isArray(body.available_plans)).toBe(true);
+    expect(body.bill_history).toHaveLength(1);
+    expect(body.bill_history[0]).toEqual(
+      expect.objectContaining({
+        id: 'bill-123',
+        usage_kwh: 800,
+        total_cents: 25000,
+        period_start: '2026-04-01',
+        period_end: '2026-04-30',
+        days: 30,
+        break_fee_cents: 0,
+      })
+    );
+
+    // camelCase keys must be ABSENT (sending them made Python 400).
+    expect(body).not.toHaveProperty('usageProfile');
+    expect(body).not.toHaveProperty('currentPlan');
+    expect(body).not.toHaveProperty('availablePlans');
+    expect(body).not.toHaveProperty('billHistory');
+    expect(body.bill_history[0]).not.toHaveProperty('usageKwh');
+  });
+
+  it('uses Python’s stay_put recommendation even when a positive sub-threshold saving would locally derive switch', async () => {
+    // A $3/yr saving is positive but below the $200 switch threshold, so Python
+    // stamps recommendation 'stay_put' (reason 'low_savings') even though the
+    // row is technically switchable (saving > 0, not stay). The local
+    // derivation would say 'switch' — Python's verdict must win.
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          plan_name: 'Good Night Plan',
+          retailer_name: 'Contact Energy',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 24700,
+          current_cost_cents: 25000,
+          saving_cents: 300, // $3/yr — below the $200 threshold
+          confidence: 0.85,
+          stay_where_you_are: false,
+          recommendation: 'stay_put',
+          reason: 'low_savings',
+        },
+        {
+          plan_name: 'Good Night Plan',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+          recommendation: 'stay_put',
+          reason: 'low_savings',
+        },
+      ],
+    } as unknown as Response);
+
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+    expect(result.verdict).not.toBeNull();
+    expect(result.verdict!.recommendation).toBe('stay_put');
+  });
+
+  it('passes Python’s reason through to createComparison instead of hardcoded null', async () => {
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          plan_name: 'Good Night Plan',
+          retailer_name: 'Contact Energy',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+          recommendation: 'stay_put',
+          reason: 'no_savings',
+        },
+      ],
+    } as unknown as Response);
+
+    await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+
+    const comp = await import('../models/comparisons');
+    expect(comp.createComparison).toHaveBeenCalledTimes(1);
+    const persisted = (comp.createComparison as ReturnType<typeof vi.fn>).mock.calls[0]![1];
+    expect(persisted.recommendation).toBe('stay_put');
+    expect(persisted.reason).toBe('no_savings');
+  });
+
+  it('falls back to the local recommendation derivation when Python omits the field', async () => {
+    // Legacy response shape with no recommendation/reason stamped. The local
+    // derivation must still produce a verdict so the page never renders blank.
+    mockFetch.mockReset();
+    mockFetch.mockResolvedValue({
+      ok: true,
+      json: async () => [
+        {
+          plan_name: 'Good Night Plan',
+          retailer_name: 'Contact Energy',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 24000,
+          current_cost_cents: 25000,
+          saving_cents: 1000,
+          confidence: 0.85,
+          stay_where_you_are: false,
+        },
+        {
+          plan_name: 'Good Night Plan',
+          retailer_id: 'contact-energy',
+          projected_cost_cents: 25000,
+          current_cost_cents: 25000,
+          saving_cents: 0,
+          confidence: 0.9,
+          stay_where_you_are: true,
+        },
+      ],
+    } as unknown as Response);
+
+    const result = await runEvalComparison(
+      env as unknown as Parameters<typeof runEvalComparison>[0],
+      'user-phone-1'
+    );
+    expect(result.verdict!.recommendation).toBe('switch');
+    const comp = await import('../models/comparisons');
+    const persisted = (comp.createComparison as ReturnType<typeof vi.fn>).mock.calls[0]![1];
+    // No reason from Python → null, never a fabricated value.
+    expect(persisted.reason).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Usage-profile helpers — degenerate-but-real bill edge cases.
+//
+// Drives parser mis-extractions and unusual-but-real bills through
+// billToSummary → computeAvgDailyKwh / computeSeasonalWeights and asserts the
+// resulting NUMBERS, not just "does not throw". Cases map 1:1 to the task spec.
+// ---------------------------------------------------------------------------
+
+describe('usage-profile helpers — degenerate bill edge cases', () => {
+  type RawBill = Parameters<typeof billToSummary>[0];
+  type Summary = NonNullable<ReturnType<typeof billToSummary>>;
+
+  /** Build a raw bill; defaults are a normal summer bill. Mid-month dates keep
+   *  the month stable across every timezone (no rolling at midnight). */
+  function raw(over: Partial<RawBill> & Pick<RawBill, 'id'>): RawBill {
+    return {
+      usageKwh: 300,
+      totalCents: 20000,
+      periodStart: '2026-01-15',
+      periodEnd: '2026-02-14',
+      days: 30,
+      breakFeeCents: null,
+      ...over,
+    };
+  }
+
+  function summarize(bills: readonly RawBill[]): Summary[] {
+    return bills
+      .map(billToSummary)
+      .filter((b): b is Summary => b !== null);
+  }
+
+  // --- billToSummary: which bills enter the profile ------------------------
+
+  describe('billToSummary — exclusion of mis-parses', () => {
+    it.each<readonly [string, RawBill]>([
+      ['negative day count (case 1)', raw({ id: 'neg-days', days: -5 })],
+      ['zero day count (case 2)', raw({ id: 'zero-days', days: 0 })],
+      [
+        'all-null parse fields (case 9)',
+        {
+          id: 'all-null',
+          usageKwh: null,
+          totalCents: null,
+          periodStart: null,
+          periodEnd: null,
+          days: null,
+          breakFeeCents: null,
+        },
+      ],
+    ])('rejects a bill with %s', (_label, bill) => {
+      expect(billToSummary(bill)).toBeNull();
+    });
+
+    it('a rejected bill is excluded, not counted as zero (cases 1 + 9)', () => {
+      // One good bill + a negative-days bill + an all-null bill must reduce to
+      // just the good bill — the mis-parses neither count as zero usage nor
+      // corrupt the denominator.
+      const summaries = summarize([
+        raw({ id: 'good', usageKwh: 300, days: 30 }),
+        raw({ id: 'neg', usageKwh: 600, days: -5 }),
+        {
+          id: 'null',
+          usageKwh: null,
+          totalCents: null,
+          periodStart: null,
+          periodEnd: null,
+          days: null,
+          breakFeeCents: null,
+        },
+      ]);
+      expect(summaries).toHaveLength(1);
+      expect(summaries[0]!.id).toBe('good');
+    });
+
+    it('keeps a zero-usage bill with a real day count (case 3)', () => {
+      // A vacant-property bill (0 kWh, real days) is NOT a mis-parse: only
+      // non-positive DAYS are rejected. A genuine 0-usage bill stays in.
+      expect(
+        billToSummary(raw({ id: 'vacant', usageKwh: 0, days: 30 }))
+      ).not.toBeNull();
+    });
+
+    it('keeps a negative total_cents (credit note) bill (case 4)', () => {
+      // total_cents is unrelated to day-count; a refund bill stays in.
+      expect(
+        billToSummary(raw({ id: 'credit', totalCents: -5000 }))
+      ).not.toBeNull();
+    });
+  });
+
+  // --- computeAvgDailyKwh: exact numbers + the corruption guard -----------
+
+  describe('computeAvgDailyKwh — real numbers', () => {
+    it.each<readonly [string, RawBill[], number]>([
+      [
+        'single bill — onboarding state (case 5)',
+        [raw({ id: 'only', usageKwh: 300, days: 30 })],
+        10,
+      ],
+      [
+        'negative-days bill excluded — cannot inflate avg (case 1)',
+        [
+          raw({ id: 'good', usageKwh: 300, days: 30 }),
+          raw({ id: 'neg', usageKwh: 600, days: -5 }),
+        ],
+        10,
+      ],
+      [
+        'zero-days bill excluded (case 2)',
+        [
+          raw({ id: 'good', usageKwh: 300, days: 30 }),
+          raw({ id: 'zero', usageKwh: 300, days: 0 }),
+        ],
+        10,
+      ],
+      [
+        'zero-usage bill pulls the average down — it is a real bill (case 3)',
+        [
+          raw({ id: 'vacant', usageKwh: 0, days: 30 }),
+          raw({ id: 'normal', usageKwh: 300, days: 30 }),
+        ],
+        5,
+      ],
+      [
+        'negative total_cents does not affect the avg (case 4)',
+        [raw({ id: 'credit', usageKwh: 300, days: 30, totalCents: -5000 })],
+        10,
+      ],
+      [
+        'duplicate identical bills do not distort the avg (case 7)',
+        [
+          raw({ id: 'dup-a', usageKwh: 300, days: 30 }),
+          raw({ id: 'dup-b', usageKwh: 300, days: 30 }),
+        ],
+        10,
+      ],
+      ['all bills mis-parsed → 0, no divide-by-zero', [raw({ id: 'neg', days: -5 })], 0],
+      ['empty profile → 0', [], 0],
+    ])('computeAvgDailyKwh: %s → %i kWh/day', (_name, bills, expected) => {
+      expect(computeAvgDailyKwh(summarize(bills))).toBe(expected);
+    });
+
+    it('rounds to 2 decimals (matches planComparator rounding)', () => {
+      // 1000 kWh / 90 days = 11.111… → 11.11
+      expect(
+        computeAvgDailyKwh(summarize([raw({ id: 'a', usageKwh: 1000, days: 90 })]))
+      ).toBe(11.11);
+    });
+  });
+
+  // --- computeSeasonalWeights ----------------------------------------------
+
+  describe('computeSeasonalWeights — season assignment', () => {
+    it('single summer bill (case 5): full usage in summer, none in winter', () => {
+      const w = computeSeasonalWeights(
+        summarize([
+          raw({ id: 'jan', usageKwh: 400, periodStart: '2026-01-15' }),
+        ])
+      );
+      expect(w).toEqual({ summer: 400, winter: 0 });
+    });
+
+    it('duplicate identical bills do not distort the seasonal average (case 7)', () => {
+      // Two copies of the same summer bill: the per-bill average is unchanged.
+      const w = computeSeasonalWeights(
+        summarize([
+          raw({ id: 'dup-a', usageKwh: 400, periodStart: '2026-01-15' }),
+          raw({ id: 'dup-b', usageKwh: 400, periodStart: '2026-01-15' }),
+        ])
+      );
+      expect(w).toEqual({ summer: 400, winter: 0 });
+    });
+
+    it('bill spanning a season boundary is assigned wholly to periodStart season (case 8)', () => {
+      // Feb 15 → Mar 15: periodStart month (Feb=1) is summer. The autumn half
+      // is NOT split out — the whole bill lands in summer. Known imprecision
+      // (reported, not fixed: splitting requires a product decision on how to
+      // apportion usage across a boundary).
+      const w = computeSeasonalWeights(
+        summarize([
+          raw({
+            id: 'boundary',
+            usageKwh: 400,
+            days: 28,
+            periodStart: '2026-02-15',
+            periodEnd: '2026-03-15',
+          }),
+        ])
+      );
+      expect(w).toEqual({ summer: 400, winter: 0 });
+    });
+
+    // Case 6 — a season with NO bills.
+    //
+    // computeSeasonalWeights returns 0 for a season that has no bills, which the
+    // task flagged as "0 reads as 'measured zero'". However the ONLY consumer of
+    // this value is the Python /compare body (seasonal_weight), and Python's
+    // compare() NEVER reads seasonal_weight — annual cost is projected purely
+    // from avg_daily_kwh (the only "seasonal" mention in python/ is a
+    // docstring). So this 0 has NO numeric effect on any saving figure today,
+    // and a fallback would be inventing a number in guessed units for a consumer
+    // that does not exist. Per the task's escape clause the value is left alone
+    // and REPORTED. This test pins the current behaviour so any future change to
+    // the field is caught loudly.
+    it('a season with no bills returns 0 (case 6) — REPORTED, not fixed', () => {
+      const w = computeSeasonalWeights(
+        summarize([
+          raw({ id: 'mar', usageKwh: 300, periodStart: '2026-03-15' }), // March = shoulder
+        ])
+      );
+      expect(w).toEqual({ summer: 0, winter: 0 });
+    });
+
+    it('averages per-bill usage within a season (summer + winter mix)', () => {
+      const w = computeSeasonalWeights(
+        summarize([
+          raw({ id: 'jan', usageKwh: 400, periodStart: '2026-01-15' }), // summer (Jan)
+          raw({ id: 'dec', usageKwh: 600, periodStart: '2026-12-15' }), // summer (Dec)
+          raw({ id: 'jun', usageKwh: 800, periodStart: '2026-06-15' }), // winter (Jun)
+        ])
+      );
+      // summer avg = (400 + 600) / 2 = 500; winter avg = 800 / 1 = 800
+      expect(w).toEqual({ summer: 500, winter: 800 });
+    });
   });
 });

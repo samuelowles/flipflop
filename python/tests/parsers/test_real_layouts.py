@@ -10,6 +10,9 @@ Each wrong value is called out inline so a future regression is recognisable.
 
 from __future__ import annotations
 
+import pytest
+
+from parsers.base import RECONCILE_TOLERANCE, reconcile_total
 from parsers.extractors import (
     extract_address,
     extract_daily_charge,
@@ -24,6 +27,7 @@ from parsers.extractors import (
     extract_tou_usage,
     has_tou_charges,
 )
+from parsers.meridian_parser import MeridianParser
 
 # ---------------------------------------------------------------------------
 # Mercury — bundled electricity + mobile invoice
@@ -232,3 +236,136 @@ def test_ek_blended_rate_is_not_the_peak_rate():
     # ($55.75 + $74.71 + $0.00) / 298.49 kWh. extract_per_kwh alone returns the
     # peak rate 56.71, which overstates the customer's real cost by ~30%.
     assert extract_tou_blended_rate(EK_REAL_LAYOUT) == 43.71, "c_per_kwh (blended)"
+
+
+# ---------------------------------------------------------------------------
+# Meridian — split-period bills (re-rate / 1 April price change)
+# ---------------------------------------------------------------------------
+#
+# Meridian splits the billing period into two charge segments when the tariff
+# changes mid-period or the account is re-rated. The meter identifier is
+# anonymised to <METER>; treat it as an opaque token. Every figure, label and
+# line break is preserved from the real bills — the layout IS the test.
+#
+# Both bills were stuck in needs_review because the parser read only the first
+# segment and the headline amount due (which folds in any unpaid prior balance).
+
+MERIDIAN_SPLIT_A = """Your bill: $489.15
+Total amount due by 08 Jan 2026 $489.15
+Charges Period Rate (incl GST) Quantity Total
+<METER>:1 Anytime 18 Nov - 28 Nov 24.46 c/kWh 232.0 kWh $56.74
+Daily Charge (267.79 c/day x 11 days) $29.45
+<METER>:1 Anytime 29 Nov - 17 Dec 24.46 c/kWh 384.0 kWh $93.92
+Daily Charge (267.79 c/day x 19 days) $50.88
+Property charges for this period 616.0 kWh $231.01
+Total charges $231.01
+Net cost (excluding GST) $200.88
+"""
+
+MERIDIAN_SPLIT_B = """Your bill: $256.32
+Total amount due by 05 May 2026 $256.32
+Charges Period Rate (incl GST) Quantity Total
+<METER>:1 Anytime 18 Mar - 31 Mar 24.46 c/kWh 305.7 kWh $74.78
+Daily Charge (267.79 c/day x 14 days) $37.49
+<METER>:1 Anytime 01 Apr - 17 Apr 26.83 c/kWh 354.4 kWh $95.09
+Daily Charge (288.11 c/day x 17 days) $48.98
+Property charges for this period 660.1 kWh $256.32
+Total charges $256.32
+Net cost (excluding GST) $222.89
+"""
+
+# Same Meridian layout style but a SINGLE segment — proves the blend does not
+# engage and the shared extractors return the lone rate unchanged.
+MERIDIAN_SINGLE_SEGMENT = """Your bill: $127.12
+Total amount due by 13 Feb 2026 $127.12
+Charges Period Rate (incl GST) Quantity Total
+<METER>:1 Anytime 14 Jan - 13 Feb 27.80 c/kWh 290.0 kWh $80.62
+Daily Charge (150.00 c/day x 31 days) $46.50
+Property charges for this period 290.0 kWh $127.12
+Total charges $127.12
+Net cost (excluding GST) $110.54
+"""
+
+
+def test_meridian_split_a_usage_reads_the_aggregate_line():
+    # Was the first segment (232.0): no pattern matched "Property charges for
+    # this period", so the caller fell through to the shared first-NNN-kWh.
+    assert MeridianParser._extract_meridian_usage(MERIDIAN_SPLIT_A) == 616.0
+
+
+def test_meridian_split_a_per_kwh_unchanged_single_rate():
+    # Both segments share 24.46 -> no blend; the shared path returns the rate.
+    assert MeridianParser._extract_meridian_per_kwh(MERIDIAN_SPLIT_A) is None
+    assert extract_per_kwh(MERIDIAN_SPLIT_A) == 24.46
+
+
+def test_meridian_split_a_daily_charge_unchanged_single_rate():
+    assert MeridianParser._extract_meridian_daily_charge(MERIDIAN_SPLIT_A) is None
+    assert extract_daily_charge(MERIDIAN_SPLIT_A) == 267.79
+
+
+def test_meridian_split_a_total_prefers_total_charges_over_amount_due():
+    # Was 48915 ("Total amount due" carries the prior month's unpaid $258.14).
+    assert MeridianParser._extract_meridian_total(MERIDIAN_SPLIT_A) == 23101
+
+
+def test_meridian_split_b_usage_reads_the_aggregate_line():
+    assert MeridianParser._extract_meridian_usage(MERIDIAN_SPLIT_B) == 660.1
+
+
+def test_meridian_split_b_per_kwh_is_volume_weighted():
+    # (24.46*305.7 + 26.83*354.4) / 660.1. extract_per_kwh alone returns the
+    # first (pre-change) rate 24.46, so the period never reconciles.
+    assert MeridianParser._extract_meridian_per_kwh(MERIDIAN_SPLIT_B) == pytest.approx(
+        25.73, abs=0.01
+    )
+
+
+def test_meridian_split_b_daily_charge_is_day_weighted():
+    # (267.79*14 + 288.11*17) / 31.
+    assert MeridianParser._extract_meridian_daily_charge(MERIDIAN_SPLIT_B) == pytest.approx(
+        278.93, abs=0.01
+    )
+
+
+def test_meridian_split_b_total_prefers_total_charges():
+    # No arrears here, so amount due == total charges; either way 25632.
+    assert MeridianParser._extract_meridian_total(MERIDIAN_SPLIT_B) == 25632
+
+
+def test_meridian_split_a_reconciles_within_tolerance():
+    # The four extracted values must reproduce this period's stated total.
+    # days = 11 + 19 (the two daily-charge segments).
+    delta = reconcile_total(
+        MeridianParser._extract_meridian_usage(MERIDIAN_SPLIT_A),  # 616.0
+        extract_per_kwh(MERIDIAN_SPLIT_A),  # 24.46 (single rate, no blend)
+        30,
+        extract_daily_charge(MERIDIAN_SPLIT_A),  # 267.79
+        MeridianParser._extract_meridian_total(MERIDIAN_SPLIT_A),  # 23101
+    )
+    assert delta is not None
+    assert delta < RECONCILE_TOLERANCE
+
+
+def test_meridian_split_b_reconciles_within_tolerance():
+    # days = 14 + 17 (the two daily-charge segments).
+    delta = reconcile_total(
+        MeridianParser._extract_meridian_usage(MERIDIAN_SPLIT_B),  # 660.1
+        MeridianParser._extract_meridian_per_kwh(MERIDIAN_SPLIT_B),  # 25.73
+        31,
+        MeridianParser._extract_meridian_daily_charge(MERIDIAN_SPLIT_B),  # 278.93
+        MeridianParser._extract_meridian_total(MERIDIAN_SPLIT_B),  # 25632
+    )
+    assert delta is not None
+    assert delta < RECONCILE_TOLERANCE
+
+
+def test_meridian_single_segment_does_not_blend():
+    # A single segment never engages the blend: both methods return None and
+    # the shared extractors return the lone rate, exactly as before the fix.
+    assert MeridianParser._extract_meridian_usage(MERIDIAN_SINGLE_SEGMENT) == 290.0
+    assert MeridianParser._extract_meridian_per_kwh(MERIDIAN_SINGLE_SEGMENT) is None
+    assert MeridianParser._extract_meridian_daily_charge(MERIDIAN_SINGLE_SEGMENT) is None
+    assert extract_per_kwh(MERIDIAN_SINGLE_SEGMENT) == 27.80
+    assert extract_daily_charge(MERIDIAN_SINGLE_SEGMENT) == 150.0
+    assert MeridianParser._extract_meridian_total(MERIDIAN_SINGLE_SEGMENT) == 12712

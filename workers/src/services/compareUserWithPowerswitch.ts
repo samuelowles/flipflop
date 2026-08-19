@@ -233,7 +233,8 @@ function billToSummary(bill: {
     bill.totalCents == null ||
     !bill.periodStart ||
     !bill.periodEnd ||
-    bill.days == null
+    bill.days == null ||
+    bill.days <= 0
   ) {
     return null;
   }
