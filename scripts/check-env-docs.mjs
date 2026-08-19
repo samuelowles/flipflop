@@ -26,7 +26,9 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const SRC = join(ROOT, 'workers', 'src');
-const RUNBOOK = join(ROOT, 'docs', 'TESTING_RUN.md');
+// 2026-08-18: TESTING_RUN.md and DEPLOY.md were merged into OPERATIONS.md, which
+// is now the canonical secrets list. Both originals are in docs/history/.
+const RUNBOOK = join(ROOT, 'docs', 'OPERATIONS.md');
 const WRANGLER = join(ROOT, 'workers', 'wrangler.toml');
 
 /** Optional chaining included — that omission is the whole point of this file. */
@@ -70,7 +72,7 @@ if (undocumented.length > 0) {
   console.error(
     'Env values the Worker reads but the operator is never told to set:\n' +
     undocumented.map((n) => `  - ${n}`).join('\n') +
-    `\n\nAdd each to docs/TESTING_RUN.md §1b (or to wrangler.toml [vars] if it is` +
+    `\n\nAdd each to docs/OPERATIONS.md §2 (or to wrangler.toml [vars] if it is` +
     ` not a secret).\nAn unset secret is not a warning at runtime — sentAuth` +
     ` returns 500 on every inbound webhook.\n`
   );

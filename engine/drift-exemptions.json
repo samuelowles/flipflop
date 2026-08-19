@@ -1,0 +1,19 @@
+{
+  "_": "Time-boxed exemptions from the drift detector. Every entry MUST carry an issue and an expiry. Once the expiry passes the finding becomes a hard gate failure again and says so loudly. Renewing an exemption instead of fixing the underlying problem is the failure mode this file is designed to make visible.",
+  "exemptions": [
+    {
+      "check": "models",
+      "match": "deepseek-chat",
+      "issue": 283,
+      "expires": "2026-08-25",
+      "why": "DeepSeek retired deepseek-chat and deepseek-reasoner on 2026-07-24. The replacement (deepseek-v4-pro) is decided, but swapping a live model identifier needs a verified round-trip first: the reasoner returned a different response shape and the four call sites parse it directly. Blocking every unrelated branch on this in the meantime would stop all other work. Human-gated, one week."
+    },
+    {
+      "check": "models",
+      "match": "deepseek-reasoner",
+      "issue": 283,
+      "expires": "2026-08-25",
+      "why": "As above — same fix, same issue."
+    }
+  ]
+}
