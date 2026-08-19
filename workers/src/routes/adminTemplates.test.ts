@@ -268,6 +268,23 @@ describe('POST /admin/templates/submit (re-registering after a copy change)', ()
     expect(body.results.filter((r) => r.submitted)).toHaveLength(5);
   });
 
+  it('400s when a known name is mixed with an unknown one, submitting neither', async () => {
+    const res = await submitApp().request(
+      '/admin/templates/submit',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ names: ['saving_alert', 'saving_alrt'] }),
+      },
+      env
+    );
+
+    expect(res.status, 'a typo beside a real name must not report success').toBe(400);
+    const body = (await res.json()) as { unknown: string[] };
+    expect(body.unknown).toEqual(['saving_alrt']);
+    expect(mockSubmitTemplate).not.toHaveBeenCalled();
+  });
+
   it('400s on an unknown name rather than silently submitting nothing', async () => {
     const res = await submitApp().request(
       '/admin/templates/submit',

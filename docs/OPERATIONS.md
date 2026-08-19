@@ -137,6 +137,18 @@ The 10:00 UTC canary replays a fixture address and sets a 48-hour KV drift flag 
 
 **Verify all three:** D1 rows gone · R2 bill objects gone · **Google OAuth token revoked**. The revocation step is the one most likely to be missed. Verification item V-4 in the decisions log.
 
+### 6.6 A template copy change is not live on WhatsApp
+
+WhatsApp template bodies are approved by Meta, so editing one in `services/sentTemplates.ts` does not re-register it. `submitTemplate` had zero callers until `POST /admin/templates/submit` was wired, which is why #265's corrected `saving_alert` copy shipped but never reached WhatsApp.
+
+```bash
+curl -sS -X POST -H "Authorization: Bearer $ADMIN_API_KEY" \
+  -H "Content-Type: application/json" -d '{"names":["saving_alert"]}' \
+  <WORKER_URL>/admin/templates/submit
+```
+
+Omit the body to submit all six; poll `GET /admin/templates/status` for the outcome. Approval is asynchronous (1-4 weeks). **SMS is unaffected** — it sends the same body verbatim and immediately, so the notify stage keeps working over SMS while approval is pending.
+
 ## 7. Retention
 
 Enforced by scheduled purge.

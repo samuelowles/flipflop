@@ -91,19 +91,22 @@ export async function adminSubmitTemplates(c: Context): Promise<Response> {
   let names: string[] | undefined;
   const body = (await c.req.json().catch(() => null)) as { names?: unknown } | null;
   if (body && Array.isArray(body.names)) {
-    names = body.names.filter((n): n is string => typeof n === 'string');
+    // Non-strings are kept, not dropped, so they surface as unknown names below.
+    names = body.names.map((n) => (typeof n === 'string' ? n : String(n)));
   }
 
-  const targets = names && names.length > 0
-    ? SENT_TEMPLATES.filter((t) => names!.includes(t.name))
-    : SENT_TEMPLATES;
-
-  if (targets.length === 0) {
+  // Reject on ANY unknown name, not just when every name is unknown: a typo
+  // alongside a real one would otherwise report success while the typo's
+  // template was never submitted — the exact silent gap this route exists to close.
+  const unknown = (names ?? []).filter((n) => !SENT_TEMPLATES.some((t) => t.name === n));
+  if (unknown.length > 0 || (names !== undefined && names.length === 0)) {
     return c.json(
-      { error: 'No matching templates', code: 'unknown_template', known: SENT_TEMPLATES.map((t) => t.name) },
+      { error: 'No matching templates', code: 'unknown_template', unknown, known: SENT_TEMPLATES.map((t) => t.name) },
       400
     );
   }
+
+  const targets = names ? SENT_TEMPLATES.filter((t) => names.includes(t.name)) : SENT_TEMPLATES;
 
   const results = await Promise.all(
     targets.map(async (t) => {

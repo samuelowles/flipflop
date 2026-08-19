@@ -93,27 +93,6 @@ Optional / currently inert:
 > Bindings (`DB`, `KV`, `BILLS`, `PARSE_QUEUE`, `COMPARE_QUEUE`, `NOTIFY_QUEUE`,
 > `RATE_LIMITER`) come from `wrangler.toml`, not `secret put`.
 
-### 1b-2. Re-register WhatsApp templates after any copy change
-
-Template bodies are approved by Meta. Changing one in `services/sentTemplates.ts`
-does NOT re-submit it — until this endpoint existed there was no wired path at
-all (`submitTemplate` had zero callers), so #265's corrected `saving_alert` copy
-was merged and deployed but could not reach WhatsApp.
-
-```bash
-curl -sS -X POST -H "Authorization: Bearer $ADMIN_API_KEY"   -H "Content-Type: application/json" -d '{"names":["saving_alert"]}'   <WORKER_URL>/admin/templates/submit
-```
-
-Omit the body to submit all six. Then poll for the outcome:
-
-```bash
-curl -sS -H "Authorization: Bearer $ADMIN_API_KEY" <WORKER_URL>/admin/templates/status
-```
-
-Approval is asynchronous (1-4 weeks, DEPLOY.md). **SMS is unaffected** — it uses
-the same body verbatim and sends immediately, so the notify stage still works
-over SMS while WhatsApp approval is pending.
-
 ### 1c. Google OAuth test-mode app
 - A Google Cloud OAuth app in **Testing** mode, with the operator's Gmail address
   added as a **test user**.
