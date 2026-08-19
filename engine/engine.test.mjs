@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 
-import { blockers, slug, declaredFiles, pickActionable, partitionByGate } from "./graph.mjs";
+import { blockers, slug, declaredFiles, pickActionable, partitionByGate, filesConflict, planBatch, lintEdges } from "./graph.mjs";
 import { share } from "./ledger.mjs";
 
 // ------------------------------------------------------------------ blockers
@@ -140,6 +140,134 @@ test("partitionByGate: an epic with no gated issues is unchanged", () => {
   const { auto, gated } = partitionByGate(ready);
   assert.deepEqual(auto.map((i) => i.number), [1, 2]);
   assert.deepEqual(gated, []);
+});
+
+// ------------------------------------------------------------ filesConflict
+//
+// Guardrail 2: one writer per file. A wrong answer here puts two agents on the
+// same artifact, which is the failure the whole batching idea rests on avoiding.
+
+test("filesConflict: identical paths conflict", () => {
+  assert.equal(filesConflict(["workers/src/index.ts"], ["workers/src/index.ts"]), true);
+});
+
+test("filesConflict: a directory conflicts with a file inside it", () => {
+  assert.equal(filesConflict(["workers/src/"], ["workers/src/index.ts"]), true);
+  assert.equal(filesConflict(["workers/src/index.ts"], ["workers/src"]), true);
+});
+
+test("filesConflict: sibling files do not conflict", () => {
+  assert.equal(filesConflict(["workers/src/routes/gmail.ts"], ["workers/src/services/logger.ts"]), false);
+});
+
+test("filesConflict: overlap is boundary-aware, not a bare prefix match", () => {
+  // "workers/src" is a prefix of the STRING "workers/src2" but not of the PATH.
+  // A naive startsWith would serialise two unrelated directories forever.
+  assert.equal(filesConflict(["workers/src"], ["workers/src2"]), false);
+  assert.equal(filesConflict(["docs"], ["docs-history"]), false);
+});
+
+test("filesConflict: trailing slashes and ./ prefixes do not change the answer", () => {
+  assert.equal(filesConflict(["./docs/"], ["docs/PRD.md"]), true);
+  assert.equal(filesConflict(["docs//"], ["docs"]), true);
+});
+
+test("filesConflict: an undeclared file set conflicts with everything", () => {
+  // Unknown blast radius must fail closed. Treating "no Files: line" as
+  // "touches nothing" would hand two writers the same file.
+  assert.equal(filesConflict([], ["docs/PRD.md"]), true);
+  assert.equal(filesConflict(["docs/PRD.md"], []), true);
+  assert.equal(filesConflict([], []), true);
+});
+
+// ---------------------------------------------------------------- planBatch
+
+const withFiles = (number, files, extra = "") =>
+  issue(number, `Blocked by: none\n${files === null ? extra : `Files: ${files}`}`);
+
+test("planBatch: disjoint issues batch in parallel", () => {
+  const plan = planBatch([
+    withFiles(97, "workers/src/services/logger.ts"),
+    withFiles(99, "workers/src/index.ts"),
+    withFiles(106, "docs/OPERATIONS.md"),
+  ]);
+  assert.equal(plan.mode, "parallel");
+  assert.deepEqual(plan.batch.map((i) => i.number), [97, 99, 106]);
+  assert.deepEqual(plan.held, []);
+});
+
+test("planBatch: an overlapping issue is held, and says who it clashes with", () => {
+  const plan = planBatch([
+    withFiles(99, "workers/src/index.ts"),
+    withFiles(101, "workers/src/index.ts, workers/src/services/digest.ts"),
+  ]);
+  assert.deepEqual(plan.batch.map((i) => i.number), [99]);
+  assert.equal(plan.held.length, 1);
+  assert.equal(plan.held[0].issue, 101);
+  assert.match(plan.held[0].why, /#99/);
+});
+
+test("planBatch: sequential work reports the stop rule rather than a thin batch", () => {
+  // Every multi-agent configuration LOST on sequential work. A batch of one is
+  // the rule firing, not a shortage of issues, and must read that way.
+  const plan = planBatch([withFiles(99, "workers/src/index.ts")]);
+  assert.equal(plan.mode, "serial");
+  assert.match(plan.reason, /does not split/);
+});
+
+test("planBatch: an issue with no Files: line runs alone", () => {
+  const plan = planBatch([
+    withFiles(500, null, "no file declaration here"),
+    withFiles(501, "docs/PRD.md"),
+  ]);
+  assert.deepEqual(plan.batch.map((i) => i.number), [500]);
+  assert.equal(plan.mode, "serial");
+  assert.match(plan.held[0].why, /blast radius/);
+});
+
+test("planBatch: the parallel cap is enforced and the overflow is reported", () => {
+  const plan = planBatch(
+    [withFiles(1, "a.ts"), withFiles(2, "b.ts"), withFiles(3, "c.ts"), withFiles(4, "d.ts")],
+    { max: 2 }
+  );
+  assert.deepEqual(plan.batch.map((i) => i.number), [1, 2]);
+  assert.equal(plan.held.length, 2);
+  assert.match(plan.held[0].why, /cap of 2/);
+});
+
+test("planBatch: held issues are never silently dropped", () => {
+  const ready = [withFiles(1, "a.ts"), withFiles(2, "a.ts"), withFiles(3, "b.ts")];
+  const plan = planBatch(ready, { max: 2 });
+  const accounted = plan.batch.length + plan.held.length;
+  assert.equal(accounted, ready.length, "every ready issue must appear in batch or held");
+});
+
+// ---------------------------------------------------------------- lintEdges
+
+test("lintEdges: an edge between file-disjoint issues is flagged as suspect", () => {
+  // "Draw an arrow only when a job needs another job's RESULT." #101 touching
+  // nothing #99 writes is the question worth asking.
+  const issues = [withFiles(99, "workers/src/index.ts"), issue(101, "Blocked by: #99\nFiles: docs/OPERATIONS.md")];
+  const found = lintEdges(issues, new Map([[99, "OPEN"], [101, "OPEN"]]));
+  assert.equal(found.length, 1);
+  assert.equal(found[0].kind, "suspect");
+  assert.equal(found[0].dep, 99);
+});
+
+test("lintEdges: a real edge over shared files is not flagged", () => {
+  const issues = [withFiles(97, "workers/src/services/logger.ts"), issue(98, "Blocked by: #97\nFiles: workers/src/services/logger.ts, workers/src/index.ts")];
+  assert.deepEqual(lintEdges(issues, new Map([[97, "OPEN"], [98, "OPEN"]])), []);
+});
+
+test("lintEdges: an edge to an issue that does not exist is dead", () => {
+  const found = lintEdges([issue(101, "Blocked by: #9999\nFiles: docs/x.md")], new Map([[101, "OPEN"]]));
+  assert.equal(found.length, 1);
+  assert.equal(found[0].kind, "dead");
+});
+
+test("lintEdges: closed issues are not linted", () => {
+  const issues = [issue(101, "Blocked by: #9999\nFiles: docs/x.md", { state: "CLOSED" })];
+  assert.deepEqual(lintEdges(issues, new Map([[101, "CLOSED"]])), []);
 });
 
 // ---------------------------------------------------------------------- slug

@@ -68,6 +68,19 @@ step("local branch matches pushed branch", () => {
   if (local !== remote) throw new Error("local and origin differ — push first");
 });
 
+step("branch is not behind the trunk", () => {
+  // "One owned merge." When a batch of issues runs in parallel, the moment the
+  // first branch lands the others are stale: every check below still passes,
+  // but it passed against a trunk that no longer exists. Merging on that basis
+  // ships code no gate ever saw in combination — which is exactly the
+  // error-amplification a single owned merge point is there to stop.
+  //
+  // Rebase and re-run. The gate is cheap; a bad merge is not.
+  trySh(`git fetch origin ${MAIN} --quiet`);
+  const behind = sh(`git rev-list --count HEAD..origin/${MAIN}`);
+  if (behind !== "0") throw new Error(`${behind} commit(s) behind origin/${MAIN} — rebase and re-gate`);
+});
+
 step("PR exists, targets the trunk, and closes the issue", () => {
   const issue = Number((branch.match(/issue-(\d+)-/) || [])[1]);
   const prs = JSON.parse(sh(`gh pr list --head ${branch} --state open --json number,baseRefName,body`));

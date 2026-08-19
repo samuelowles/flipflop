@@ -131,17 +131,35 @@ node engine/preflight.mjs
 
 ---
 
-## Picking the next issue
+## Picking the work
 
-Use the selector. It is authoritative:
+The selectors are authoritative. Neither hands you an issue you must not touch — `gate:human` and `deferred` issues are filtered out, and the gated ones come back in a `humanGated` array so your run report can name what is parked rather than silently omitting it.
+
+**Serial — `next`.** Returns the lowest-numbered issue that is open, unblocked and startable:
 
 ```bash
 node engine/graph.mjs next <EPIC>
 ```
 
-It returns the lowest-numbered issue that is open, unblocked and startable, and it will not hand you one you must not touch — `gate:human` and `deferred` issues are filtered out, and the gated ones come back in a `humanGated` array so your run report can name what is parked rather than silently omitting it. When nothing startable remains it returns `done: true` with that array.
+When nothing startable remains it returns `done: true` with that array.
 
 *(It did not always. `next` used to sort by number and ignore both labels, so a human-gated issue at the front of an epic was returned on every call and the loop could not advance past it. The workaround was a hand-maintained skip-list here, which made the selector advisory rather than authoritative — the opposite of the point. Fixed, with tests, in `engine/engine.test.mjs`.)*
+
+**Parallel — `batch`.** Returns every issue that may be started at once:
+
+```bash
+node engine/graph.mjs batch <EPIC>
+```
+
+`mode` tells you which loop to run. `"parallel"`: the issues in `batch[]` may run at once, one worktree each. `"serial"`: the work does not split here — run the serial loop on the single issue in `batch[]` and do not force a fan-out. Read `held[]` too: each entry is a ready issue held out of the batch, with the reason. The full field reference is in `engine/README.md`.
+
+**Before a long session — `lint`.** Reports fake edges in the epic's dependency graph:
+
+```bash
+node engine/graph.mjs lint <EPIC>
+```
+
+A `suspect` edge is one whose endpoints write disjoint files — the question is whether the downstream issue actually reads the upstream result. Resolve each one before the session, because every unresolved edge costs parallelism. There are two resolutions: the edge is fake, and you delete it from the issue's `Blocked by` list; or it is real, and the downstream issue's `Files:` line is incomplete (#141 was this one). If the issue bodies do not settle it, leave the edge and write it in the report — the affected work simply stays serial.
 
 `node engine/graph.mjs list <EPIC>` remains the human view — it shows everything, including the gated and deferred rows the selector withholds.
 
@@ -151,7 +169,11 @@ Epics currently seeded: `E-F` (foundations), `E-11` (observability and launch), 
 
 ## The loop
 
-Repeat until the epic is empty, you are blocked, or four hours have elapsed.
+Repeat until the epic is empty, you are blocked, or four hours have elapsed. `batch` decides which loop you are in: `mode: "serial"` means the work does not split here, so run the serial loop and do not force a fan-out.
+
+### The serial loop
+
+This is the existing loop, unchanged.
 
 1. **Pick** the issue, per the section above.
 
@@ -215,6 +237,29 @@ Repeat until the epic is empty, you are blocked, or four hours have elapsed.
    ```bash
    echo $(( ($(date +%s) - $(cat /tmp/ponytail-start)) / 60 )) minutes elapsed
    ```
+
+### The parallel loop
+
+Run this only when `batch` reported `mode: "parallel"`. The shape is the diamond pattern: plan → parallel workers → verify in a separate context → one owned merge.
+
+1. **Lint first.** `node engine/graph.mjs lint <EPIC>` — before a long session, not on every iteration. Resolve every suspect edge before splitting, because each one costs parallelism. See *Picking the work* for the two resolutions.
+
+2. **Batch.** `node engine/graph.mjs batch <EPIC>`. If `mode` is `serial`, run the serial loop above instead — do not force a fan-out. That is the stop rule firing, not a shortage of work: every multi-agent configuration loses on sequential work, degrading 39–70% in the DeepMind × MIT study. If it returns `done: true`, the epic is finished for tonight.
+
+3. **Split.** One worktree per issue in `batch[]`. Never let two workers share a file — the planner has already guaranteed this from the `Files:` lines, so a worker needing a file another worker owns is a planning error: stop and report it rather than editing across the boundary. `graph.mjs start` creates its branch by checking out in this working copy, so create the batch's branches with `git worktree add` instead, from fresh master, under the exact branch names `batch` returned (`.engine/` is already locally excluded, so these worktrees never dirty the main tree):
+
+   ```bash
+   git fetch origin master
+   git worktree add .engine/worktrees/<n> -b <branch> origin/master
+   ```
+
+   Delegate each issue independently, with its own spec written as in step 2 of the serial loop. Verify with `git log --oneline master..HEAD` in each worktree that the work landed on that branch, not on one the worker invented.
+
+4. **Verify each in its own context.** The verifier must not be the agent that wrote the code — a model grading its own work in its own context misses most of its own mistakes. Give each verifier a different question: *is it correct?*, *is it current?*, *does it do something other than it claims?* Different questions catch what identical verifiers cannot. Then, per branch, push, open the PR with `Fixes #<issue>` in the body, and run the gate — steps 5 and 6 of the serial loop, unchanged, including the maximum of two retries.
+
+5. **One owned merge.** Merge strictly one at a time. The moment the first branch lands, every remaining branch is behind the trunk and the gate will refuse it — `N commit(s) behind origin/master — rebase and re-gate`. Rebase each remaining branch onto the new trunk and re-run its gate before merging it. That refusal is the point, not friction: uncoordinated agents amplified each other's errors 17.2× in the study, and one coordinator owning the merge cut that to 4.4× — the behind-the-trunk check is what makes that single owner mechanical, and it is what stops error amplification. Under `MERGE_MODE=pr` nothing merges tonight; every branch ends at its open PR, and this discipline, with the rebase and re-gate between each, is for whoever merges them in the morning.
+
+Record one ledger row per node per worker — SPEC, IMPLEMENT, GATE, VERIFY — as step 9 of the serial loop describes.
 
 ---
 

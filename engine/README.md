@@ -11,7 +11,7 @@ The deterministic control plane for autonomous work on this repo.
 | File | Owns |
 |---|---|
 | `preflight.mjs` | Refuses to start when the repo or tooling is not in a fit state |
-| `graph.mjs` | Which issue is next · branch creation · merge decision |
+| `graph.mjs` | Which issue is next · the parallel batch · edge lint · branch creation · merge decision |
 | `gate.mjs` | Whether a branch may merge. The un-foolable part |
 | `engine.test.mjs` | Tests for the selector and the dependency parser. `node --test engine/engine.test.mjs` |
 | `drift.mjs` | Whether the docs still match the code |
@@ -25,7 +25,9 @@ The deterministic control plane for autonomous work on this repo.
 ## The loop
 
 ```
+graph.mjs lint E-F     → fake-edge report, run before a long session
 graph.mjs next E-F     → the next startable issue
+graph.mjs batch E-F    → every issue that may start at once
 graph.mjs start <n>    → branch from fresh master
    ...implement...
 graph.mjs merge <br>   → gate, then merge or open a PR
@@ -60,6 +62,109 @@ Review is skipped for `radius:small` + `tier:trivial`. That is where the Anthrop
 
 ---
 
+## The parallel path
+
+Two selectors read the same graph. `next` returns one issue and drives the serial loop above — unchanged. `batch` returns every issue that may be started at once, and with it the loop becomes the diamond pattern: plan → parallel workers → verify in a separate context → one owned merge.
+
+`batch` withholds exactly what `next` withholds — `gate:human`, `deferred`, unbuildable and blocked issues — and reports the gated ones in the same `humanGated` array. Real output of `node engine/graph.mjs batch E-11`:
+
+```json
+{
+  "mode": "serial",
+  "reason": "the work does not split here — sequential work stays with one agent",
+  "parallelCap": 3,
+  "batch": [
+    {
+      "number": 97,
+      "title": "Structured logging library (services/logger.ts)",
+      "url": "https://github.com/samuelowles/flipflop/issues/97",
+      "branch": "glm/issue-97-structured-logging-library-services-logger-ts",
+      "radius": "radius:large",
+      "tier": "tier:complex",
+      "files": [
+        "workers/src/services/logger.ts",
+        "workers/src/middleware/errorHandler.ts",
+        "workers/src/index.ts"
+      ]
+    }
+  ],
+  "held": [
+    {
+      "issue": 99,
+      "why": "writes files also written by #97"
+    },
+    {
+      "issue": 101,
+      "why": "writes files also written by #97"
+    },
+    {
+      "issue": 299,
+      "why": "writes files also written by #97"
+    }
+  ],
+  "humanGated": [
+    100,
+    102,
+    105
+  ]
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `mode` | `"parallel"` when the batch holds more than one issue; `"serial"` when it does not |
+| `reason` | Why — either the disjoint-file justification or the stop rule |
+| `parallelCap` | `MAX_PARALLEL`, the hard cap on concurrent workers |
+| `batch[]` | The issues to start: `number`, `title`, `url`, `branch`, `radius`, `tier`, `files` |
+| `held[]` | Ready issues held out of the batch, each `{issue, why}` — never silently dropped |
+| `humanGated[]` | Issues parked for a person, as in `next` |
+
+When nothing may be started unattended, `batch` returns `done: true` with that same `humanGated` array.
+
+### One writer per file
+
+Two issues run at once only when their `Files:` lines are disjoint — guardrail 2: no two jobs write the same file. The overlap test is boundary-aware, because a bare prefix match would serialise unrelated directories forever: `workers/src` collides with `workers/src/index.ts`, which lives under it, but not with `workers/src2`, which merely shares a string prefix. Trailing slashes and `./` prefixes are normalised away first.
+
+An issue with no `Files:` line has an unknown blast radius. It conflicts with everything and runs alone — failing closed is the only safe default, because guessing "touches nothing" is how two writers end up on one file, which is the failure the guardrail exists to prevent.
+
+Held issues always carry the reason, and the reason names the side that caused the hold: `writes files also written by #99`, `#99 declares no Files: line, so its blast radius is unknown`, or `parallel cap of 3 reached`.
+
+### `MAX_PARALLEL` — guardrail 4
+
+`MAX_PARALLEL` (environment variable, default **3**) is the hard cap on how many workers one batch may spawn. `batch` walks the ready list in issue-number order — the first issue into the batch keeps its place, and a later clash is held — so the batch is decided by the cap and the conflict rule, never by a model.
+
+### `mode: "serial"` is the stop rule firing
+
+A batch of one is not a shortage of work — it is the stop rule firing. The procedure: find where the work splits into pieces that never read each other's results, split only that, and keep everything sequential with one agent. In the Google DeepMind × MIT study *Towards a Science of Scaling Agent Systems* (180 controlled configurations), coordinated teams beat a single agent by roughly 80% on work that splits into independent pieces — and **every** multi-agent configuration lost on sequential work, degrading 39–70%. So a batch of one is reported as `mode: "serial"` with the reason *"the work does not split here"*, and the operator's move is the existing single-issue loop, not a forced fan-out. The E-11 output above is exactly this: #99 and #101 are ready, but both write files #97 also writes.
+
+### Edge lint — fake edges
+
+An arrow is real only when a job needs another job's *result* before it can start. `node engine/graph.mjs lint <EPIC>` reports the edges that fail two mechanical proxies for that test:
+
+| Kind | Meaning |
+|---|---|
+| `suspect` | The two issues write disjoint files — does the downstream one actually read the upstream result? |
+| `dead` | The `Blocked by` reference points at an issue that does not exist in this repo — the edge can never be satisfied |
+
+A `suspect` finding is a question for a human, not an automatic deletion. The edge may be fake — epic-level sequencing written before the code existed — or the `Files:` line may simply be incomplete. #141 was the second: its edge to #109 read as fake until its `Files:` line named the file it shares with #109, at which point the edge was confirmed, not deleted. Either way, each suspect edge costs parallelism until someone resolves it, so lint runs against an epic before a long session, not on every iteration.
+
+### What implements what
+
+The engine implements all four task-graph rules and guardrails 2, 3 and 4. Guardrail 1 is the honest exception.
+
+| Rule or guardrail | Where the engine implements it |
+|---|---|
+| Fake edges | `lint` finds them; a human confirms or deletes each one |
+| The diamond pattern | `batch` splits · workers run in separate worktrees · each branch is verified in its own context · `merge` lands them strictly one at a time |
+| The stop rule | `planBatch` returns `mode: "serial"` when the work does not split |
+| The human gate | `gate:human` and `MERGE_MODE=pr` — the gate sits where a mistake is expensive to undo, not on every step |
+| 1 — every loop gets a maximum number of rounds | **Not in code.** The only enforcement is the two-retry instruction in `LAUNCH.md` |
+| 2 — one writer per file | `filesConflict` — boundary-aware, failing closed on an undeclared blast radius |
+| 3 — the routing lives in written steps; the model fills the jobs, not the plan | `graph.mjs` owns which issue, which branch, whether the gate passed and whether anything merges; dependencies and files are written in the issues before work starts |
+| 4 — a hard cap on how many agents can spawn | `MAX_PARALLEL`, default 3 |
+
+---
+
 ## Two safety mechanisms that matter
 
 ### MERGE_MODE
@@ -87,6 +192,7 @@ Currently applied to: the DeepSeek model swap, the free-tier check-in removal, a
 
 - Working tree clean; branch is not the trunk; branch name matches `glm/issue-N-slug`
 - Local branch matches the pushed branch
+- Branch is not behind the trunk — a batch's later branches must rebase and re-gate after the first one lands
 - Exactly one open PR, based on `master`, whose body contains `Fixes #N`
 - No protected file modified — the gate itself, CI config, tsconfig, test configs, `.gitattributes`
 - `gate.mjs` hashes identical to the copy on master
@@ -99,6 +205,8 @@ Currently applied to: the DeepSeek model swap, the free-tier check-in removal, a
 - **Documentation drift is zero**
 
 Build steps are skipped for paths they do not apply to — a docs-only branch does not run the Worker build.
+
+The `branch is not behind the trunk` check is what makes one owned merge mechanical. When a batch of issues runs in parallel, the moment the first branch lands, every other branch in the batch is stale — and every other check above still passes, against a trunk that no longer exists. Merging on that basis ships code no gate ever saw in combination. In the DeepMind × MIT study, uncoordinated agents amplified each other's errors 17.2×; a single coordinator owning the merge cut that to 4.4×. Rebase and re-gate is the cheap, deterministic version of that coordinator.
 
 ### The same checks run in CI
 

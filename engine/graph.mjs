@@ -92,6 +92,114 @@ export const declaredFiles = (body) => {
   return m ? m[1].split(",").map((s) => s.trim()).filter(Boolean) : [];
 };
 
+// ------------------------------------------------------- the diamond pattern
+//
+// split ─→ parallel workers ─→ separate verifier ─→ one owned merge
+//
+// Guardrail 2 of the task-graph rules is "one writer per file — no two jobs
+// mutate the same artifact". That is the whole basis on which two issues may
+// run at once, so the overlap test has to be boundary-aware: `workers/src`
+// contains `workers/src/index.ts` and must collide with it, while
+// `workers/src` and `workers/src2` are unrelated directories.
+const normPath = (p) => p.trim().replace(/^\.\//, "").replace(/\/+$/, "");
+const pathsOverlap = (a, b) => {
+  const [x, y] = [normPath(a), normPath(b)];
+  return x === y || x.startsWith(`${y}/`) || y.startsWith(`${x}/`);
+};
+
+export const filesConflict = (aFiles, bFiles) => {
+  // An issue that declares no `Files:` line has an unknown blast radius, so it
+  // conflicts with everything and ends up running alone. Failing closed is the
+  // only safe default: guessing "touches nothing" would put two writers on one
+  // file, which is the failure the guardrail exists to prevent.
+  if (!aFiles.length || !bFiles.length) return true;
+  return aFiles.some((a) => bFiles.some((b) => pathsOverlap(a, b)));
+};
+
+// Guardrail 4: a hard cap on how many workers can spawn.
+const MAX_PARALLEL = Number(process.env.MAX_PARALLEL || 3);
+
+// The stop rule, made mechanical.
+//
+// "Ask: where does my work split into pieces that never read each other's
+// results? Split only that. Everything sequential stays with one agent."
+//
+// Coordinated teams beat a single agent by ~80% on work that splits, and EVERY
+// multi-agent configuration lost on sequential work (degrading 39-70%). So a
+// batch of one is not a failure — it is the rule firing correctly, and it is
+// reported as such rather than silently looking like a small batch.
+export const planBatch = (ready, { max = MAX_PARALLEL } = {}) => {
+  const batch = [];
+  const held = [];
+
+  for (const issue of ready) {
+    const files = declaredFiles(issue.body);
+    if (batch.length >= max) {
+      held.push({ issue: issue.number, why: `parallel cap of ${max} reached` });
+      continue;
+    }
+    const clash = batch.find((b) => filesConflict(files, declaredFiles(b.body)));
+    if (clash) {
+      // Name the side that actually caused the hold. An issue held because the
+      // one already in the batch declares nothing is a different problem — and
+      // a different fix — from two issues genuinely writing the same file.
+      const theirs = declaredFiles(clash.body);
+      held.push({
+        issue: issue.number,
+        why: !files.length
+          ? "declares no Files: line, so its blast radius is unknown"
+          : !theirs.length
+            ? `#${clash.number} declares no Files: line, so its blast radius is unknown`
+            : `writes files also written by #${clash.number}`,
+      });
+      continue;
+    }
+    batch.push(issue);
+  }
+
+  return {
+    mode: batch.length > 1 ? "parallel" : "serial",
+    reason:
+      batch.length > 1
+        ? `${batch.length} issues write disjoint file sets and never read each other's results`
+        : "the work does not split here — sequential work stays with one agent",
+    batch,
+    held,
+  };
+};
+
+// Fake edges: "draw an arrow only when a job needs another job's RESULT before
+// it can start". The semantic test needs a human, but two mechanical proxies
+// find most of them, and each one costs parallelism until it is deleted.
+export const lintEdges = (issues, states) => {
+  const byNumber = new Map(issues.map((i) => [i.number, i]));
+  const findings = [];
+
+  for (const issue of issues) {
+    if (issue.state !== "OPEN") continue;
+    const mine = declaredFiles(issue.body);
+
+    for (const dep of blockers(issue.body)) {
+      if (!states.has(dep)) {
+        findings.push({ issue: issue.number, dep, kind: "dead", note: "no such issue in this repo — the edge can never be satisfied" });
+        continue;
+      }
+      const upstream = byNumber.get(dep);
+      if (!upstream) continue; // outside this epic; its files are unknown here
+      const theirs = declaredFiles(upstream.body);
+      if (mine.length && theirs.length && !filesConflict(mine, theirs)) {
+        findings.push({
+          issue: issue.number,
+          dep,
+          kind: "suspect",
+          note: `touches no file #${dep} writes — does it actually read #${dep}'s result?`,
+        });
+      }
+    }
+  }
+  return findings;
+};
+
 const allStates = () => {
   const states = new Map();
   const issues = JSON.parse(sh(`gh issue list --repo ${REPO} --state all --limit 500 --json number,state`));
@@ -163,6 +271,56 @@ function next(epic) {
     humanGated: gated.map((i) => i.number),
     remaining: auto.length,
   });
+}
+
+// The split node of the diamond. Returns every issue that may be started at
+// once, not just the first — the workers then run in parallel worktrees and
+// each is verified in its own context before ONE owned merge lands them
+// serially (see `merge`, and the "not behind the trunk" step in gate.mjs).
+function batch(epic) {
+  const issues = children(epic);
+  const open = issues.filter((i) => i.state === "OPEN").filter(buildable);
+  if (open.length === 0) return out({ done: true, reason: `no open buildable issues in ${epicLabel(epic)}` });
+
+  const { auto, gated } = partitionByGate(pickActionable(issues, allStates()));
+  if (auto.length === 0)
+    return out({ done: true, reason: "nothing left that may be started unattended", humanGated: gated.map((i) => i.number) });
+
+  const plan = planBatch(auto);
+  out({
+    mode: plan.mode,
+    reason: plan.reason,
+    parallelCap: MAX_PARALLEL,
+    batch: plan.batch.map((i) => ({
+      number: i.number,
+      title: i.title,
+      url: i.url,
+      branch: `glm/issue-${i.number}-${slug(i.title)}`,
+      radius: names(i).find((l) => l.startsWith("radius:")) || "radius:small",
+      tier: names(i).find((l) => l.startsWith("tier:")) || "tier:standard",
+      files: declaredFiles(i.body),
+    })),
+    held: plan.held,
+    humanGated: gated.map((i) => i.number),
+  });
+}
+
+// Fake-edge report. Every suspect edge costs parallelism until someone
+// confirms or deletes it, so this is run against an epic before a long session,
+// not on every loop iteration.
+function lint(epic) {
+  const issues = children(epic);
+  const findings = lintEdges(issues, allStates());
+  console.log(`\n  ${epicLabel(epic)} — edge lint\n`);
+  if (!findings.length) {
+    console.log("  no suspect edges\n");
+    return;
+  }
+  for (const f of findings) {
+    console.log(`  #${f.issue} blocked by #${f.dep}  [${f.kind}]`);
+    console.log(`      ${f.note}`);
+  }
+  console.log(`\n  ${findings.length} edge(s) to confirm or delete. An arrow is real only when work flows through it.\n`);
 }
 
 function list(epic) {
@@ -280,12 +438,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const [, , cmd, arg] = process.argv;
   switch (cmd) {
     case "next": next(arg); break;
+    case "batch": batch(arg); break;
+    case "lint": lint(arg); break;
     case "list": list(arg); break;
     case "start": start(arg); break;
     case "merge": merge(arg); break;
     case "status": status(); break;
     default:
-      console.log("usage: graph.mjs next|list [EPIC] | start <issue> | merge <branch> | status");
+      console.log("usage: graph.mjs next|batch|lint|list [EPIC] | start <issue> | merge <branch> | status");
       process.exit(1);
   }
 }
