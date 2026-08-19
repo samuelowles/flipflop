@@ -19,6 +19,7 @@ There is one environment today, and `ENVIRONMENT="production"` is set on it — 
 
 Set with `wrangler secret put <NAME>`.
 
+<!-- generated:env — derived from env.X reads under workers/src · verified by engine/drift.mjs · do not hand-edit inside this block -->
 | Secret | Purpose |
 |---|---|
 | `ADMIN_API_KEY` | Bearer token for `/admin/*` and `/flow/status` |
@@ -33,6 +34,7 @@ Set with `wrangler secret put <NAME>`.
 | `RESEND_API_KEY` | Operational and transactional email |
 | `SENT_API_KEY` | sent.dm send |
 | `SENT_WEBHOOK_SECRET` | HMAC verification of inbound sent.dm webhooks |
+<!-- /generated:env -->
 
 Optional: `SENT_API_BASE_URL` (defaults to `https://api.sent.dm/v1`).
 **Required when Stripe lands:** `STRIPE_SECRET_KEY`, `STRIPE_WEBHOOK_SECRET`.
