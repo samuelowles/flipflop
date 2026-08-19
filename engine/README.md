@@ -13,6 +13,7 @@ The deterministic control plane for autonomous work on this repo.
 | `preflight.mjs` | Refuses to start when the repo or tooling is not in a fit state |
 | `graph.mjs` | Which issue is next · branch creation · merge decision |
 | `gate.mjs` | Whether a branch may merge. The un-foolable part |
+| `engine.test.mjs` | Tests for the selector and the dependency parser. `node --test engine/engine.test.mjs` |
 | `drift.mjs` | Whether the docs still match the code |
 | `drift-exemptions.json` | Time-boxed, issue-linked exemptions. They expire loudly |
 | `ledger.mjs` | Token accounting and the 15–20% Anthropic band |
@@ -78,12 +79,29 @@ Currently applied to: the DeepSeek model swap, the free-tier check-in removal, a
 - `gate.mjs` hashes identical to the copy on master
 - No secret-bearing file touched (`.env*`, `.dev.vars*`, MCP config)
 - No test file deleted, and **the total assertion count has not fallen**
+- The control-plane tests pass (`engine/engine.test.mjs`)
 - `git diff --check` passes
 - Env docs in sync · typecheck · lint · unit tests · e2e tests · deploy dry-run
 - pytest and the parser eval, when `python/` is touched
 - **Documentation drift is zero**
 
 Build steps are skipped for paths they do not apply to — a docs-only branch does not run the Worker build.
+
+### The same checks run in CI
+
+The gate runs locally, on the branch, before a PR is opened. `.github/workflows/ci.yml`
+re-runs the load-bearing parts on GitHub so a change that reaches master by any
+other route — a hand-merged PR, a direct push — is still held to them:
+
+| Job | Runs |
+|---|---|
+| `typecheck + lint + test` | env docs · typecheck · lint · unit · **e2e** · deploy dry-run |
+| `control plane + docs drift + acceptance` | `engine.test.mjs` · `drift.mjs` · `acceptance/run.mjs` |
+| `parser pytest + eval harness` | pytest · the parser eval |
+
+The control-plane job is stdlib-only — no npm install, no Python — and needs
+`fetch-depth: 0`, because both the drift replay and the gate's own blob-id
+check read real history.
 
 ---
 

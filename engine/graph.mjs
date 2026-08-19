@@ -15,6 +15,7 @@
 //   node engine/graph.mjs status             → run summary from the ledger
 
 import { execSync } from "node:child_process";
+import { pathToFileURL } from "node:url";
 
 const EPIC_DEFAULT = "E-F";
 const MERGE_MODE = process.env.MERGE_MODE || "pr";   // "pr" = never merge  |  "auto" = merge when the gate passes
@@ -46,10 +47,33 @@ const names = (issue) => (issue.labels || []).map((l) => l.name);
 const buildable = (issue) =>
   !names(issue).some((n) => n === "tracker/do-not-build" || n === "status:superseded" || n === "blocked:external");
 
+// Two issue-body dialects declare dependencies, and both must parse:
+//
+//   Blocked by: #12, #13          engine-seeded issues — inline
+//   ## Blocked by                 the product backlog — a heading, list below
+//   #13, #14, #15
+//   ## Blocks                     <- must NOT be swallowed: it is the inverse
+//
+// Reading only the matched line (the original behaviour) returned zero
+// blockers for every heading-style issue, so the loop would happily start
+// work whose dependencies were still open.
 export const blockers = (body) => {
-  const line = (body || "").split("\n").find((l) => /blocked by/i.test(l)) || "";
-  if (/none/i.test(line)) return [];
-  return [...line.matchAll(/#(\d+)/g)].map((m) => Number(m[1]));
+  const lines = (body || "").split("\n");
+  const start = lines.findIndex((l) => /blocked by/i.test(l));
+  if (start === -1) return [];
+
+  // Continuation lines, up to the next blank line or markdown heading. "#13"
+  // is not a heading — a heading needs whitespace after its hashes — which is
+  // what keeps the issue references and the "## Blocks" section apart.
+  const block = [lines[start]];
+  for (let i = start + 1; i < lines.length; i++) {
+    if (!lines[i].trim() || /^\s*#{1,6}\s/.test(lines[i])) break;
+    block.push(lines[i]);
+  }
+
+  const text = block.join(" ");
+  if (/\bnone\b/i.test(text)) return [];
+  return [...new Set([...text.matchAll(/#(\d+)/g)].map((m) => Number(m[1])))];
 };
 
 export const slug = (title) =>
@@ -214,15 +238,21 @@ function status() {
 }
 
 // -------------------------------------------------------------------- entry
+//
+// Guarded so the selector functions above can be imported and tested. Without
+// this, `import` alone falls through to `default` and exits 1, which is why
+// the exported helpers had no tests despite being exported for them.
 
-const [, , cmd, arg] = process.argv;
-switch (cmd) {
-  case "next": next(arg); break;
-  case "list": list(arg); break;
-  case "start": start(arg); break;
-  case "merge": merge(arg); break;
-  case "status": status(); break;
-  default:
-    console.log("usage: graph.mjs next|list [EPIC] | start <issue> | merge <branch> | status");
-    process.exit(1);
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+  const [, , cmd, arg] = process.argv;
+  switch (cmd) {
+    case "next": next(arg); break;
+    case "list": list(arg); break;
+    case "start": start(arg); break;
+    case "merge": merge(arg); break;
+    case "status": status(); break;
+    default:
+      console.log("usage: graph.mjs next|list [EPIC] | start <issue> | merge <branch> | status");
+      process.exit(1);
+  }
 }
