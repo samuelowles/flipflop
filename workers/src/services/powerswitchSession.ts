@@ -450,9 +450,49 @@ function foldDiacritics(s: string): string {
 }
 
 /** The first comma segment that begins with a street number (skips a leading unit segment). */
+/**
+ * Drop a glued non-address preamble from a segment, returning it starting at the
+ * street number ("Attn: Account Holder 25 Riddiford Street" → "25 Riddiford
+ * Street"). Returns the segment unchanged when it already starts with a number,
+ * and null when it contains no plausible street number at all.
+ *
+ * pdfplumber routinely glues a neighbouring table cell onto the address row, so
+ * bills arrive as "Tax Invoice 45 Sample Road, …" — the Python extractor already
+ * strips this class, and this is the TypeScript side's equivalent defence for
+ * addresses that reach us by another route. Without it a glued prefix left
+ * `number`/`numberBase` null AND poisoned `streetName` AND collapsed the query
+ * ladder to a single variant (no street+postcode or street+city fallback), so a
+ * whole address failed on one root cause in three places.
+ *
+ * Only fires when the segment does NOT begin with a number, so it cannot change
+ * how a well-formed address parses.
+ */
+function stripGluedPreamble(seg: string): string {
+  if (/^\d/.test(seg)) return seg; // already well-formed
+  const tokens = seg.split(/\s+/);
+  for (let i = 1; i < tokens.length - 1; i++) {
+    if (!/^\d+[a-z]?(?:-\d+[a-z]?)?$/i.test(tokens[i]!)) continue;
+    if (!/^[A-Za-z]/.test(tokens[i + 1]!)) continue;
+    // A number right AFTER a street-type word is a route number, not a house
+    // number — "State Highway 2 Te Puke" must not become "2 Te Puke".
+    if (STREET_TYPE_WORDS.has(tokens[i - 1]!.toLowerCase())) continue;
+    return tokens.slice(i).join(' ');
+  }
+  // No house number found. The segment may legitimately be a number-less street
+  // ("Rewa Road Mount Eden Auckland"), so return it untouched rather than
+  // discarding the street name.
+  return seg;
+}
+
+/** First comma segment that looks like a street once any glued preamble is
+ *  dropped — i.e. begins with a street number. Feeds the query variants. */
 function streetSegmentOf(s: string): string | null {
   const segs = s.split(',').map((x) => x.trim()).filter(Boolean);
-  return segs.find((seg) => /^\d+[a-z]?\b/i.test(seg)) ?? null;
+  for (const seg of segs) {
+    const street = stripGluedPreamble(seg);
+    if (/^\d/.test(street)) return street;
+  }
+  return null;
 }
 
 /** Maximum autocomplete queries the ladder issues (one live POST each; shared-resource etiquette). */
@@ -570,7 +610,10 @@ export function parseAddressParts(raw: string): AddressParts {
   // Street segment: leading number (incl. "82A"/"1-5"), then the name up to
   // the type word; anything after is the locality head.
   if (segments.length > 0) {
-    const seg = segments.shift()!;
+    // Drop any glued non-address preamble first, so "Tax Invoice 45 Sample Road"
+    // parses as number 45 on Sample Road rather than a null number and a street
+    // name of "tax invoice 45 sample road".
+    const seg = stripGluedPreamble(segments.shift()!);
     const num = seg.match(/^(\d+[a-z]?(?:\s*-\s*\d+[a-z]?)?)\b/i);
     let rest = seg;
     if (num) {

@@ -1015,6 +1015,55 @@ describe('scoreCompletion (postcode-anchored ranking, always returns a number)',
   });
 });
 
+describe('glued non-address preamble', () => {
+  // Live retest of the merged policy found this: pdfplumber glues a neighbouring
+  // table cell onto the address row, and ONE root cause then broke three things
+  // at once — number/numberBase came back null, streetName was poisoned with the
+  // preamble, and the query ladder collapsed to a single variant because the
+  // street+postcode and street+city fallbacks are built from a segment that has
+  // to start with a number. The address made one request and gave up.
+  it.each([
+    ['Attn: Account Holder 25 Riddiford Street, Newtown, Wellington 6021', '25', 'riddiford street'],
+    ['Tax Invoice 45 Sample Road, Beach Haven, Auckland 0626', '45', 'sample road'],
+    // The account number is skipped because it is followed by another NUMBER,
+    // not a street name — so "10" is correctly taken as the house number.
+    ['Account Number 12345678 10 High Street, Auckland 1010', '10', 'high street'],
+  ])('recovers number and street from %s', (input, number, street) => {
+    const p = parseAddressParts(sanitiseAddress(input));
+    expect(p.number).toBe(number);
+    expect(p.streetName).toBe(street);
+  });
+
+  it('rebuilds the street-anchored query variants', () => {
+    const v = addressQueryVariants(
+      sanitiseAddress('Attn: Account Holder 25 Riddiford Street, Newtown, Wellington 6021')
+    );
+    expect(v).toContain('25 Riddiford Street 6021');
+    expect(v).toContain('25 Riddiford Street Wellington');
+    expect(v.length).toBeGreaterThan(1); // was 1 — no fallback existed
+  });
+
+  it('leaves a well-formed address completely untouched', () => {
+    const clean = '25 Riddiford Street, Newtown, Wellington 6021';
+    expect(parseAddressParts(clean)).toEqual(parseAddressParts(sanitiseAddress(clean)));
+    expect(parseAddressParts(clean).streetName).toBe('riddiford street');
+  });
+
+  // Two regressions this fix nearly introduced; both caught by existing tests.
+  it('does NOT discard a number-less street name', () => {
+    // "Rewa Road Mount Eden Auckland" has no house number at all. An early
+    // version returned null for any segment without one, wiping the street.
+    expect(parseAddressParts('Rewa Road Mount Eden Auckland 1024').streetName).toBe('rewa road');
+    expect(parseAddressParts('The Terrace, Wellington 6011').streetName).toBe('the terrace');
+  });
+  it('does NOT mistake a route number for a house number', () => {
+    // "State Highway 2 Te Puke" — the 2 follows a street-type word, so it is
+    // part of the name. An early version sliced from it, yielding "2 te puke".
+    expect(parseAddressParts('State Highway 2 Te Puke 3182').streetName).toBe('state highway 2');
+    expect(parseAddressParts('State Highway 33, Te Puke 3182').streetName).toBe('state highway 33');
+  });
+});
+
 describe('parseAddressParts (street-name boundary: defects 5 & 6)', () => {
   it('folds the next segment in when a stray comma follows the number (defect 5)', () => {
     // "82, Verran Road" left the street segment as a bare number; the name must
