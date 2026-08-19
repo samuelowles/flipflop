@@ -25,11 +25,24 @@ The deterministic control plane for autonomous work on this repo.
 ## The loop
 
 ```
-graph.mjs next E-F     → the next unblocked issue
+graph.mjs next E-F     → the next startable issue
 graph.mjs start <n>    → branch from fresh master
    ...implement...
 graph.mjs merge <br>   → gate, then merge or open a PR
 ```
+
+`next` returns only what the loop may actually start. It withholds four kinds
+of issue and reports the human-gated ones back in a `humanGated` array so a run
+report can say what is parked:
+
+| Label | Why it is withheld |
+|---|---|
+| `gate:human` | Costs real money or is unrecoverable if wrong. `start` refuses it too |
+| `deferred` | Approved to defer — e.g. Outlook, out of scope for beta and launch |
+| `tracker/do-not-build` · `status:superseded` | Not work |
+| open `Blocked by:` references | Its dependencies are not closed |
+
+`list` is the human view and shows all of them.
 
 Nodes and who does what:
 

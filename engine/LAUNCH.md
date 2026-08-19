@@ -133,15 +133,19 @@ node engine/preflight.mjs
 
 ## Picking the next issue
 
-**`graph.mjs next E-F` will hand you #283, which is `gate:human`.** `next` sorts by issue number and does not filter on that label, so it returns #283 on every call and the loop cannot advance past it. Do not use `next` as your selector.
-
-Instead, keep a skip-list — start it as `283, 289, 290` — and pick from:
+Use the selector. It is authoritative:
 
 ```bash
-node engine/graph.mjs list E-F
+node engine/graph.mjs next <EPIC>
 ```
 
-Take the lowest-numbered row marked `ACTIONABLE` that is not in your skip-list. Add an issue to the skip-list when you park it. When no `ACTIONABLE` row remains outside the skip-list, stop and write the report.
+It returns the lowest-numbered issue that is open, unblocked and startable, and it will not hand you one you must not touch — `gate:human` and `deferred` issues are filtered out, and the gated ones come back in a `humanGated` array so your run report can name what is parked rather than silently omitting it. When nothing startable remains it returns `done: true` with that array.
+
+*(It did not always. `next` used to sort by number and ignore both labels, so a human-gated issue at the front of an epic was returned on every call and the loop could not advance past it. The workaround was a hand-maintained skip-list here, which made the selector advisory rather than authoritative — the opposite of the point. Fixed, with tests, in `engine/engine.test.mjs`.)*
+
+`node engine/graph.mjs list <EPIC>` remains the human view — it shows everything, including the gated and deferred rows the selector withholds.
+
+Epics currently seeded: `E-F` (foundations), `E-11` (observability and launch), `E-12` (email).
 
 ---
 
