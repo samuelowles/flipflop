@@ -58,7 +58,7 @@ DEFAULT_URL = os.environ.get(
 )
 DEFAULT_TOKEN = os.environ.get("PYTHON_SERVICE_AUTH_TOKEN", "")
 RESULTS_FILE = Path("bench-results.json")
-FIXTURE_PDF = Path("test_eval.pdf")  # any PDF in the repo root
+FIXTURE_PDF = Path("scripts/fixtures/test_eval.pdf")  # minimal PDF, relative to the repo root
 
 
 def _hit(url: str, payload: dict | None, token: str, timeout: float = 30.0):
