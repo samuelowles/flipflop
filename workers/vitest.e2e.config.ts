@@ -39,8 +39,26 @@ export default defineWorkersConfig(async () => {
           isolatedStorage: false,
           wrangler: { configPath: "./wrangler.toml" },
           miniflare: {
-            // Handed to the setup file, which applies them to env.DB.
-            bindings: { TEST_MIGRATIONS: migrations },
+            bindings: {
+              // Handed to the setup file, which applies them to env.DB.
+              TEST_MIGRATIONS: migrations,
+
+              // Fixed test key — NOT a secret, and deliberately checked in.
+              //
+              // createUser() encrypts phone numbers, so most of this suite
+              // needs ENCRYPTION_KEY. It used to arrive from an untracked
+              // .dev.vars, which meant the suite passed on a developer's
+              // machine and died on any clean checkout with "Cannot read
+              // properties of undefined (reading 'trim')" — a test that only
+              // runs where someone already has the secret is not a gate.
+              //
+              // 64 hex characters = 32 bytes, the format both setup docs
+              // specify (`openssl rand -hex 32`). The value is an obvious
+              // pattern so it can never be mistaken for a real key, and it
+              // only ever encrypts rows in a throwaway miniflare D1.
+              ENCRYPTION_KEY:
+                "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+            },
           },
         },
       },
