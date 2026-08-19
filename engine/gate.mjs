@@ -9,8 +9,7 @@
 // Usage: node engine/gate.mjs <branch>
 
 import { execSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
-import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 
 const MAIN = "master";
 const branch = process.argv[2];
@@ -90,11 +89,16 @@ step("no protected file modified", () => {
 });
 
 step("gate script unchanged on this branch", () => {
-  // Belt and braces: hash the gate as it exists on the trunk and here.
-  const here = createHash("sha256").update(readFileSync("engine/gate.mjs")).digest("hex");
-  const trunk = createHash("sha256")
-    .update(sh(`git show origin/${MAIN}:engine/gate.mjs`))
-    .digest("hex");
+  // Belt and braces: compare the gate here against the trunk, as git blobs.
+  //
+  // This previously hashed readFileSync (raw bytes, trailing newline intact)
+  // against sh("git show ..."), and sh() trims. The two could never be equal,
+  // so this step failed on every branch and the gate could never pass. Git's
+  // own object id is the honest comparison: it is computed identically on
+  // both sides and applies the .gitattributes eol filter, so a CRLF working
+  // copy on Windows does not read as a modified gate either.
+  const here = sh("git hash-object engine/gate.mjs");
+  const trunk = sh(`git rev-parse origin/${MAIN}:engine/gate.mjs`);
   if (here !== trunk) throw new Error("gate.mjs differs from the trunk");
 });
 
@@ -105,7 +109,7 @@ step("no secret files touched", () => {
 
 step("no test file deleted", () => {
   const deleted = sh(`git diff --diff-filter=D --name-only origin/${MAIN}...HEAD`).split("\n").filter(Boolean);
-  const tests = deleted.filter((f) => /\.(test|spec)\.[tj]sx?$/.test(f) || /^python\/tests\//.test(f));
+  const tests = deleted.filter((f) => /\.(test|spec)\.[tjm]sx?$/.test(f) || /^python\/tests\//.test(f));
   if (tests.length) throw new Error(`deleted: ${tests.join(", ")}`);
 });
 
@@ -114,7 +118,10 @@ step("assertion count did not fall", () => {
   const countIn = (ref) => {
     const files = sh(`git ls-tree -r --name-only ${ref}`)
       .split("\n")
-      .filter((f) => /\.(test|spec)\.ts$/.test(f) || /^python\/tests\/.*\.py$/.test(f));
+      // engine/*.test.mjs counts too: the control-plane tests guard the issue
+      // selector, and leaving them out of the ratchet would let a branch delete
+      // the checks on the very code that decides what gets built.
+      .filter((f) => /\.(test|spec)\.(ts|mjs)$/.test(f) || /^python\/tests\/.*\.py$/.test(f));
     let n = 0;
     for (const f of files) {
       const src = trySh(`git show ${ref}:${f}`) || "";
@@ -129,6 +136,11 @@ step("assertion count did not fall", () => {
 });
 
 step("no whitespace errors", () => { sh(`git diff --check origin/${MAIN}...HEAD`); });
+
+// The selector and the dependency parser decide what gets built. They are
+// stdlib-only and run in under a second, so there is no reason to gate them
+// behind a path filter the way the workers and python steps are.
+step("control-plane tests", () => { sh("node --test engine/engine.test.mjs"); });
 
 // -------------------------------------------------------------------- build
 

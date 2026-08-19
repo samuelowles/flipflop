@@ -55,6 +55,14 @@ jobs:
         # supports @vitest/coverage-v8 in workerd (tracked in #135).
         run: npm test
 
+      # Issue #285. The unit suite mocks every binding, so it cannot see an FK
+      # violation, a rejected payload shape or a broken queue consumer — the
+      # exact defects that broke the last live run. This suite applies every
+      # migration to a real (miniflare-local) D1 and runs the real consumers,
+      # stubbing only outbound HTTP. Nothing here touches remote D1.
+      - name: E2E tests (real D1, real queue consumers)
+        run: npm run test:e2e
+
       # Issue #242 — deploy dry-run as a CI gate so binding/entrypoint breakage
       # (e.g. a Durable Object declared in wrangler.toml but not exported from
       # src/index.ts — the RateLimiter blocker that left master undeployable)
@@ -70,6 +78,42 @@ jobs:
           name: coverage-report
           path: workers/coverage/
           if-no-files-found: ignore
+
+  # Issue #285. The control plane and the documentation are checked here rather
+  # than only inside engine/gate.mjs, so a change that reaches master by any
+  # route — a hand-merged PR, a direct push — is still held to them. stdlib
+  # only: no npm install, no Python, seconds not minutes.
+  engine:
+    name: control plane + docs drift + acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # drift.mjs replays every migration and diffs derived inventories
+          # against the docs; gate.mjs compares its own blob id against the
+          # trunk. Both need real history, not a depth-1 clone.
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      # Covers the issue selector and the dependency parser. A silent wrong
+      # answer there does not crash — it starts blocked or wrong work.
+      - name: Control-plane tests
+        run: node --test engine/engine.test.mjs
+
+      # Re-derives routes, tables, cron, flags, env vars, outbound hosts and
+      # PRD-claim coverage from source and fails when the docs disagree.
+      - name: Documentation drift
+        run: node engine/drift.mjs
+
+      # Every numbered PRD section must have a manifest entry. With no staging
+      # base URL configured every probe skips and the run reports the coverage
+      # gap; it never touches production (run.mjs refuses production hosts
+      # outright, and CI sets no base URL).
+      - name: Acceptance probes
+        run: node acceptance/run.mjs
 
   python-eval:
     name: parser pytest + eval harness
