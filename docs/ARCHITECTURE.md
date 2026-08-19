@@ -47,6 +47,7 @@ No `[[rules]]`, no `[env.*]` blocks. **→ Decided:** add a `staging` environmen
 
 ### 2.2 Vars and flags
 
+<!-- generated:flags — derived from [vars] in workers/wrangler.toml · verified by engine/drift.mjs · do not hand-edit inside this block -->
 | Var | Value | Gates |
 |---|---|---|
 | `ENVIRONMENT` | `production` | Passed to the notification engine; `production` hard-disables `FLOW_TEST_MODE` |
@@ -56,6 +57,9 @@ No `[[rules]]`, no `[env.*]` blocks. **→ Decided:** add a `staging` environmen
 | `FLOW_TEST_MODE` | `false` | Bypasses threshold and both cooldowns for traced users |
 | `F1_HINT_CONFIDENCE_THRESHOLD` | `0.85` | Below this, a parsed bill routes to review |
 | `SERVICE_VERSION` | `0.1.0` | **Declared and never read** — `/` and `/health` use a hardcoded literal |
+<!-- /generated:flags -->
+
+Inventories wrapped in `<!-- generated:<id> … -->` / `<!-- /generated:<id> -->` markers are derived from source, not written by hand. `engine/drift.mjs` re-derives every one of them on each run; `node engine/drift.mjs --report` proves they are in sync. Regenerate a block by re-deriving it from the source named in its opening marker — do not hand-edit inside the markers.
 
 ### 2.3 Secrets
 
@@ -66,6 +70,7 @@ Plus `SENT_API_BASE_URL` read via `cloudflare:workers` (defaults to `https://api
 
 ## 3. HTTP surface
 
+<!-- generated:routes — derived from app.<method>(…) registrations in workers/src/index.ts · verified by engine/drift.mjs · do not hand-edit inside this block -->
 | Method | Path | Auth | Rate limit |
 |---|---|---|---|
 | GET | `/`, `/health` | — | bypassed |
@@ -85,10 +90,11 @@ Plus `SENT_API_BASE_URL` read via `cloudflare:workers` (defaults to `https://api
 | GET | `/admin/notifications` | `adminAuth` | — |
 | GET | `/admin/flow-link` | `adminAuth` | — |
 | POST | `/admin/test-run/reset` | `adminAuth` | — |
-| ANY | `/admin/*` (catch-all) | `adminAuth` | 501 stub |
+| GET | `/admin/*` (catch-all) | `adminAuth` | 501 stub |
 | GET | `/flow/status`, `/flow/status.json` | admin Bearer OR signed link | — |
 | POST | `/webhook/stripe` | — | **501 stub** |
 | GET | `/webhook/email/*` | — | **501 stub** |
+<!-- /generated:routes -->
 
 **→ Decided:** `POST /api/switch` must require the HMAC signed link or a session. Reuse `flowLink.ts`, which already mints and verifies signed links for `/flow/status`.
 
@@ -131,6 +137,7 @@ bill arrives (WhatsApp/SMS media · Gmail poll · web upload)
 
 ### 4.3 Cron
 
+<!-- generated:cron — derived from crons = [...] in workers/wrangler.toml · verified by engine/drift.mjs · do not hand-edit inside this block -->
 | Cron (UTC) | Runs |
 |---|---|
 | `0 3` | EIEP14A refresh (flag-gated) · Powerswitch public scrape (flag-gated) · purge `llm_audit` >30d · purge `notification_audit` >90d |
@@ -138,6 +145,7 @@ bill arrives (WhatsApp/SMS media · Gmail poll · web upload)
 | `0 8` | Plan-diff consumer → re-compare · **free-tier check-in (day 1 of month)** · fixed-term expiry scan · switch sanity check |
 | `0 10` | Powerswitch drift canary |
 | `0 14` | Gmail poll, all users |
+<!-- /generated:cron -->
 
 **→ Decided:** the free-tier check-in is **removed entirely**. Delete `freeTierCheckin.ts`, `getFreeTierUsers` and the day-of-month branch. Replace with a monthly reassurance for paying customers in months where no saving alert fired.
 
@@ -147,6 +155,7 @@ Dispatch is by **exact string equality** on the cron expression — adding a tri
 
 14 tables from 21 migrations. Full column detail lives in the migration files; this is the map.
 
+<!-- generated:tables — derived from CREATE TABLE across workers/migrations/, replayed in order · verified by engine/drift.mjs · do not hand-edit inside this block -->
 | Table | Purpose | Notes |
 |---|---|---|
 | `users` | Identity, state machine, threshold | `phone` unique; `phone_encrypted` + `phone_hash` blind index; `powerswitch_pxid`/`_location_id` |
@@ -162,6 +171,7 @@ Dispatch is by **exact string equality** on the cron expression — adding a tri
 | `usage_metrics` | Derived usage intelligence | |
 | `llm_audit` | Metadata only, never content | 30-day purge |
 | `plan_data_provenance` | Ingestion lineage | No indexes |
+<!-- /generated:tables -->
 
 ### 5.1 Known schema facts worth carrying
 
@@ -248,6 +258,7 @@ Flask + gunicorn on **Google Cloud Run** (`flip-python-360483648756.australia-so
 
 ## 10. External services
 
+<!-- generated:hosts — derived from outbound https:// hosts in workers/src · verified by engine/drift.mjs · do not hand-edit inside this block -->
 | Host | Purpose | From |
 |---|---|---|
 | `api.sent.dm` | WhatsApp/SMS send, templates, media | `messaging.ts`, `sentTemplates.ts` |
@@ -257,8 +268,9 @@ Flask + gunicorn on **Google Cloud Run** (`flip-python-360483648756.australia-so
 | `api.resend.com` | Ops and transactional email | `email.ts` |
 | `www.emi.ea.govt.nz` | EIEP14A feed | `eiep14a.ts` (TS), `eiep14a/fetcher.py` |
 | Cloud Run | Parse and compare | `billParser.ts`, `planComparator.ts` |
+<!-- /generated:hosts -->
 
-All eight (plus Stripe, once live) are named in the privacy policy.
+Outbound hosts Flip calls and processors that receive customer-derived data are different sets. `www.emi.ea.govt.nz` is an inbound plan-data feed — Flip sends it no customer data, so it is not a processor; the NZ retailer domains that appear in source are user-facing switch instructions, never fetched. Conversely, two processors are not outbound hosts at all: Cloudflare, because it is the platform Flip runs on, and Stripe, which is not live yet. The canonical processor list for privacy-policy purposes is PRD §10.2.
 
 ## 11. Security posture
 
