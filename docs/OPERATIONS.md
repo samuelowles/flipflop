@@ -194,6 +194,8 @@ Coverage thresholds are configured at 80% but `--coverage` is disabled pending c
 
 ## 11. Launch gate
 
+The numbered list below is the canonical gate; status, owners and the go/no-go sign-off are tracked in `LAUNCH_CHECKLIST.md`.
+
 1. Legal entity formed; privacy policy and terms live
 2. Stripe live
 3. Parser accuracy met on real bills — >90% top five, >80% elsewhere
