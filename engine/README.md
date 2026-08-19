@@ -175,4 +175,23 @@ node engine/ledger.mjs report
 node engine/ledger.mjs check     # exit 1 if the band is breached
 ```
 
+### The band can only be judged from measured tokens
+
+The orchestrator cannot read its own token usage, so its rows are recorded as
+zeroes with `estimated: true` rather than invented figures. That makes the
+Anthropic side structurally `0` — and a ratio of 0 is **not a low ratio, it is
+an absent measurement**.
+
+Conflating the two made the governor read "0% Anthropic" and advise *"below
+15%, the system is under-reviewing, re-enable review on trivial issues"* from
+no data at all: a governor biased towards spending more of the expensive
+model, which is the one thing it exists to prevent.
+
+`report` and `check` now say `NOT MEASURABLE` instead, and both print the
+**node share** — how many nodes ran on each model — which needs no token
+counts and so stays honest either way. To get a real token ratio, record the
+counts the delegation result reports for GLM and a genuine figure for
+Anthropic; until the harness can supply the latter, the node share is the
+signal to steer by.
+
 Band: **15–20% Anthropic** by total tokens over a rolling 50 issues. Above 20% the system is over-escalating; below 15% it is under-reviewing. An escalation rate above 25% alerts regardless — a cascade that escalates most of its traffic costs more than no routing at all.
