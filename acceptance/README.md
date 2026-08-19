@@ -29,10 +29,12 @@ coverage: 3/25 PRD claims have an executable probe — 22 declared with no proof
 - `FLIP_ACCEPTANCE_BASE_URL` selects the deployment under test. If it is unset
   or empty, **every probe skips**, naming the variable — no probe issues any
   network request.
-- The runner hard-errors (never skips) if that URL's host is `flipflop.co.nz`
-  or any subdomain of it, or is a host that has not been declared staging via
-  `FLIP_ACCEPTANCE_STAGING_HOSTS` (comma-separated; production can never be
-  declared). This refusal lives in `run.mjs` so no probe can bypass it.
+- The runner hard-errors (never skips) if that URL's host is production, or is
+  a host that has not been declared staging via `FLIP_ACCEPTANCE_STAGING_HOSTS`
+  (comma-separated; production can never be declared). Production means
+  `flipflop.co.nz` and any subdomain — where the product is going — and
+  `flip-api.<subdomain>.workers.dev`, the Worker actually serving production
+  today. This refusal lives in `run.mjs` so no probe can bypass it.
 - Probes issue reads and scenario-scoped writes against staging only — never
   destructive requests, never a production database.
 - Probes may need fixtures or credentials: `FLIP_ACCEPTANCE_MIDBAND_PDF`,

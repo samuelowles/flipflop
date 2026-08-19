@@ -44,7 +44,11 @@ for (let i = 0; i < argv.length; i++) {
 // of the probes: nothing under probes/ is imported until the base URL has
 // been cleared here, so no probe can opt out.
 
-const PRODUCTION_HOST = /(^|\.)flipflop\.co\.nz$/i; // flipflop.co.nz and every subdomain
+// flipflop.co.nz is where production is GOING (docs/ARCHITECTURE.md §1); the
+// Worker actually serving production today is `flip-api` on workers.dev
+// (workers/wrangler.toml declares no route). Both are denied — a deny list that
+// only names the future domain leaves the live one reachable.
+const PRODUCTION_HOSTS = [/(^|\.)flipflop\.co\.nz$/i, /^flip-api\.[^.]+\.workers\.dev$/i];
 const LOCAL_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 // Hosts the operator has declared to be staging, comma-separated. Production
@@ -66,12 +70,12 @@ if (baseUrl) {
   } catch {
     die(`FLIP_ACCEPTANCE_BASE_URL is not a valid URL: ${baseUrl}`);
   }
-  if (PRODUCTION_HOST.test(host))
-    die(`refusing to run — FLIP_ACCEPTANCE_BASE_URL host "${host}" is flipflop.co.nz. Probes never touch production.`);
+  if (PRODUCTION_HOSTS.some((re) => re.test(host)))
+    die(`refusing to run — FLIP_ACCEPTANCE_BASE_URL host "${host}" is production. Probes never touch production.`);
   if (!LOCAL_HOSTS.has(host) && !declaredStaging().has(host))
     die(
       `refusing to run — "${host}" is not a known staging host. ` +
-        `Declare it via FLIP_ACCEPTANCE_STAGING_HOSTS (flipflop.co.nz can never be declared).`
+        `Declare it via FLIP_ACCEPTANCE_STAGING_HOSTS (production hosts can never be declared).`
     );
 }
 
