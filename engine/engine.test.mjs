@@ -12,6 +12,7 @@ import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 
 import { blockers, slug, declaredFiles, pickActionable, partitionByGate } from "./graph.mjs";
+import { share } from "./ledger.mjs";
 
 // ------------------------------------------------------------------ blockers
 //
@@ -167,6 +168,51 @@ test("declaredFiles: reads the Files: line", () => {
 
 test("declaredFiles: absent when the issue declares nothing", () => {
   assert.deepEqual(declaredFiles("## Goal\nDo the thing."), []);
+});
+
+// -------------------------------------------------------------- ledger share
+//
+// The governor's job is to keep the expensive model at 15-20% of tokens. It
+// must never issue that verdict from data it does not have.
+
+test("share: a real split is reported as a ratio", () => {
+  const s = share([
+    { model: "opus", tokensIn: 10_000, tokensOut: 5_000 },
+    { model: "glm-5.3", tokensIn: 70_000, tokensOut: 15_000 },
+  ]);
+  assert.equal(s.measurable, true);
+  assert.equal(s.total, 100_000);
+  assert.equal(s.ratio, 0.15);
+});
+
+test("share: zero-token Anthropic rows are unmeasurable, not a 0% share", () => {
+  // What the orchestrator actually records: it cannot read its own usage, so
+  // LAUNCH.md tells it to write zeroes rather than invent numbers. Treating
+  // that as "0% Anthropic" made check() advise MORE review — from no data.
+  const s = share([
+    { model: "opus", tokensIn: 0, tokensOut: 0, estimated: true },
+    { model: "opus", tokensIn: 0, tokensOut: 0, estimated: true },
+    { model: "glm-5.3", tokensIn: 117_457, tokensOut: 29_255 },
+  ]);
+  assert.equal(s.measurable, false, "must not claim a measurable split");
+  assert.equal(s.unmeasured, 2);
+  assert.equal(s.glm, 146_712, "the GLM side is still counted");
+});
+
+test("share: node share is reported even when tokens are not", () => {
+  const s = share([
+    { model: "opus", tokensIn: 0, tokensOut: 0 },
+    { model: "glm-5.3", tokensIn: 0, tokensOut: 0 },
+    { model: "glm-5.3", tokensIn: 0, tokensOut: 0 },
+  ]);
+  assert.equal(s.measurable, false);
+  assert.deepEqual(s.nodes, { anthropic: 1, glm: 2 });
+});
+
+test("share: an empty ledger is unmeasurable rather than 0%", () => {
+  const s = share([]);
+  assert.equal(s.measurable, false);
+  assert.equal(s.total, 0);
 });
 
 // ------------------------------------------------------------- gate self-hash
