@@ -88,54 +88,155 @@ Read `engine/README.md` first. It describes the control plane you are operating 
 
 **Your role is orchestration, not typing.** You write specs and review diffs. GLM-5.3 does the implementation, via `mcp__plugin_glm-delegate_glm__glm_execute`. Read the `delegate-to-glm` skill before your first delegation. Target roughly 15–20% of total tokens on Anthropic — if you find yourself writing implementation code, you have taken the wrong role.
 
+Use the **Bash** tool for every command below. PowerShell mangles the JSON quoting in `ledger.mjs record`.
+
+---
+
+## Before the loop — run these once
+
+Run these four in order. If any fails, stop and say why.
+
+```bash
+cd "C:/Users/sam/Dropbox/THS/Joint Ventures/Project SAAS/Flip"
+
+# 1. Anchor the clock. You have four hours from this value.
+date +%s > /tmp/ponytail-start && cat /tmp/ponytail-start
+
+# 2. The ledger writes .engine/ledger.jsonl, which is NOT gitignored.
+#    gate.mjs fails on any dirty path, so the first ledger row would break
+#    every gate run after it. Exclude it locally — .git/info/exclude is never
+#    committed, so this costs no commit and no deploy.
+grep -qx '.engine/' .git/info/exclude || echo '.engine/' >> .git/info/exclude
+git status --porcelain   # must print nothing
+
+# 3. Confirm nothing can merge. Default is "pr"; anything else, stop.
+echo "MERGE_MODE=${MERGE_MODE:-pr}"
+
+# 4. Preflight must exit 0.
+node engine/preflight.mjs
+```
+
+---
+
 ## Hard rules
 
-1. **`MERGE_MODE=pr`. Nothing merges tonight.** Every issue ends as a pushed branch with an open PR. Flip deploys to production on merge to master, so a merge is a deploy, and no deploy happens without Sam.
-2. **Never start an issue labelled `gate:human`.** `graph.mjs start` will refuse; do not work around it. Three issues carry it and they are the three that could cost real money to undo.
-3. **Never run any `wrangler d1 migrations apply` against `--remote`.** The production migration ledger is unknown and replaying migrations would be unrecoverable. Local only.
-4. **Never modify** `engine/gate.mjs`, `engine/graph.mjs`, `engine/drift.mjs`, `.github/workflows/ci.yml`, any tsconfig, any test config, or `.gitattributes`. The gate rejects branches that touch them.
-5. **Never weaken a test.** The gate counts assertions across the whole suite and fails if the total drops. If a test blocks you, the code is wrong, not the test.
+1. **Nothing merges tonight, and nothing is pushed to master.** Flip deploys to production on push/merge to master, so a push to master *is* a deploy. Every issue ends as a pushed **feature** branch with an open PR. `MERGE_MODE=pr` makes `graph.mjs merge` stop before merging — verify it before the loop rather than assuming it.
+2. **Never start an issue labelled `gate:human`.** `graph.mjs start` refuses; do not work around it. Three issues carry it — #283, #289, #290 — and they are the three that could cost real money to undo.
+3. **Never run `wrangler d1 migrations apply` against `--remote`.** The production migration ledger is unknown and replaying migrations would be unrecoverable. Local only.
+4. **Never modify a protected file.** The gate rejects the branch if any of these change — this is the exact list it enforces, by exact path match:
+   `engine/gate.mjs`, `engine/graph.mjs`, `engine/drift.mjs`, `engine/preflight.mjs`, `.github/workflows/ci.yml`, `workers/tsconfig.json`, `workers/vitest.config.ts`, `workers/vitest.e2e.config.ts`, `workers/eslint.config.js`, `.gitattributes`
+5. **Never weaken a test.** The gate counts `expect(` / `assert*(` across the whole suite and fails if the total drops. If a test blocks you, the code is wrong, not the test.
 6. **Never add a drift exemption.** Fix the drift or stop.
 7. **Do not deploy anything, anywhere.**
 
+---
+
+## Picking the next issue
+
+**`graph.mjs next E-F` will hand you #283, which is `gate:human`.** `next` sorts by issue number and does not filter on that label, so it returns #283 on every call and the loop cannot advance past it. Do not use `next` as your selector.
+
+Instead, keep a skip-list — start it as `283, 289, 290` — and pick from:
+
+```bash
+node engine/graph.mjs list E-F
+```
+
+Take the lowest-numbered row marked `ACTIONABLE` that is not in your skip-list. Add an issue to the skip-list when you park it. When no `ACTIONABLE` row remains outside the skip-list, stop and write the report.
+
+---
+
 ## The loop
 
-Repeat until the epic is empty, you are blocked, or you have been running four hours:
+Repeat until the epic is empty, you are blocked, or four hours have elapsed.
 
-1. `node engine/graph.mjs next E-F` — take the issue it names. If it reports `blocked` or `done`, stop and write the report.
+1. **Pick** the issue, per the section above.
+
 2. **Spec it yourself.** Read the issue, its acceptance criteria, and the code it touches. Write a complete specification: files, intended behaviour, acceptance assertions, and what must not change. GLM executes unattended — if the spec has a gap, it will guess, and the guess will be wrong.
-3. `node engine/graph.mjs start <issue>` — branches from fresh master.
-4. **Delegate implementation to GLM-5.3** with that spec. Effort `high`.
-5. `node engine/gate.mjs <branch>` — if it fails, feed the failure back to GLM and retry. **Maximum two retries**, then park the issue with a comment explaining where it stuck and move on.
-6. **Review the diff yourself, cold.** Do not re-read your own spec first. Ask: does this do something other than what it claims; is anything irreversible; is there a simpler correct version. One round of findings back to GLM, then escalate or park.
-   - Skip review only when the issue is `radius:small` **and** `tier:trivial`.
-7. `node engine/graph.mjs merge <branch>` — runs the gate again, pushes, opens the PR, stops. It will not merge.
-8. Record the row:
+
+3. **Branch.**
+
+   ```bash
+   node engine/graph.mjs start <issue>
    ```
-   node engine/ledger.mjs record '{"issue":N,"node":"IMPLEMENT","model":"glm-5.3","tokensIn":...,"tokensOut":...,"outcome":"ok"}'
+
+   This branches from fresh master as `glm/issue-<n>-<slug>`. Note the branch name; every later command needs it.
+
+4. **Delegate** implementation to GLM-5.3 with that spec, effort `high`. GLM works in its own worktree — make sure the result lands as commits **on the branch `graph.mjs start` created**, not on a branch GLM invents. Verify with `git log --oneline master..HEAD` before continuing.
+
+5. **Push and open the PR — before the gate, not after.**
+
+   ```bash
+   git push -u origin <branch>
+   gh pr create --base master --head <branch> \
+     --title "<commit subject>" --body "Fixes #<issue>"
    ```
-   One row per node. Estimate token counts from the delegation result.
+
+   The gate checks *"local branch matches pushed branch"* and *"PR exists, targets the trunk, and closes the issue"*. `graph.mjs merge` only creates the PR **after** it runs the gate, so skipping this step makes the gate fail every time on a branch that is otherwise fine. The body must contain the literal `Fixes #<issue>`.
+
+6. **Gate.**
+
+   ```bash
+   node engine/gate.mjs <branch>
+   ```
+
+   Expect this to be slow: if the branch touches `workers/`, it runs typecheck, lint, the full unit suite, e2e, and a wrangler deploy dry-run. Two known flakes, neither of which is your change:
+
+   * the full `npm --prefix workers test` run can die on Dropbox-evicted `node_modules` files — re-run once before treating it as a real failure;
+   * `test:e2e` needs real D1 and queue consumers up.
+
+   On a genuine failure, feed it back to GLM and retry. **Maximum two retries**, then park the issue with a `gh issue comment` explaining exactly where it stuck, add it to the skip-list, and move on.
+
+7. **Review the diff yourself, cold.** Do not re-read your own spec first. Ask: does this do something other than what it claims; is anything irreversible; is there a simpler correct version. One round of findings back to GLM, then escalate or park.
+
+   * Skip review only when the issue is `radius:small` **and** `tier:trivial`.
+
+8. **Close out.**
+
+   ```bash
+   node engine/graph.mjs merge <branch>
+   ```
+
+   It re-runs the gate, confirms the PR, and stops on `MERGE_MODE=pr`. It will print `"merged": false, "reason": "MERGE_MODE=pr"`. That is success. If it ever prints `"merged": true`, something set `MERGE_MODE=auto` — stop the run immediately and report it.
+
+9. **Record one row per node** (SPEC, IMPLEMENT, GATE, REVIEW), using the Bash tool:
+
+   ```bash
+   node engine/ledger.mjs record '{"issue":286,"node":"IMPLEMENT","model":"glm-5.3","tokensIn":48000,"tokensOut":12000,"outcome":"ok"}'
+   ```
+
+   Use the **real** token counts from the delegation result where it reports them. Where you genuinely cannot get a number, put `"tokensIn":0,"tokensOut":0` and add `"estimated":true` — do not invent figures. `ledger.mjs check` gates the 15–20% band on these numbers, and fabricated ones make the governor worthless.
+
+   Return to step 1. Re-check the clock:
+
+   ```bash
+   echo $(( ($(date +%s) - $(cat /tmp/ponytail-start)) / 60 )) minutes elapsed
+   ```
+
+---
 
 ## Stop immediately and write the report if
 
-- The gate fails three times on one issue
-- Two consecutive issues fail for unrelated reasons
-- `git status` shows unexpected changes on master
-- Anything asks you to touch production, a secret, or a remote database
-- You have been running four hours
+* The gate fails three times on one issue
+* Two consecutive issues fail for unrelated reasons
+* `git status` shows changes on master you did not make (your own `.engine/` writes are excluded above and do not count)
+* `graph.mjs merge` reports `"merged": true`
+* Anything asks you to touch production, a secret, or a remote database
+* Four hours have elapsed
+
+---
 
 ## Morning report
 
-Write `engine/RUN-<date>.md` and finish your last message with a summary:
+Write it to **`.engine/RUN-<date>.md`** — not `engine/`. `.engine/` is locally excluded, so the report costs no commit; writing into `engine/` would dirty master, and the only way to preserve it would be a push, which is a deploy.
 
-- Issues attempted, completed, parked — with PR links
-- For each parked issue: exactly where it stuck
-- `node engine/ledger.mjs report` output, including the model share
-- `node engine/drift.mjs --report` output
-- **Anything you found that nobody has decided.** Do not decide it yourself — write it down.
-- The three `gate:human` issues, untouched, and what each needs from Sam
+Finish your last message with the same summary:
 
-Start with `node engine/preflight.mjs`. If it does not exit 0, stop and say why.
+* Issues attempted, completed, parked — with PR links
+* For each parked issue: exactly where it stuck
+* `node engine/ledger.mjs report` output, including the model share
+* `node engine/drift.mjs --report` output
+* Anything you found that nobody has decided. **Do not decide it yourself — write it down.**
+* The three `gate:human` issues, untouched, and what each needs from Sam
 
 ---
 
