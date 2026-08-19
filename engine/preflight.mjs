@@ -81,7 +81,9 @@ check("drift script present", () => existsSync("engine/drift.mjs"));
 
 check("glm-delegate configured for GLM-5.3", () => {
   const home = process.env.USERPROFILE || process.env.HOME || "";
-  const cfgPath = `${home}/.glm-delegate/config.json`;
+  // The plugin reads user overrides from ~/.config/glm-delegate/config.json.
+  // ~/.glm-delegate is stateDir — jobs and worktrees, never config.
+  const cfgPath = `${home}/.config/glm-delegate/config.json`;
   if (!existsSync(cfgPath)) return { ok: false, detail: "config.json not found" };
   const cfg = JSON.parse(readFileSync(cfgPath, "utf8"));
   const primary = cfg?.models?.primary || "";
