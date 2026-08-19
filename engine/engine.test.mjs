@@ -11,7 +11,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { execSync } from "node:child_process";
 
-import { blockers, slug, declaredFiles, pickActionable } from "./graph.mjs";
+import { blockers, slug, declaredFiles, pickActionable, partitionByGate } from "./graph.mjs";
 
 // ------------------------------------------------------------------ blockers
 //
@@ -90,20 +90,55 @@ test("pickActionable: an unknown blocker is treated as open, not as absent", () 
   assert.deepEqual(pickActionable([issue(89, "Blocked by: #9999")], new Map()), []);
 });
 
-test("pickActionable: closed and do-not-build issues are excluded", () => {
+test("pickActionable: closed and non-buildable issues are excluded", () => {
   const issues = [
     issue(1, "Blocked by: none", { state: "CLOSED" }),
     issue(2, "Blocked by: none", { labels: ["tracker/do-not-build"] }),
     issue(3, "Blocked by: none", { labels: ["status:superseded"] }),
     issue(4, "Blocked by: none", { labels: ["blocked:external"] }),
-    issue(5, "Blocked by: none"),
+    // Deferred work is unblocked and buildable in the literal sense, which is
+    // exactly why it has to be named: without it the selector offered Outlook
+    // (out of scope for beta and launch) as the next thing to build.
+    issue(5, "Blocked by: none", { labels: ["deferred"] }),
+    issue(6, "Blocked by: none"),
   ];
-  assert.deepEqual(pickActionable(issues, new Map()).map((i) => i.number), [5]);
+  assert.deepEqual(pickActionable(issues, new Map()).map((i) => i.number), [6]);
 });
 
 test("pickActionable: results are ordered by issue number", () => {
   const issues = [issue(30, "Blocked by: none"), issue(7, "Blocked by: none"), issue(19, "Blocked by: none")];
   assert.deepEqual(pickActionable(issues, new Map()).map((i) => i.number), [7, 19, 30]);
+});
+
+// ------------------------------------------------------------ partitionByGate
+
+test("partitionByGate: a human-gated issue at the front does not stall the loop", () => {
+  // The E-F epic's shape: #283 is gate:human and lowest-numbered, so the
+  // unfiltered selector returned it on every call and the loop never advanced.
+  const ready = [
+    issue(283, "Blocked by: none", { labels: ["gate:human"] }),
+    issue(284, "Blocked by: none"),
+    issue(286, "Blocked by: none"),
+  ];
+  const { auto, gated } = partitionByGate(ready);
+  assert.deepEqual(auto.map((i) => i.number), [284, 286]);
+  assert.deepEqual(gated.map((i) => i.number), [283]);
+});
+
+test("partitionByGate: gated issues are reported, never silently dropped", () => {
+  const { auto, gated } = partitionByGate([
+    issue(289, "Blocked by: none", { labels: ["gate:human"] }),
+    issue(290, "Blocked by: none", { labels: ["gate:human", "radius:large"] }),
+  ]);
+  assert.deepEqual(auto, []);
+  assert.deepEqual(gated.map((i) => i.number), [289, 290]);
+});
+
+test("partitionByGate: an epic with no gated issues is unchanged", () => {
+  const ready = [issue(1, "Blocked by: none"), issue(2, "Blocked by: none")];
+  const { auto, gated } = partitionByGate(ready);
+  assert.deepEqual(auto.map((i) => i.number), [1, 2]);
+  assert.deepEqual(gated, []);
 });
 
 // ---------------------------------------------------------------------- slug

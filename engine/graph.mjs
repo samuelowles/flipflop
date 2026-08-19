@@ -44,8 +44,14 @@ const epicId = (v = EPIC_DEFAULT) => {
 const epicLabel = (v) => `epic:${epicId(v)}`;
 
 const names = (issue) => (issue.labels || []).map((l) => l.name);
-const buildable = (issue) =>
-  !names(issue).some((n) => n === "tracker/do-not-build" || n === "status:superseded" || n === "blocked:external");
+
+// Labels that mean "not this loop's work", for four different reasons.
+// `deferred` is the repo's existing "approved to defer until the core loop
+// works" label — without it here, the selector happily offers deferred work
+// (Outlook, which docs/PRD.md:141 puts out of scope for beta and launch) as
+// the next thing to build.
+const NOT_BUILDABLE = ["tracker/do-not-build", "status:superseded", "blocked:external", "deferred"];
+export const buildable = (issue) => !names(issue).some((n) => NOT_BUILDABLE.includes(n));
 
 // Two issue-body dialects declare dependencies, and both must parse:
 //
@@ -105,6 +111,21 @@ export const pickActionable = (issues, states) =>
     .filter((i) => blockers(i.body).every((b) => states.get(b) === "CLOSED"))
     .sort((a, b) => a.number - b.number);
 
+// `gate:human` issues are unblocked and buildable — they are simply not the
+// loop's to start. They must therefore stay in `list` (an operator needs to
+// see them) while being kept out of `next`.
+//
+// Without this split `next` returns the lowest-numbered actionable issue
+// whatever its labels, so a human-gated issue at the front of the epic is
+// handed back on every call and the loop cannot advance past it. The
+// workaround was a hand-maintained skip-list in the run prompt, which makes
+// the selector advisory rather than authoritative — the opposite of what a
+// deterministic control plane is for.
+export const partitionByGate = (ready) => ({
+  auto: ready.filter((i) => !names(i).includes("gate:human")),
+  gated: ready.filter((i) => names(i).includes("gate:human")),
+});
+
 // ---------------------------------------------------------------- commands
 
 function next(epic) {
@@ -116,7 +137,16 @@ function next(epic) {
   if (ready.length === 0)
     return out({ blocked: true, reason: "all open issues are blocked", open: open.map((i) => i.number) });
 
-  const i = ready[0];
+  const { auto, gated } = partitionByGate(ready);
+  if (auto.length === 0)
+    return out({
+      done: true,
+      reason: "nothing left that may be started unattended",
+      humanGated: gated.map((i) => i.number),
+      open: open.map((i) => i.number),
+    });
+
+  const i = auto[0];
   const labels = names(i);
   out({
     number: i.number,
@@ -126,9 +156,12 @@ function next(epic) {
     branch: `glm/issue-${i.number}-${slug(i.title)}`,
     radius: labels.find((l) => l.startsWith("radius:")) || "radius:small",
     tier: labels.find((l) => l.startsWith("tier:")) || "tier:standard",
-    humanGate: labels.includes("gate:human"),
+    humanGate: false, // `next` never returns a gated issue; `start` refuses one too
     files: declaredFiles(i.body),
-    remaining: open.length,
+    // Waiting on a person, not on the loop — surfaced so a run report can say
+    // what is parked rather than silently omitting it.
+    humanGated: gated.map((i) => i.number),
+    remaining: auto.length,
   });
 }
 
